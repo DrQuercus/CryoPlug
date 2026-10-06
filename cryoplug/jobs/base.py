@@ -154,7 +154,9 @@ class JobType:
     # ----------------------------------------------------------- schema
     @classmethod
     def schema(cls) -> dict[str, Any]:
+        from cryoplug.jobhelp import job_help
         return {
+            "help": job_help(cls.name),
             "name": cls.name,
             "title": cls.title,
             "category": cls.category,

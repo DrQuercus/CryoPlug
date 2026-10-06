@@ -1,6 +1,7 @@
 // Job builder (right panel): pick a job type, connect inputs (select or drag & drop outputs), set parameters, queue.
 import { api } from './api.js';
 import { browseFiles } from './filebrowser.js';
+import { CATEGORY_FR, helpDetails, helpModal } from './help.js';
 import { compatibleOutputs, navigate, refreshJobs, state, typeTitle } from './state.js';
 import { btn, clear, guard, h, icon, toast } from './ui.js';
 
@@ -90,8 +91,9 @@ export function renderBuilder() {
       b.editing ? `Edit ${t.title}` : t.title, h('span', { class: 'grow' }),
       !b.editing ? h('button', { class: 'btn small', onclick: () => { b.type = null; renderBuilder(); } }, 'Change type') : null,
       h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => navigate(`#/p/${state.project.uid}`) }, icon('close'))),
-    h('div', { class: 'muted small', style: { marginTop: '4px' } }, t.description));
+    h('div', { class: 'help-purpose small', style: { marginTop: '4px' }, title: t.description }, t.help?.purpose || t.description));
   const body = h('div', { class: 'panel-body' });
+  if (t.help) body.appendChild(helpDetails(t));
   if (t.tool_status === 'missing') {
     body.appendChild(h('div', { class: 'alert warn' }, `The program for this job (${t.tool}) was not detected on the server. `,
       h('a', { href: '#/tools' }, 'Configure it in Tools'), '. You can still prepare the job.'));
@@ -227,17 +229,24 @@ function renderTypePicker(p) {
         const outTypes = new Set((from.status === 'completed' ? from.outputs : state.types[from.type].outputs).map((o) => o.type));
         types = types.filter((t) => t.inputs.some((s) => s.types.some((ty) => outTypes.has(ty))));
       }
-      if (q) types = types.filter((t) => `${t.title} ${t.name} ${t.description} ${t.tool || ''}`.toLowerCase().includes(q));
+      if (q) {
+        types = types.filter((t) => [t.title, t.name, t.description, t.tool || '', t.help?.purpose || '', ...(t.help?.when || [])]
+          .join(' ').toLowerCase().includes(q));
+      }
       if (!types.length) continue;
-      items.push(h('div', { class: 'cat' }, cat));
+      items.push(h('div', { class: 'cat' }, CATEGORY_FR[cat] && CATEGORY_FR[cat] !== cat ? `${cat} · ${CATEGORY_FR[cat]}` : cat));
       for (const t of types) {
-        items.push(h('div', { class: 'type-item', tabindex: 0, role: 'button',
-          onclick: () => { applyType(t.name); panel().scrollTop = 0; renderBuilder(); },
-          onkeydown: (e) => { if (e.key === 'Enter') { applyType(t.name); panel().scrollTop = 0; renderBuilder(); } } },
+        const choose = () => { applyType(t.name); panel().scrollTop = 0; renderBuilder(); };
+        items.push(h('div', { class: 'type-item', tabindex: 0, role: 'button', onclick: choose,
+          onkeydown: (e) => { if (e.key === 'Enter') choose(); } },
         h('span', { class: `tooldot ${t.tool_status}`, title: t.tool ? `${t.tool}: ${t.tool_status}` : 'built-in' }),
-        h('div', { style: { minWidth: 0, flex: 1 } }, h('div', { class: 't' }, t.title), h('div', { class: 'd' }, t.description)),
+        h('div', { style: { minWidth: 0, flex: 1 } }, h('div', { class: 't' }, t.title),
+          h('div', { class: 'd', title: t.help?.purpose || t.description }, t.help?.purpose || t.description)),
         t.gpu ? h('span', { class: 'tag' }, 'GPU') : null,
-        t.interactive ? h('span', { class: 'tag' }, 'interactive') : null));
+        t.interactive ? h('span', { class: 'tag' }, 'interactive') : null,
+        h('button', { class: 'icon-btn', type: 'button', title: 'Aide : quand utiliser ce job', 'aria-label': `Aide ${t.title}`,
+          onclick: (e) => { e.stopPropagation(); helpModal(t, { onUse: choose, onNext: (n) => { applyType(n); panel().scrollTop = 0; renderBuilder(); } }); },
+        }, h('b', { 'aria-hidden': 'true', style: { width: '18px', textAlign: 'center' } }, '?'))));
       }
     }
     clear(list, items.length ? items : h('div', { class: 'muted' }, 'No matching job type.'));

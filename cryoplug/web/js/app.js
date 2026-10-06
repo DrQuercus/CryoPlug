@@ -42,7 +42,7 @@ function parseRoute() {
     else if (parts[2]) Object.assign(r, { panel: 'detail', juid: parts[2] });
     return r;
   }
-  return { page: parts[0] };
+  return { page: parts[0], sub: parts[1] || null, item: parts[2] || null };
 }
 
 function setNav(page) {
@@ -56,7 +56,8 @@ function setCrumbs(route) {
     if (route.juid) items.push(h('span', { class: 'sep' }, '›'), h('span', {}, route.juid));
     if (route.panel === 'new') items.push(h('span', { class: 'sep' }, '›'), h('span', {}, 'New job'));
   } else if (route.page !== 'projects') {
-    items.push(h('span', { class: 'sep' }, '›'), h('span', {}, route.page[0].toUpperCase() + route.page.slice(1)));
+    const names = { help: 'Aide', queue: 'Queue', tools: 'Tools' };
+    items.push(h('span', { class: 'sep' }, '›'), h('span', {}, names[route.page] || route.page));
   }
   clear(crumbs, items);
 }
@@ -80,7 +81,7 @@ async function route() {
     if (r.page === 'projects') await renderProjects(content);
     else if (r.page === 'queue') await renderQueue(content);
     else if (r.page === 'tools') await renderTools(content);
-    else if (r.page === 'help') renderHelp(content);
+    else if (r.page === 'help') await renderHelp(content, r.sub, r.item);
     else clear(content, h('div', { class: 'empty' }, 'Page not found.'));
     return;
   }

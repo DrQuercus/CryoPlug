@@ -35,6 +35,16 @@ installés sur votre serveur local :
 *Captures réalisées avec le jeu de données synthétique `cryoplug demo-data` et des programmes de substitution
 (aucun calcul réel de ModelAngelo, CryoAtom2, Phenix… dans ces images).*
 
+> 📘 **Nouveau sur CryoPlug ?** Lisez le [**guide complet**](cryoplug/web/docs/GUIDE.md) (quelle carte pour quoi,
+> choix des méthodes, valeurs de validation, dépôt, recettes, dépannage) et la
+> [**référence des jobs**](docs/JOBS.md) (à quoi sert chaque job et quand l'utiliser). Les deux sont aussi
+> intégrés dans l'interface : page **Help**, bouton **?** du constructeur de jobs, section « À propos de ce
+> job » du panneau de détails.
+
+| Guide intégré | Référence des jobs (recherche par situation) | Aide dans le constructeur |
+|---|---|---|
+| ![](docs/images/guide.png) | ![](docs/images/job_reference.png) | ![](docs/images/builder_help.png) |
+
 ---
 
 ## Sommaire
@@ -243,6 +253,8 @@ passe (`[server] password`, authentification HTTP basique). Le navigateur de fic
 
 ## 6. Référence des jobs
 
+La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes) est dans
+[docs/JOBS.md](docs/JOBS.md), générée depuis `cryoplug/jobhelp.py` par `cryoplug docs-jobs`.
 `cryoplug jobtypes` liste les 39 types de jobs :
 
 | Catégorie | Jobs |

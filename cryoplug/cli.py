@@ -126,6 +126,17 @@ def cmd_demo(args: argparse.Namespace) -> None:
     print("In CryoPlug: New project > Import from CryoSPARC > select the J42 folder.")
 
 
+def cmd_docs_jobs(args: argparse.Namespace) -> None:
+    from cryoplug.jobhelp import render_markdown
+
+    text = render_markdown()
+    if args.out == "-":
+        sys.stdout.write(text)
+    else:
+        Path(args.out).write_text(text)
+        print(f"Wrote {args.out}")
+
+
 def cmd_service(args: argparse.Namespace) -> None:
     exe = shutil.which("cryoplug") or f"{sys.executable} -m cryoplug"
     cfg = args.config or str(DEFAULT_CONFIG_PATH.expanduser())
@@ -179,6 +190,10 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("demo-data", help="Write a small synthetic dataset to try CryoPlug")
     p.add_argument("directory")
     p.set_defaults(func=cmd_demo)
+
+    p = sub.add_parser("docs-jobs", help="Write the job reference (French) as Markdown")
+    p.add_argument("--out", default="docs/JOBS.md", help="Output file ('-' for stdout)")
+    p.set_defaults(func=cmd_docs_jobs)
 
     p = sub.add_parser("service", help="Print a systemd unit file")
     p.set_defaults(func=cmd_service)

@@ -1,6 +1,7 @@
 // Job details panel: overview, report, outputs, interactive session controls, live log and files.
 import { api } from './api.js';
 import { openBuilder } from './builder.js';
+import { helpSheet } from './help.js';
 import { heatmap, lineChart } from './plots.js';
 import { navigate, refreshJobs, state, typeTitle } from './state.js';
 import {
@@ -226,6 +227,13 @@ function renderOverview(body) {
         const shown = v === '' || v === null || v === undefined ? '—' : (p.name === 'resolution' && Number(v) === 0 ? 'auto' : String(v));
         return [h('span', {}, p.label), h('span', { class: nd ? 'nondefault mono' : 'mono' }, shown.length > 300 ? `${shown.slice(0, 300)}…` : shown)];
       }))));
+  }
+
+  if (t && t.help) {
+    const canContinue = job.status === 'completed';
+    body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'À propos de ce job'),
+      h('details', { class: 'help-details box' }, h('summary', {}, t.help.purpose),
+        helpSheet(t, { showPurpose: false, onNext: canContinue ? (n) => { openBuilder({ type: n, prefillFrom: job }); navigate(`#/p/${puid}/new`); } : null }))));
   }
 
   const notes = h('textarea', { rows: 3, placeholder: 'Notes for this job (saved automatically)…', onchange: async (e) => {

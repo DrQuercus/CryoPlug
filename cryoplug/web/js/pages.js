@@ -131,27 +131,85 @@ export async function renderTools(content) {
 }
 
 // --------------------------------------------------------------------- help
-export function renderHelp(content) {
+let guideText = null;
+
+export async function renderHelp(content, sub = 'guide', item = null) {
+  const tab = sub || 'guide';
+  const tabs = h('div', { class: 'tabs help-tabs', role: 'tablist' }, [['guide', 'Guide'], ['jobs', 'Référence des jobs'], ['setup', 'Installation & commandes']]
+    .map(([key, label]) => h('button', { class: tab === key ? 'on' : '', role: 'tab', 'aria-selected': tab === key ? 'true' : 'false',
+      onclick: () => navigate(key === 'guide' ? '#/help' : `#/help/${key}`) }, label)));
+  const body = h('div', {});
+  clear(content, h('div', { class: 'help-page' }, tabs, body));
+  if (tab === 'jobs') renderJobReference(body, item);
+  else if (tab === 'setup') renderSetup(body);
+  else await renderGuide(body);
+}
+
+async function renderGuide(body) {
+  if (guideText === null) {
+    try {
+      const res = await fetch('/docs/GUIDE.md');
+      guideText = res.ok ? await res.text() : '';
+    } catch { guideText = ''; }
+  }
+  if (!guideText) { clear(body, h('div', { class: 'alert error' }, 'Guide introuvable (/docs/GUIDE.md).')); return; }
+  const { renderMarkdown } = await import('./markdown.js');
+  const scrollTo = (id) => { const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  const doc = renderMarkdown(guideText, { onAnchor: scrollTo });
+  const toc = h('nav', { class: 'doc-toc', 'aria-label': 'Sommaire du guide' }, h('div', { class: 'muted small' }, 'Sommaire'),
+    Array.from(doc.querySelectorAll('h2')).filter((hd) => hd.textContent !== 'Sommaire').map((hd) => h('a', { href: '#', onclick: (e) => { e.preventDefault(); scrollTo(hd.id); } }, hd.textContent)));
+  clear(body, h('div', { class: 'doc-layout' }, toc, doc));
+}
+
+async function renderJobReference(body, item) {
+  const { CATEGORY_FR, helpSheet } = await import('./help.js');
+  const search = h('input', { type: 'search', placeholder: 'Chercher un job, un logiciel ou une situation (ex. anisotropie, ligand, inconnue)…',
+    'aria-label': 'Chercher un job', style: { width: '100%' }, oninput: () => draw() });
+  const list = h('div', {});
+  const draw = () => {
+    const q = search.value.trim().toLowerCase();
+    const blocks = [];
+    for (const cat of state.info.categories) {
+      let types = state.jobtypes.filter((t) => t.category === cat);
+      if (q) {
+        types = types.filter((t) => [t.title, t.name, t.tool || '', t.help?.purpose || '', ...(t.help?.when || []), ...(t.help?.tips || []),
+          ...(t.help?.avoid || []), t.help?.inputs || ''].join(' ').toLowerCase().includes(q));
+      }
+      if (!types.length) continue;
+      const fr = CATEGORY_FR[cat] || cat;
+      blocks.push(h('h2', { class: 'ref-cat' }, fr, fr !== cat ? h('span', { class: 'muted small' }, `  ${cat}`) : null));
+      blocks.push(h('div', { class: 'ref-grid' }, types.map((t) => h('article', { class: 'box ref-card', id: `job-${t.name}` },
+        h('div', { class: 'row' }, h('h3', {}, t.title), h('span', { class: 'grow' }),
+          h('span', { class: `tooldot ${t.tool_status}`, title: t.tool ? `${t.tool} : ${t.tool_status}` : 'intégré' })),
+        h('div', { class: 'muted small mono' }, t.name),
+        helpSheet(t, { onNext: (n) => { search.value = ''; draw(); const el = document.getElementById(`job-${n}`); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1500); } } })))));
+    }
+    clear(list, blocks.length ? blocks : h('div', { class: 'empty' }, 'Aucun job ne correspond.'));
+  };
+  clear(body, h('p', { class: 'muted' }, 'Chaque fiche explique à quoi sert le job, quand il est pertinent, les pièges à éviter, les entrées à utiliser et les étapes qui suivent. Les mêmes fiches apparaissent dans le constructeur de jobs (bouton « ? ») et dans le détail de chaque job.'),
+    h('div', { class: 'toolbar' }, h('div', { style: { flex: 1, maxWidth: '640px' } }, search)), list);
+  draw();
+  if (item) {
+    const el = document.getElementById(`job-${item}`);
+    if (el) el.scrollIntoView({ block: 'center' });
+  }
+}
+
+function renderSetup(body) {
   const sec = (title, ...children) => [h('h2', {}, title), ...children];
-  clear(content, h('div', { class: 'help-page' },
-    h('h1', { style: { marginTop: 0 } }, 'CryoPlug guide'),
-    h('p', {}, 'CryoPlug takes over once your best map is refined in CryoSPARC and drives every step to a deposition-ready model: map enhancement, model building, interactive rebuilding, refinement, validation and the wwPDB/EMDB package. Concepts mirror CryoSPARC: projects contain jobs (J1, J2…), jobs consume outputs of other jobs, queued jobs start when their inputs are ready and a lane slot / GPU is free.'),
-    ...sec('Typical pipeline',
-      h('ol', {},
-        h('li', {}, h('b', {}, 'Import from CryoSPARC'), ' — point to the refinement job folder (e.g. /data/CS-proj/J245). Half maps, sharpened map and FSC mask are found automatically and the gold-standard FSC is recomputed.'),
-        h('li', {}, h('b', {}, 'Map processing'), ' — LocScale 2, EMmerNet, DeepEMhancer, EMReady, Phenix density modification / sharpening. Use the “Map enhancement comparison” workflow to run them side by side.'),
-        h('li', {}, h('b', {}, 'Model building'), ' — ModelAngelo (with or without sequence), AlphaFold models (AFDB or local ColabFold) trimmed and fitted with ChimeraX or Phenix.'),
-        h('li', {}, h('b', {}, 'Interactive'), ' — ISOLDE and Coot sessions open on the server screen in one click, or download a ready-to-run bundle. Save the model in the job folder (or upload it) and click Finish.'),
-        h('li', {}, h('b', {}, 'Refinement'), ' — phenix.real_space_refine or Servalcat against half maps.'),
-        h('li', {}, h('b', {}, 'Validation'), ' — MolProbity, EMRinger, Phenix cryo-EM validation, and built-in Q-scores / map-model FSC / atom inclusion.'),
-        h('li', {}, h('b', {}, 'Deposition'), ' — automated pre-deposition checklist, then a package with mmCIF, maps, FSC XML, recommended contour level, draft methods and Table 1.'))),
-    ...sec('Building jobs',
-      h('p', {}, 'Click ', h('b', {}, 'New job'), ' or ', h('b', {}, 'Continue with…'), ' on a finished job. Inputs are chosen from compatible outputs, or dragged from the output chips that appear on job cards while the builder is open. A resolution of “auto” is taken from the imported maps. You can queue a whole chain at once: each job waits for its parents.')),
-    ...sec('Interactive sessions',
-      h('p', {}, 'ISOLDE/Coot jobs prepare a session then wait (purple). Set ', h('code', {}, '[interactive] display'), ' in the configuration to open them on the workstation screen or a VNC desktop; otherwise use the session bundle on your own computer and upload the result.')),
-    ...sec('Remote access',
-      h('p', {}, 'By default the server listens on localhost. From your laptop: ', h('code', {}, `ssh -N -L 39500:localhost:39500 user@${state.info.hostname}`), ' then open http://localhost:39500. To expose it on the lab network set ', h('code', {}, 'host = "0.0.0.0"'), ' and a password in the configuration.')),
-    ...sec('Command line',
-      h('pre', {}, 'cryoplug init          # write ~/.cryoplug/config.toml\ncryoplug tools         # detect external programs\ncryoplug fetch-viewer  # install the Mol* 3D viewer for offline use\ncryoplug start         # web server + scheduler\ncryoplug status        # lanes and running jobs\ncryoplug service       # print a systemd unit')),
+  clear(body, h('div', { class: 'doc' },
+    ...sec('Installation sur le serveur',
+      h('pre', {}, 'python3 -m venv ~/cryoplug-venv\n~/cryoplug-venv/bin/pip install /chemin/vers/CryoPlug\n~/cryoplug-venv/bin/cryoplug init\n# éditer ~/.cryoplug/config.toml (logiciels, lanes, affichage)\n~/cryoplug-venv/bin/cryoplug tools\n~/cryoplug-venv/bin/cryoplug fetch-viewer\n~/cryoplug-venv/bin/cryoplug start')),
+    ...sec('Déclarer un logiciel',
+      h('p', {}, 'Chaque logiciel est lancé dans bash après ses lignes « setup » (source, conda, module). Exemple :'),
+      h('pre', {}, '[tools.phenix]\nsetup = "source /opt/phenix-1.21.2/phenix_env.sh"\n\n[tools.cryoatom]\nsetup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate CryoAtom2"\n\n[interactive]\ndisplay = ":0"   # écran où ouvrir ISOLDE / Coot depuis le navigateur'),
+      h('p', {}, 'La page ', h('a', { href: '#/tools' }, 'Tools'), ' indique ce qui est détecté. Fichier de configuration : ',
+        h('code', {}, state.info.config_path || '~/.cryoplug/config.toml'), '.')),
+    ...sec('Accès à distance',
+      h('p', {}, 'Le serveur écoute sur localhost par défaut. Depuis votre ordinateur :'),
+      h('pre', {}, `ssh -N -L 39500:localhost:39500 utilisateur@${state.info.hostname}`),
+      h('p', {}, 'puis ouvrez http://localhost:39500. Pour l\'ouvrir au réseau du labo : host = "0.0.0.0" et un mot de passe dans [server].')),
+    ...sec('Commandes',
+      h('pre', {}, 'cryoplug init          # écrit ~/.cryoplug/config.toml\ncryoplug tools         # détecte les logiciels\ncryoplug fetch-viewer  # installe le visualiseur 3D Mol* (hors-ligne)\ncryoplug start         # serveur web + planificateur\ncryoplug status        # lanes et jobs actifs\ncryoplug jobtypes      # liste des jobs\ncryoplug docs-jobs     # régénère docs/JOBS.md\ncryoplug demo-data DIR # jeu de données synthétique\ncryoplug service       # fichier systemd')),
     h('p', { class: 'muted small' }, `CryoPlug ${state.info.version}`)));
 }
