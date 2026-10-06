@@ -1,10 +1,8 @@
 """HTTP API and static web interface."""
 from __future__ import annotations
 
-import base64
 import hashlib
 import os
-import secrets
 import socket
 import stat
 from contextlib import asynccontextmanager
@@ -12,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from cryoplug import __version__
@@ -20,6 +18,7 @@ from cryoplug.config import MOLSTAR_VERSION, Config
 from cryoplug.jobs import CATEGORIES, DATA_TYPES, all_job_types, get_job_type
 from cryoplug.manager import Manager, ManagerError, NotFound
 from cryoplug.scheduler import Scheduler
+from cryoplug.server.auth import install as install_auth, is_loopback
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -40,15 +39,8 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     app.state.scheduler = scheduler
 
     # ------------------------------------------------------------- auth
-    if config.password:
-        expected = base64.b64encode(f"{config.username}:{config.password}".encode()).decode()
-
-        @app.middleware("http")
-        async def basic_auth(request: Request, call_next):
-            header = request.headers.get("authorization", "")
-            if not (header.startswith("Basic ") and secrets.compare_digest(header[6:], expected)):
-                return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="CryoPlug"'})
-            return await call_next(request)
+    auth = install_auth(app, config)
+    app.state.auth = auth
 
     @app.exception_handler(NotFound)
     async def not_found(request: Request, exc: NotFound):
@@ -75,6 +67,8 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
             "projects_root": str(config.projects_root),
             "browse_roots": config.browse_roots,
             "display": config.display,
+            "auth": auth.mode,
+            "listen": {"host": config.host, "port": config.port, "network": not is_loopback(config.host)},
             "lanes": [{"name": l.name, "type": l.type, "description": l.description, "max_jobs": l.max_jobs, "gpus": l.gpus}
                       for l in config.lanes],
             "categories": CATEGORIES,

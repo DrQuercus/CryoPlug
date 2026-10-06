@@ -9,6 +9,7 @@ After=network.target
 Type=simple
 User=cryoem
 Environment=CRYOPLUG_CONFIG=/home/cryoem/.cryoplug/config.toml
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/home/cryoem/cryoplug-venv/bin/cryoplug start
 Restart=on-failure
 # Restarting the server must not kill running jobs (they run in their own process groups).

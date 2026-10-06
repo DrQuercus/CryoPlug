@@ -53,7 +53,7 @@ installés sur votre serveur local :
 2. [Configurer les logiciels](#2-configurer-les-logiciels)
 3. [Utilisation](#3-utilisation)
 4. [Lanes, GPU et cluster SLURM](#4-lanes-gpu-et-cluster-slurm)
-5. [Accès à distance et sécurité](#5-accès-à-distance-et-sécurité)
+5. [Accès depuis un autre ordinateur et sécurité](#5-accès-depuis-un-autre-ordinateur-et-sécurité)
 6. [Référence des jobs](#6-référence-des-jobs)
 7. [Architecture et ajout d'un nouveau logiciel](#7-architecture-et-ajout-dun-nouveau-logiciel)
 8. [Tests](#8-tests)
@@ -78,7 +78,8 @@ nano ~/.cryoplug/config.toml               # déclarer vos logiciels (§2)
 ~/cryoplug-venv/bin/cryoplug start         # serveur web + planificateur de jobs
 ```
 
-Ouvrez ensuite **http://localhost:39500**.
+Ouvrez ensuite **http://localhost:39500** sur le serveur. Pour l'utiliser depuis votre portable ou un autre
+poste, voir [§5](#5-accès-depuis-un-autre-ordinateur-et-sécurité) (`host = "0.0.0.0"` puis le lien affiché au démarrage).
 
 Pour essayer sans vraies données :
 
@@ -193,7 +194,7 @@ Le job prépare la session (modèle + cartes associées, `clipper associate`, `i
 `waiting` :
 
 - **Open on server** ouvre ChimeraX/ISOLDE ou Coot sur l'affichage configuré (`[interactive] display`) ;
-- **Download session bundle** fournit un zip prêt à lancer sur votre poste (`chimerax isolde_session.py`
+- **Download session bundle** (la bonne option depuis un portable) fournit un zip prêt à lancer sur votre poste (`chimerax isolde_session.py`
   ou `./run_coot.sh`) ; renvoyez le résultat avec **Upload model** ;
 - enregistrez le modèle dans le dossier du job (ex. `save isolde_model.cif models #1`), puis **Finish** :
   le modèle devient la sortie du job et les jobs en attente (affinement final, validation…) démarrent.
@@ -239,17 +240,83 @@ Les workers communiquent uniquement par fichiers dans le dossier du job (`job.js
 `job.log`, `report.json`) : il suffit que les dossiers de projet soient sur un système de fichiers
 partagé ; aucune base de données ni port réseau n'est nécessaire sur les nœuds.
 
-## 5. Accès à distance et sécurité
+## 5. Accès depuis un autre ordinateur et sécurité
 
-Par défaut le serveur n'écoute que sur `127.0.0.1`. Depuis votre portable :
+Par défaut le serveur n'écoute que sur `127.0.0.1` : l'interface ne s'ouvre que sur la machine elle-même.
+Deux façons de l'utiliser depuis votre portable.
+
+### Option 1 : sur le réseau du labo
+
+Dans `~/.cryoplug/config.toml` :
+
+```toml
+[server]
+host = "0.0.0.0"
+```
+
+(ou ponctuellement `cryoplug start --host 0.0.0.0`), puis redémarrez CryoPlug
+(`sudo systemctl restart cryoplug` avec le service). Le terminal affiche les adresses à ouvrir :
+
+```
+Open from any computer on the network:
+  http://cryo-ws1:39500/?token=Xk3…
+  http://192.168.1.42:39500/?token=Xk3…
+Access token: Xk3…  (`cryoplug url` prints these links again)
+```
+
+Ouvrez l'un de ces liens sur le portable : le jeton vous connecte et le navigateur le reste 30 jours
+(bouton de déconnexion en bas de la barre latérale). Sans le lien, la page de connexion demande le jeton.
+
+- **Mot de passe plutôt qu'un jeton** : `password = "…"` dans `[server]`. Changer le mot de passe
+  déconnecte tous les navigateurs ; `cryoplug url --reset-token` (puis redémarrage) fait de même pour le jeton.
+- **Avec le service systemd** : le lien est dans `journalctl -u cryoplug`, ou affiché par `cryoplug url`
+  lancé par le même utilisateur que le service.
+- **La page ne répond pas** : le pare-feu du serveur bloque probablement le port.
+
+  ```bash
+  sudo ufw allow 39500/tcp                                                          # Ubuntu / Debian
+  sudo firewall-cmd --permanent --add-port=39500/tcp && sudo firewall-cmd --reload  # Rocky / RHEL
+  ```
+
+  Si le nom de la machine n'est pas connu du portable, utilisez l'adresse IP affichée.
+
+### Option 2 : tunnel SSH (hors du labo, ou sans toucher à la configuration)
+
+Sur le portable :
 
 ```bash
 ssh -N -L 39500:localhost:39500 utilisateur@serveur-cryoem
 ```
 
-puis http://localhost:39500. Pour l'ouvrir au réseau du labo, mettez `host = "0.0.0.0"` **et** un mot de
-passe (`[server] password`, authentification HTTP basique). Le navigateur de fichiers est limité à
-`browse_roots`.
+puis http://localhost:39500. Le trafic passe par SSH (chiffré) et rien n'est exposé sur le réseau.
+
+### HTTPS (facultatif)
+
+En HTTP, le jeton et le cookie de session circulent en clair sur le réseau local. Pour chiffrer avec un
+certificat auto-signé :
+
+```bash
+openssl req -x509 -newkey rsa:3072 -nodes -days 825 -subj "/CN=$(hostname)" \
+  -addext "subjectAltName=DNS:$(hostname)" -keyout ~/.cryoplug/key.pem -out ~/.cryoplug/cert.pem
+```
+
+```toml
+[server]
+ssl_certfile = "~/.cryoplug/cert.pem"
+ssl_keyfile = "~/.cryoplug/key.pem"
+```
+
+L'adresse devient `https://…` ; le navigateur affiche un avertissement la première fois (certificat auto-signé).
+
+### Ce qui est protégé
+
+CryoPlug peut lancer des commandes sur le serveur (job *Custom command*) et en parcourir les fichiers. Dès
+qu'il écoute sur le réseau, toute requête doit donc être authentifiée : cookie de session signé, ou en-tête
+`Authorization: Bearer <jeton>` pour les scripts (`curl -H "Authorization: Bearer $(cat ~/.cryoplug/access_token)" …`).
+Les requêtes qui modifient quelque chose doivent venir de la page CryoPlug elle-même, et en mode local sans
+connexion seuls les noms `localhost` / `127.0.0.1` sont acceptés : une page web malveillante ouverte dans le
+même navigateur ne peut pas piloter CryoPlug. Sur un poste partagé entre plusieurs utilisateurs,
+`auth = "always"` impose aussi la connexion en local. Le navigateur de fichiers reste limité à `browse_roots`.
 
 ## 6. Référence des jobs
 
@@ -331,4 +398,5 @@ pytest
 Les tests lancent de vrais workers sur des données synthétiques, avec de faux exécutables qui imitent les
 interfaces de ModelAngelo, LocScale et Phenix : import CryoSPARC, FSC, chaîne complète jusqu'au paquet de
 dépôt, CryoAtom2, recherche HMM, Boltz-2, spIsoNet, 3D FSC, eLBOW/douse, session ISOLDE, échec / arrêt de
-jobs, workflows, API HTTP et concurrence API/planificateur.
+jobs, workflows, API HTTP, concurrence API/planificateur et contrôle d'accès (connexion, jeton, mot de passe,
+requêtes d'autres origines).

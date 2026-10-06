@@ -85,8 +85,10 @@ class Config:
     data_dir: Path = Path("~/.cryoplug").expanduser()
     projects_root: Path = Path("~/cryoplug_projects").expanduser()
     browse_roots: list[str] = field(default_factory=lambda: ["/"])
-    username: str = "cryoplug"
     password: str = ""
+    auth: str = "auto"  # "auto": login required when exposed on the network or a password is set; "always"
+    ssl_certfile: str = ""
+    ssl_keyfile: str = ""
     display: str = ""  # X display used to launch Coot / ChimeraX-ISOLDE on the server
     molstar_js: str = ""
     molstar_css: str = ""
@@ -137,8 +139,13 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     cfg.data_dir = _path(server.get("data_dir"), cfg.data_dir)
     cfg.projects_root = _path(server.get("projects_root"), cfg.projects_root)
     cfg.browse_roots = [str(Path(p).expanduser()) for p in server.get("browse_roots", cfg.browse_roots)]
-    cfg.username = str(server.get("username", cfg.username))
     cfg.password = str(server.get("password", cfg.password))
+    cfg.auth = str(server.get("auth", cfg.auth))
+    if cfg.auth not in ("auto", "always"):
+        raise ValueError('[server] auth must be "auto" or "always"')
+    for key in ("ssl_certfile", "ssl_keyfile"):
+        if server.get(key):
+            setattr(cfg, key, str(_path(server[key], Path())))
 
     cfg.display = str(data.get("interactive", {}).get("display", os.environ.get("DISPLAY", "")))
 
@@ -170,7 +177,10 @@ EXAMPLE_CONFIG = f"""# CryoPlug configuration file.
 # Every key is optional. Restart the server after editing.
 
 [server]
-# Use "0.0.0.0" to expose CryoPlug on the local network (then set a password!).
+# "127.0.0.1": only this machine can open the interface (or through an SSH tunnel).
+# "0.0.0.0": reachable from other computers (laptop...) at http://<this-server>:{DEFAULT_PORT}.
+# A login is then required: a random access token is printed at start-up (and by
+# `cryoplug url`), or set a password below.
 host = "127.0.0.1"
 port = {DEFAULT_PORT}
 # Database, cached tool checks and the downloaded 3D viewer live here.
@@ -179,9 +189,13 @@ data_dir = "~/.cryoplug"
 projects_root = "~/cryoplug_projects"
 # Directories visible in the file browser (import of CryoSPARC jobs, maps, models...).
 browse_roots = ["/"]
-# Optional HTTP basic authentication.
-# username = "cryoplug"
+# Password for the login page (replaces the access token).
 # password = "change-me"
+# "always" also requires the login on 127.0.0.1 (shared workstations).
+# auth = "auto"
+# HTTPS (e.g. a self-signed certificate, see the README).
+# ssl_certfile = "~/.cryoplug/cert.pem"
+# ssl_keyfile = "~/.cryoplug/key.pem"
 
 [interactive]
 # X display on which Coot and ChimeraX/ISOLDE are opened when launched from the

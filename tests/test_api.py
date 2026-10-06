@@ -13,7 +13,7 @@ from cryoplug.server.app import create_app
 
 def test_api_basic_flow(manager, synthetic):
     app = create_app(manager.config, start_scheduler=False, manager=manager)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://localhost:39500") as client:
         info = client.get("/api/info").json()
         assert info["lanes"][0]["name"] == "local" and "Import" in info["categories"]
         types = {t["name"]: t for t in client.get("/api/jobtypes").json()}

@@ -162,6 +162,12 @@ async function start() {
     return;
   }
   document.getElementById('version').textContent = `v${state.info.version}`;
+  const logout = document.getElementById('logout');
+  logout.hidden = !state.info.auth;
+  logout.addEventListener('click', async () => {
+    await fetch('/logout', { method: 'POST' });
+    location.assign('/login');
+  });
   window.addEventListener('hashchange', () => { route().catch((e) => guard(Promise.reject(e))); });
   await route();
   setInterval(poll, 2500);

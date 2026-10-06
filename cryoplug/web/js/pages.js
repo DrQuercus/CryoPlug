@@ -195,6 +195,38 @@ async function renderJobReference(body, item) {
   }
 }
 
+function remoteAccess() {
+  const { listen, hostname, auth, config_path: configPath } = state.info;
+  const { port } = listen;
+  const firewall = h('pre', {}, `sudo ufw allow ${port}/tcp            # Ubuntu / Debian\n`
+    + `sudo firewall-cmd --permanent --add-port=${port}/tcp && sudo firewall-cmd --reload   # Rocky / RHEL`);
+  if (listen.network) {
+    const login = auth === 'password' ? 'le mot de passe de [server] password'
+      : 'le jeton d\'accès affiché au démarrage du serveur (la commande cryoplug url le réaffiche)';
+    return [
+      h('p', {}, 'Le serveur est ouvert au réseau. Depuis un portable ou un autre poste, ouvrez :'),
+      h('pre', {}, `${location.protocol}//${hostname}:${port}`),
+      h('p', {}, `(ou l'adresse IP du serveur si ce nom n'est pas connu du portable). Connexion avec ${login} ; `
+        + 'le bouton de déconnexion est en bas de la barre latérale.'),
+      h('p', {}, 'Si la page ne répond pas, le pare-feu du serveur bloque probablement le port :'), firewall,
+      h('p', {}, 'Hors du labo, passez par le VPN de l\'institut ou par un tunnel SSH (ci-dessous).'),
+      h('pre', {}, `ssh -N -L ${port}:localhost:${port} utilisateur@${hostname}`),
+    ];
+  }
+  return [
+    h('p', {}, 'Le serveur n\'écoute que sur cette machine (127.0.0.1). Pour l\'ouvrir depuis un portable, deux options.'),
+    h('p', {}, h('b', {}, '1. Réseau du labo.'), ' Dans ', h('code', {}, configPath || '~/.cryoplug/config.toml'), ' :'),
+    h('pre', {}, '[server]\nhost = "0.0.0.0"'),
+    h('p', {}, `Redémarrez CryoPlug puis ouvrez http://${hostname}:${port} (ou l'IP du serveur) depuis le portable. `
+      + 'Une connexion est alors demandée : jeton d\'accès affiché au démarrage (ou par cryoplug url), '
+      + 'ou mot de passe si vous en définissez un ([server] password). Si la page ne répond pas, ouvrez le port :'),
+    firewall,
+    h('p', {}, h('b', {}, '2. Tunnel SSH'), ' (hors du labo, pare-feu strict) : sur le portable,'),
+    h('pre', {}, `ssh -N -L ${port}:localhost:${port} utilisateur@${hostname}`),
+    h('p', {}, `puis ouvrez http://localhost:${port} sur le portable.`),
+  ];
+}
+
 function renderSetup(body) {
   const sec = (title, ...children) => [h('h2', {}, title), ...children];
   clear(body, h('div', { class: 'doc' },
@@ -205,11 +237,8 @@ function renderSetup(body) {
       h('pre', {}, '[tools.phenix]\nsetup = "source /opt/phenix-1.21.2/phenix_env.sh"\n\n[tools.cryoatom]\nsetup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate CryoAtom2"\n\n[interactive]\ndisplay = ":0"   # écran où ouvrir ISOLDE / Coot depuis le navigateur'),
       h('p', {}, 'La page ', h('a', { href: '#/tools' }, 'Tools'), ' indique ce qui est détecté. Fichier de configuration : ',
         h('code', {}, state.info.config_path || '~/.cryoplug/config.toml'), '.')),
-    ...sec('Accès à distance',
-      h('p', {}, 'Le serveur écoute sur localhost par défaut. Depuis votre ordinateur :'),
-      h('pre', {}, `ssh -N -L 39500:localhost:39500 utilisateur@${state.info.hostname}`),
-      h('p', {}, 'puis ouvrez http://localhost:39500. Pour l\'ouvrir au réseau du labo : host = "0.0.0.0" et un mot de passe dans [server].')),
+    ...sec('Accès depuis un autre ordinateur', ...remoteAccess()),
     ...sec('Commandes',
-      h('pre', {}, 'cryoplug init          # écrit ~/.cryoplug/config.toml\ncryoplug tools         # détecte les logiciels\ncryoplug fetch-viewer  # installe le visualiseur 3D Mol* (hors-ligne)\ncryoplug start         # serveur web + planificateur\ncryoplug status        # lanes et jobs actifs\ncryoplug jobtypes      # liste des jobs\ncryoplug docs-jobs     # régénère docs/JOBS.md\ncryoplug demo-data DIR # jeu de données synthétique\ncryoplug service       # fichier systemd')),
+      h('pre', {}, 'cryoplug init          # écrit ~/.cryoplug/config.toml\ncryoplug tools         # détecte les logiciels\ncryoplug fetch-viewer  # installe le visualiseur 3D Mol* (hors-ligne)\ncryoplug start         # serveur web + planificateur\ncryoplug url           # adresses à ouvrir (avec le jeton d\'accès)\ncryoplug status        # lanes et jobs actifs\ncryoplug jobtypes      # liste des jobs\ncryoplug docs-jobs     # régénère docs/JOBS.md\ncryoplug demo-data DIR # jeu de données synthétique\ncryoplug service       # fichier systemd')),
     h('p', { class: 'muted small' }, `CryoPlug ${state.info.version}`)));
 }

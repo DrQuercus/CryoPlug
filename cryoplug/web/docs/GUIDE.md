@@ -61,6 +61,15 @@ Statuts d'un job :
 Pour essayer sans données : `cryoplug demo-data ~/cryoplug_demo`, puis importez
 `~/cryoplug_demo/CS-demo/J42` (jeu synthétique).
 
+### Ouvrir CryoPlug depuis votre portable
+
+Par défaut, l'interface ne s'ouvre que sur le serveur lui-même (`http://localhost:39500`). Pour l'utiliser
+depuis un autre ordinateur, mettez `host = "0.0.0.0"` dans la section `[server]` de la configuration et
+redémarrez CryoPlug : le terminal affiche des liens `http://<serveur>:39500/?token=…` qui vous connectent
+directement (la commande `cryoplug url` les réaffiche). Hors du labo, passez par un tunnel SSH
+(`ssh -N -L 39500:localhost:39500 utilisateur@serveur`, puis `http://localhost:39500` sur le portable).
+Détails, pare-feu et HTTPS : **Help → Installation & commandes**.
+
 ---
 
 ## 2. Quelle carte pour quoi ?
@@ -189,7 +198,7 @@ On peut utiliser les deux : Phenix pendant la construction, Servalcat pour l'aff
 ### 5.5 Sessions interactives en pratique
 
 - **Open on server** ouvre ISOLDE/Coot sur l'écran configuré (`[interactive] display`, par exemple un bureau TurboVNC).
-- **Download session bundle** : un zip prêt à lancer sur votre poste (`chimerax isolde_session.py` ou `./run_coot.sh`) ;
+- **Download session bundle** (la bonne option depuis un portable) : un zip prêt à lancer sur votre poste (`chimerax isolde_session.py` ou `./run_coot.sh`) ;
   renvoyez le modèle avec **Upload model**.
 - Sauvegardez dans le dossier du job (ISOLDE : `save isolde_model.cif models #1`), puis **Finish** :
   le modèle devient la sortie du job et les jobs en attente démarrent.
@@ -343,6 +352,8 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | ModelAngelo : fragments, hélices gauches | Main inversée | Map operations → Flip handedness |
 | Modèle décalé par rapport à la carte | Carte non cubique donnée à ModelAngelo | Map operations → recadrer en boîte cubique |
 | ISOLDE/Coot ne s'ouvre pas depuis le navigateur | Pas d'affichage configuré | `[interactive] display` dans la configuration, ou paquet de session |
+| L'interface ne s'ouvre pas depuis le portable | Serveur en écoute locale (`127.0.0.1`) ou port bloqué par le pare-feu | `host = "0.0.0.0"` dans `[server]` puis redémarrer ; ouvrir le port (`sudo ufw allow 39500/tcp`) ; ou tunnel SSH |
+| « Wrong access token » à la connexion | Jeton mal copié ou renouvelé | `cryoplug url` sur le serveur réaffiche le lien de connexion |
 | Le visualiseur 3D reste vide | Mol* non installé et pas d'accès internet | `cryoplug fetch-viewer` sur le serveur |
 | Relancer un job à l'identique hors CryoPlug | — | `commands.sh` dans le dossier du job contient les commandes exactes |
 

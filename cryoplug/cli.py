@@ -35,19 +35,61 @@ def cmd_start(args: argparse.Namespace) -> None:
 
     from cryoplug.server.app import create_app
 
+    cfg = _server_config(args)
+    if bool(cfg.ssl_certfile) != bool(cfg.ssl_keyfile):
+        sys.exit("[server] ssl_certfile and ssl_keyfile must be set together")
+    for path in (cfg.ssl_certfile, cfg.ssl_keyfile):
+        if path and not Path(path).is_file():
+            sys.exit(f"HTTPS: {path} not found")
+    app = create_app(cfg)
+    if not app.state.manager.tool_status:
+        print("Checking external tools (first start)...")
+        app.state.manager.check_tools()
+    print(f"CryoPlug {__version__}  (config: {cfg.config_path or 'defaults'})")
+    print_access(cfg, app.state.auth.mode, app.state.auth.token)
+    uvicorn.run(app, host=cfg.host, port=cfg.port, log_level=args.log_level,
+                ssl_certfile=cfg.ssl_certfile or None, ssl_keyfile=cfg.ssl_keyfile or None)
+
+
+def _server_config(args: argparse.Namespace):
     cfg = load_config(args.config)
     if args.host:
         cfg.host = args.host
     if args.port:
         cfg.port = args.port
-    app = create_app(cfg)
-    if not app.state.manager.tool_status:
-        print("Checking external tools (first start)...")
-        app.state.manager.check_tools()
-    if cfg.host not in ("127.0.0.1", "localhost") and not cfg.password:
-        print("WARNING: CryoPlug is exposed on the network without a password ([server] password).", file=sys.stderr)
-    print(f"CryoPlug {__version__} on http://{cfg.host}:{cfg.port}  (config: {cfg.config_path or 'defaults'})")
-    uvicorn.run(app, host=cfg.host, port=cfg.port, log_level=args.log_level)
+    return cfg
+
+
+def print_access(cfg, mode: str | None, token: str) -> None:
+    """Tell the user which address to open, and how to log in."""
+    import getpass
+    import socket
+
+    from cryoplug.server.auth import access_urls, is_loopback
+
+    local = is_loopback(cfg.host)
+    print("Open in a browser on this machine:" if local else "Open from any computer on the network:")
+    for url in access_urls(cfg, token if mode == "token" else ""):
+        print(f"  {url}")
+    if mode == "password":
+        print("Log in with the password set in [server] password.")
+    elif mode == "token":
+        print(f"Access token: {token}  (`cryoplug url` prints these links again)")
+    if local:
+        print(f'From another computer: set [server] host = "0.0.0.0" (or `cryoplug start --host 0.0.0.0`), '
+              f"or open an SSH tunnel on that computer:\n"
+              f"  ssh -N -L {cfg.port}:localhost:{cfg.port} {getpass.getuser()}@{socket.gethostname()}")
+
+
+def cmd_url(args: argparse.Namespace) -> None:
+    from cryoplug.server.auth import access_token, auth_required
+
+    cfg = _server_config(args)
+    if args.reset_token:
+        access_token(cfg, reset=True)
+        print("New access token: restart the server (browsers logged in with the old one must log in again).")
+    mode = ("password" if cfg.password else "token") if auth_required(cfg) else None
+    print_access(cfg, mode, access_token(cfg) if mode == "token" else "")
 
 
 def cmd_tools(args: argparse.Namespace) -> None:
@@ -148,6 +190,7 @@ After=network.target
 Type=simple
 User={os.environ.get('USER', 'cryoem')}
 Environment=CRYOPLUG_CONFIG={cfg}
+Environment=PYTHONUNBUFFERED=1
 ExecStart={exe} start
 Restart=on-failure
 KillMode=process
@@ -168,10 +211,16 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("start", help="Start the web server and the job scheduler")
-    p.add_argument("--host")
+    p.add_argument("--host", help='Listening address; "0.0.0.0" = reachable from other computers')
     p.add_argument("--port", type=int)
     p.add_argument("--log-level", default="warning")
     p.set_defaults(func=cmd_start)
+
+    p = sub.add_parser("url", help="Print the address(es) to open, with the access token")
+    p.add_argument("--host", help="Same as given to `cryoplug start`, if it differs from the configuration")
+    p.add_argument("--port", type=int)
+    p.add_argument("--reset-token", action="store_true", help="Create a new access token (restart the server afterwards)")
+    p.set_defaults(func=cmd_url)
 
     p = sub.add_parser("tools", help="Detect the external programs")
     p.set_defaults(func=cmd_tools)

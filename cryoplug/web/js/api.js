@@ -13,6 +13,10 @@ async function request(method, url, body, isForm = false) {
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (res.status === 401) {
+    // Session expired or never opened: back to the login page, then here again.
+    location.assign(`/login?${new URLSearchParams({ next: location.pathname })}${location.hash}`);
+  }
   if (!res.ok) {
     let detail = data && data.detail !== undefined ? data.detail : text || res.statusText;
     if (Array.isArray(detail)) detail = detail.map((d) => d.msg || JSON.stringify(d)).join('; ');
