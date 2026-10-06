@@ -1,7 +1,7 @@
 // CryoPlug single-page application: router, polling and layout.
 import { api } from './api.js';
 import { closeBuilder, openBuilder, refreshBuilderInputs, renderBuilder } from './builder.js';
-import { closeDetail, detailIsLive, detailUid, openDetail, refreshDetail } from './detail.js';
+import { closeDetail, detailIsLive, detailMode, detailUid, openDetail, refreshDetail } from './detail.js';
 import { renderHelp, renderProjects, renderQueue, renderTools } from './pages.js';
 import { renderJobs, renderProject } from './project.js';
 import { loadStatic, onJobsChanged, refreshJobs, state } from './state.js';
@@ -13,6 +13,7 @@ const crumbs = document.getElementById('crumbs');
 const topRight = document.getElementById('topbar-right');
 let dragging = false;
 let jobsSignature = '';
+let cardsScroll = 0; // scroll position of the job cards while a job is opened in their place
 
 // ------------------------------------------------------------------ theme
 function applyTheme(theme) {
@@ -36,9 +37,11 @@ function parseRoute() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   if (!parts.length || parts[0] === 'projects') return { page: 'projects' };
   if (parts[0] === 'p' && parts[1]) {
+    // #/p/P1/J3: job in the panel. #/p/P1/new[/J3], #/p/P1/edit/J5[/J3]: builder in the panel,
+    // optionally with a job opened in the main area.
     const r = { page: 'project', puid: parts[1] };
-    if (parts[2] === 'new') r.panel = 'new';
-    else if (parts[2] === 'edit' && parts[3]) Object.assign(r, { panel: 'edit', juid: parts[3] });
+    if (parts[2] === 'new') Object.assign(r, { panel: 'new', inspect: parts[3] || null });
+    else if (parts[2] === 'edit' && parts[3]) Object.assign(r, { panel: 'edit', juid: parts[3], inspect: parts[4] || null });
     else if (parts[2]) Object.assign(r, { panel: 'detail', juid: parts[2] });
     return r;
   }
@@ -53,8 +56,10 @@ function setCrumbs(route) {
   const items = [h('a', { href: '#/projects' }, 'Projects')];
   if (route.page === 'project' && state.project) {
     items.push(h('span', { class: 'sep' }, '›'), h('a', { href: `#/p/${state.project.uid}` }, h('b', {}, state.project.uid), ` ${state.project.title}`));
-    if (route.juid) items.push(h('span', { class: 'sep' }, '›'), h('span', {}, route.juid));
+    if (route.panel === 'edit') items.push(h('span', { class: 'sep' }, '›'), h('span', {}, `Edit ${route.juid}`));
+    else if (route.juid) items.push(h('span', { class: 'sep' }, '›'), h('span', {}, route.juid));
     if (route.panel === 'new') items.push(h('span', { class: 'sep' }, '›'), h('span', {}, 'New job'));
+    if (route.inspect) items.push(h('span', { class: 'sep' }, '›'), h('span', {}, route.inspect));
   } else if (route.page !== 'projects') {
     const names = { help: 'Aide', queue: 'Queue', tools: 'Tools' };
     items.push(h('span', { class: 'sep' }, '›'), h('span', {}, names[route.page] || route.page));
@@ -87,6 +92,7 @@ async function route() {
   }
 
   const projectChanged = !state.project || state.project.uid !== r.puid || prev.page !== 'project';
+  const wasPage = detailMode() === 'page'; // a job was shown in the main area instead of the cards
   if (projectChanged) {
     try {
       state.project = await api.project(r.puid);
@@ -102,22 +108,41 @@ async function route() {
   }
   setCrumbs(r);
 
+  const restoreCards = () => {
+    if (!wasPage || projectChanged) return;
+    renderProject(content);
+    content.scrollTop = cardsScroll;
+  };
   if (r.panel === 'detail') {
     closeBuilder();
-    await openDetail(r.juid);
-  } else if (r.panel === 'new') {
-    closeDetail();
-    if (!state.builder || state.builder.editing) openBuilder();
-    else renderBuilder();
-  } else if (r.panel === 'edit') {
-    closeDetail();
-    const job = state.jobsByUid[r.juid] || (await api.job(r.puid, r.juid));
-    if (!state.builder || state.builder.editing?.uid !== r.juid) openBuilder({ editing: job });
-    else renderBuilder();
+    restoreCards();
+    await openDetail(r.juid, 'panel');
+  } else if (r.panel === 'new' || r.panel === 'edit') {
+    // Opening or closing a job next to the builder leaves the builder (and its scroll position) alone.
+    const builderShown = !projectChanged && !!state.builder && prev.panel === r.panel && prev.juid === r.juid;
+    if (!builderShown) {
+      if (detailMode() === 'panel') closeDetail();
+      if (r.panel === 'new') {
+        if (!state.builder || state.builder.editing) openBuilder();
+        else renderBuilder();
+      } else {
+        const job = state.jobsByUid[r.juid] || (await api.job(r.puid, r.juid));
+        if (!state.builder || state.builder.editing?.uid !== r.juid) openBuilder({ editing: job });
+        else renderBuilder();
+      }
+    }
+    if (r.inspect) {
+      if (!wasPage) cardsScroll = content.scrollTop;
+      await openDetail(r.inspect, 'page');
+    } else if (wasPage) {
+      closeDetail();
+      restoreCards();
+    }
   } else {
     closeDetail();
     closeBuilder();
     panel.hidden = true;
+    restoreCards();
   }
   if (!projectChanged) renderJobs(); // selection / builder chips
 }

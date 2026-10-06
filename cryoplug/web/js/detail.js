@@ -1,23 +1,26 @@
-// Job details panel: overview, report, outputs, interactive session controls, live log and files.
+// Job details: overview, report, outputs, interactive session controls, live log and files.
+// Shown in the right panel, or in the main area while the job builder occupies the panel
+// (as in CryoSPARC), where its outputs can be dragged onto the builder's inputs.
 import { api } from './api.js';
-import { openBuilder } from './builder.js';
+import { builderConnect, builderSlotsFor, openBuilder } from './builder.js';
 import { helpSheet } from './help.js';
 import { heatmap, lineChart } from './plots.js';
-import { navigate, refreshJobs, state, typeTitle } from './state.js';
+import { builderHref, jobHref, navigate, refreshJobs, state, typeTitle } from './state.js';
 import {
   ACTIVE, ago, btn, clear, confirmDialog, copyText, fmtSize, fmtTime, guard, h, icon, jobDuration, LIVE, popupMenu,
   statusChip, statusMark, toast,
 } from './ui.js';
 
-const D = { uid: null, job: null, tab: 'overview', log: '', logOffset: 0, filesSub: '', autoscroll: true, busy: false };
-const panel = () => document.getElementById('panel');
+const D = { uid: null, job: null, mode: 'panel', tab: 'overview', log: '', logOffset: 0, filesSub: '', autoscroll: true, busy: false };
+const container = () => document.getElementById(D.mode === 'page' ? 'content' : 'panel');
 
-export function openDetail(uid) {
-  if (D.uid !== uid) {
-    Object.assign(D, { uid, job: null, tab: 'overview', log: '', logOffset: 0, filesSub: '' });
-    panel().scrollTop = 0;
+// mode: 'panel' (right side) or 'page' (main area, next to the job builder).
+export function openDetail(uid, mode = 'panel') {
+  if (D.uid !== uid || D.mode !== mode) {
+    Object.assign(D, { uid, mode, job: null, tab: 'overview', log: '', logOffset: 0, filesSub: '' });
+    container().scrollTop = 0;
   }
-  panel().hidden = false;
+  container().hidden = false;
   return refreshDetail(true);
 }
 
@@ -29,6 +32,18 @@ export function closeDetail() {
 export function detailUid() {
   return D.uid;
 }
+
+export function detailMode() {
+  return D.uid ? D.mode : null;
+}
+
+// Outputs of a job shown next to the builder can be connected only to the builder's current job type.
+document.addEventListener('builder-type', (e) => {
+  if (D.mode === 'page' && D.job && D.tab === 'overview' && (D.linkType || null) !== (e.detail || null)) render();
+});
+
+// Where to go when the job is closed or deleted.
+const closeHref = () => (D.mode === 'page' ? builderHref() : `#/p/${state.project.uid}`);
 
 export async function refreshDetail(force = false) {
   if (!D.uid || !state.project || D.busy) return;
@@ -47,7 +62,7 @@ export async function refreshDetail(force = false) {
     if (changed && D.tab !== 'log' && !editing) render();
     else if (changed) renderHeaderOnly();
   } catch (err) {
-    if (err.status === 404) { toast(`${uid} no longer exists`, 'error'); navigate(`#/p/${puid}`); }
+    if (err.status === 404) { toast(`${uid} no longer exists`, 'error'); navigate(closeHref()); }
   } finally {
     D.busy = false;
   }
@@ -62,10 +77,10 @@ let headEl = null;
 let bodyEl = null;
 
 function render() {
-  const p = panel();
   headEl = h('div', { class: 'panel-head' });
   bodyEl = h('div', { class: 'panel-body' });
-  clear(p, headEl, bodyEl);
+  if (D.mode === 'page') clear(container(), h('div', { class: 'job-page' }, headEl, bodyEl));
+  else clear(container(), headEl, bodyEl);
   renderHeaderOnly();
   if (D.tab === 'overview') renderOverview(bodyEl);
   else if (D.tab === 'log') renderLog(bodyEl);
@@ -98,7 +113,7 @@ function renderHeaderOnly() {
   actions.push(btn('Clone', async () => {
     const c = await guard(api.cloneJob(puid, job.uid), 'Cloned');
     await refreshJobs();
-    navigate(`#/p/${puid}/${c.uid}`);
+    navigate(jobHref(c.uid));
   }, { ic: 'copy' }));
   const cont = btn('Continue with…', (e) => continueMenu(e.currentTarget, job), { ic: 'next' });
   if (job.status === 'completed' || job.status === 'running' || job.status === 'queued') actions.push(cont);
@@ -108,12 +123,15 @@ function renderHeaderOnly() {
     if (!(await confirmDialog('Delete job', msg, 'Delete', true))) return;
     await guard(api.deleteJob(puid, job.uid, deps.length > 0), 'Deleted');
     await refreshJobs();
-    navigate(`#/p/${puid}`);
+    navigate(closeHref());
   }, { cls: 'danger', ic: 'trash' }));
 
+  const page = D.mode === 'page';
   clear(headEl,
-    h('div', { class: 'panel-title' }, h('span', { class: 'uid' }, job.uid), titleEl, statusChip(job.status),
-      h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => navigate(`#/p/${puid}`) }, icon('close'))),
+    h('div', { class: 'panel-title' },
+      page ? btn('Jobs', () => navigate(closeHref()), { cls: 'small', ic: 'back', title: 'Back to the job cards (the builder stays open)' }) : null,
+      h('span', { class: 'uid' }, job.uid), titleEl, statusChip(job.status),
+      page ? null : h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => navigate(closeHref()) }, icon('close'))),
     h('div', { class: 'muted small' }, typeTitle(job.type), job.lane ? ` · lane ${job.lane}` : '', jobDuration(job) ? ` · ${jobDuration(job)}` : ''),
     h('div', { class: 'actions-bar' }, actions),
     h('div', { class: 'tabs', role: 'tablist' }, ['overview', 'log', 'files'].map((t) => h('button', {
@@ -185,10 +203,22 @@ function renderOverview(body) {
       h('div', { class: 'label' }, hl.label), h('div', { class: 'value' }, String(hl.value)), hl.status ? statusMark(hl.status) : null)))));
   }
 
+  D.linkType = D.mode === 'page' ? state.builder?.type : null;
   if (job.outputs && job.outputs.length) {
+    const linking = !!D.linkType;
     const rows = job.outputs.map((o) => {
       const items = outputViewItems(job, o);
-      return h('div', { class: 'output-row' },
+      const ref = { job: job.uid, output: o.name, type: o.type };
+      const slots = linking ? builderSlotsFor(o.type) : [];
+      return h('div', {
+        class: `output-row ${slots.length ? 'linkable' : ''}`, draggable: slots.length ? 'true' : null,
+        title: slots.length ? `Drag onto an input of the builder: ${slots.map((sl) => sl.label).join(', ')}` : null,
+        ondragstart: (e) => {
+          if (!slots.length || e.target.closest('a, button')) return;
+          e.dataTransfer.setData('application/x-cryoplug-output', JSON.stringify(ref));
+          e.dataTransfer.effectAllowed = 'link';
+        },
+      },
         o.thumbnail ? h('img', { src: api.fileUrl(puid, o.thumbnail), alt: '', loading: 'lazy' })
           : h('div', { class: 'noimg' }, icon({ model: 'model', map: 'map', mask: 'map', half_maps: 'map', report: 'check', fsc: 'graph', restraints: 'file' }[o.type] || 'file')),
         h('div', {},
@@ -201,10 +231,16 @@ function renderOverview(body) {
             h('a', { href: api.fileUrl(puid, f, true), title: 'Download' }, f.split('/').pop()),
             h('button', { class: 'icon-btn', title: 'Copy full path', 'aria-label': 'Copy path', onclick: () => copyText(`${state.project.dir}/${f}`) }, icon('copy'))))),
           h('div', { class: 'actions' },
+            slots.length ? btn('Use as input', () => {
+              const slot = builderConnect(ref);
+              if (slot) toast(`${job.uid} ${o.name} → '${slot.label}'`, 'ok', 2500);
+            }, { cls: 'small', ic: 'next', title: `Connect to the builder (${slots.map((sl) => sl.label).join(' / ')})` }) : null,
             items.length ? h('a', { class: 'btn small', href: viewerUrl(items), target: '_blank', rel: 'noopener' }, icon('eye'), 'View 3D') : null)));
     });
     const viewAll = job.outputs.flatMap((o) => outputViewItems(job, o)).filter((it, i, arr) => arr.findIndex((x) => x.path === it.path) === i);
     body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'Outputs'),
+      linking && rows.some((r) => r.classList.contains('linkable'))
+        ? h('div', { class: 'muted small', style: { marginBottom: '6px' } }, 'Drag an output onto an input of the builder on the right, or use “Use as input”.') : null,
       viewAll.length > 1 ? h('a', { class: 'btn small', href: viewerUrl(viewAll), target: '_blank', rel: 'noopener', style: { marginBottom: '6px' } }, icon('eye'), 'View all in 3D') : null,
       h('div', { class: 'box' }, rows)));
   }
@@ -215,7 +251,7 @@ function renderOverview(body) {
   if (inputs.length) {
     body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'Inputs'), h('div', { class: 'box kv' },
       inputs.flatMap(([slot, ref]) => [h('span', {}, slot),
-        h('span', {}, h('a', { href: `#/p/${puid}/${ref.job}` }, `${ref.job}`), ` ${ref.title} → ${ref.output} `, statusChip(ref.status))]))));
+        h('span', {}, h('a', { href: jobHref(ref.job) }, `${ref.job}`), ` ${ref.title} → ${ref.output} `, statusChip(ref.status))]))));
   }
 
   const t = state.types[job.type];

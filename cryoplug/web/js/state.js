@@ -20,6 +20,21 @@ export function navigate(hash) {
   if (location.hash !== hash) location.hash = hash;
 }
 
+// Route of the job builder currently open (new or edit), without an inspected job.
+export function builderHref() {
+  const r = state.route;
+  const base = `#/p/${state.project.uid}`;
+  if (state.builder && r.panel === 'new') return `${base}/new`;
+  if (state.builder && r.panel === 'edit') return `${base}/edit/${r.juid}`;
+  return base;
+}
+
+// Where clicking a job leads: while the builder is open (as in CryoSPARC) the job opens
+// in the main area and the builder stays on the right, so its outputs can be dragged in.
+export function jobHref(uid) {
+  return `${builderHref()}/${uid}`;
+}
+
 export function onJobsChanged(fn) {
   state.listeners.add(fn);
   return () => state.listeners.delete(fn);

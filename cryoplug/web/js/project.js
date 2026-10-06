@@ -2,7 +2,7 @@
 import { api } from './api.js';
 import { openBuilder, paramField } from './builder.js';
 import { detailUid } from './detail.js';
-import { navigate, refreshJobs, state, typeTitle } from './state.js';
+import { jobHref, navigate, refreshJobs, state, typeTitle } from './state.js';
 import { btn, clear, guard, h, icon, jobDuration, modal, s, statusChip, toast } from './ui.js';
 
 const STATUSES = ['building', 'queued', 'launched', 'running', 'waiting', 'completed', 'failed', 'killed'];
@@ -68,8 +68,8 @@ function jobCard(job) {
   const card = h('div', {
     class: `card ${job.status} ${detailUid() === job.uid ? 'selected' : ''}`, tabindex: 0, role: 'button', dataset: { uid: job.uid },
     'aria-label': `${job.uid} ${job.title} ${job.status}`,
-    onclick: (e) => { if (!e.target.closest('.out-chip')) navigate(`#/p/${puid}/${job.uid}`); },
-    onkeydown: (e) => { if (e.key === 'Enter') navigate(`#/p/${puid}/${job.uid}`); },
+    onclick: (e) => { if (!e.target.closest('.out-chip')) navigate(jobHref(job.uid)); },
+    onkeydown: (e) => { if (e.key === 'Enter') navigate(jobHref(job.uid)); },
   },
   h('div', { class: 'card-head' }, h('span', { class: 'uid' }, job.uid), statusChip(job.status)),
   h('div', { class: 'card-thumb' }, thumbOut ? h('img', { src: api.fileUrl(puid, thumbOut.thumbnail), alt: '', loading: 'lazy' }) : typeIcon(job.type)),
@@ -96,7 +96,6 @@ function outputChips(job) {
 
 // -------------------------------------------------------------------- graph
 function renderGraph(area, jobs) {
-  const puid = state.project.uid;
   const visible = new Set(jobs.map((j) => j.uid));
   const depth = {};
   const byUid = state.jobsByUid;
@@ -137,7 +136,7 @@ function renderGraph(area, jobs) {
     const p = pos[j.uid];
     const title = clip(j.title, 24);
     const g = s('g', { class: `gnode ${detailUid() === j.uid ? 'selected' : ''}`, transform: `translate(${p.x},${p.y})`, tabindex: 0, role: 'button',
-      style: 'cursor:pointer', onclick: () => navigate(`#/p/${puid}/${j.uid}`), onkeydown: (e) => { if (e.key === 'Enter') navigate(`#/p/${puid}/${j.uid}`); } },
+      style: 'cursor:pointer', onclick: () => navigate(jobHref(j.uid)), onkeydown: (e) => { if (e.key === 'Enter') navigate(jobHref(j.uid)); } },
     s('rect', { class: 'body', width: NW, height: NH, rx: 7 }),
     s('rect', { width: 5, height: NH, rx: 2, fill: `var(${colorVar[j.status] || '--st-idle'})` }),
     s('text', { x: 14, y: 20, 'font-weight': 600 }, `${j.uid}  `, s('tspan', { 'font-weight': 400 }, title)),

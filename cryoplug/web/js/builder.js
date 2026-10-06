@@ -70,7 +70,24 @@ export function builderDrop(slotName, ref) {
     return;
   }
   b.inputs[slotName] = { job: ref.job, output: ref.output };
-  renderBuilder();
+  renderInputs(slotName);
+}
+
+// Slots of the open builder that accept an output of this type.
+export function builderSlotsFor(type) {
+  const b = state.builder;
+  return b?.type ? state.types[b.type].inputs.filter((s) => s.types.includes(type)) : [];
+}
+
+// Connect an output to the best slot (an empty one first, then the slot that prefers it).
+export function builderConnect(ref) {
+  const b = state.builder;
+  const rank = (s) => (b.inputs[s.name] ? 1000 : 0) + ((s.prefer || []).includes(ref.output) ? s.prefer.indexOf(ref.output) : 100);
+  const slot = builderSlotsFor(ref.type).sort((a, c) => rank(a) - rank(c))[0];
+  if (!slot) return null;
+  b.inputs[slot.name] = { job: ref.job, output: ref.output };
+  renderInputs(slot.name);
+  return slot;
 }
 
 export function refreshBuilderInputs() {
@@ -84,6 +101,7 @@ export function renderBuilder() {
   const b = state.builder;
   const p = panel();
   p.hidden = false;
+  document.dispatchEvent(new CustomEvent('builder-type', { detail: b.type })); // a job opened next to it adapts its outputs
   if (!b.type) return renderTypePicker(p);
   const t = state.types[b.type];
   const head = h('div', { class: 'panel-head' },
@@ -104,7 +122,8 @@ export function renderBuilder() {
   if (t.inputs.length) {
     inputsBox = h('div', {});
     body.append(h('div', { class: 'section' }, h('h4', {}, 'Inputs'),
-      h('div', { class: 'muted small', style: { marginBottom: '6px' } }, 'Choose an output or drag one from a job card on the left.'), inputsBox));
+      h('div', { class: 'muted small', style: { marginBottom: '6px' } },
+        'Choose an output, or drag one from a job card or from a job opened on the left.'), inputsBox));
     renderInputs();
   } else {
     inputsBox = null;
@@ -143,7 +162,7 @@ function slotLabel(c) {
   return `${c.job.uid} · ${c.job.title} → ${c.output.label || c.output.name}${st}`;
 }
 
-function renderInputs() {
+function renderInputs(flash = null) {
   const b = state.builder;
   if (!inputsBox) return;
   const t = state.types[b.type];
@@ -161,7 +180,7 @@ function renderInputs() {
       sel.appendChild(h('option', { value: curKey, selected: true }, `${cur.job} → ${cur.output}`));
     }
     const box = h('div', {
-      class: `slot ${cur ? 'filled' : ''}`,
+      class: `slot ${cur ? 'filled' : ''} ${slot.name === flash ? 'flash' : ''}`,
       ondragover: (e) => { e.preventDefault(); box.classList.add('dragover'); },
       ondragleave: () => box.classList.remove('dragover'),
       ondrop: (e) => {

@@ -54,6 +54,9 @@ Statuts d'un job :
    Renseignez la symétrie. La FSC est recalculée et la résolution est affichée sur la carte du job.
 3. **Import sequence** : collez le FASTA (une entrée par entité distincte).
 4. Sur le job d'import, **Continue with…** propose tous les jobs qui acceptent ses sorties, déjà pré-remplis.
+   Pendant que le constructeur (**New job**) est ouvert à droite, cliquer sur un job l'ouvre dans la zone
+   principale, comme dans CryoSPARC : glissez ses sorties sur les entrées du constructeur (ou bouton
+   « Use as input »), puis « Jobs » pour revenir aux cartes.
 5. Ou bien **Workflows** : créez toute la chaîne en une fois (par exemple *De novo model → deposition*),
    cochez/décochez les étapes optionnelles, puis « Create & queue all ».
 6. Suivez l'avancement dans les cartes, la vue **Graph** et la page **Queue**.

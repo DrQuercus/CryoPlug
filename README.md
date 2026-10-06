@@ -177,7 +177,9 @@ supplémentaire, et le job **Custom command** permet d'intégrer un logiciel non
 2. **Continue with…** sur le job d'import propose tous les jobs compatibles, pré-remplis
    (par ex. LocScale 2 avec les demi-cartes et le masque).
 3. Pendant que le constructeur de job est ouvert, les **pastilles de sortie** apparaissent sur les cartes
-   de jobs : glissez-les sur les entrées.
+   de jobs : glissez-les sur les entrées. Cliquer sur un job l'ouvre dans la zone principale (comme dans
+   CryoSPARC) sans fermer le constructeur : glissez ses sorties sur les entrées, ou « Use as input » ;
+   « Jobs » revient aux cartes.
 4. **Workflows** crée une chaîne complète en un clic (de novo avec ModelAngelo ou CryoAtom2, modèle prédit
    AlphaFold, identification de protéines inconnues, comparaison des méthodes d'amélioration de carte,
    validation et dépôt), par exemple *De novo model → deposition (ModelAngelo)* :
