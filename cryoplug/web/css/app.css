@@ -33,6 +33,7 @@
   /* categorical series (fixed order) */
   --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
   --series-5: #e87ba4; --series-6: #008300; --series-7: #4a3aa7; --series-8: #e34948;
+  --seq-0: #cde2fb; --seq-1: #9ec5f4; --seq-2: #6da7ec; --seq-3: #3987e5; --seq-4: #256abf; --seq-5: #184f95; --seq-6: #0d366b;
   --radius: 8px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -48,6 +49,7 @@
     --good-ink: #0ca30c; --bad-ink: #e66767; --warn-ink: #fab219;
     --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
     --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+    --seq-0: #104281; --seq-1: #184f95; --seq-2: #1c5cab; --seq-3: #2a78d6; --seq-4: #5598e7; --seq-5: #86b6ef; --seq-6: #b7d3f6;
   }
 }
 :root[data-theme="dark"] {
@@ -60,6 +62,7 @@
   --good-ink: #0ca30c; --bad-ink: #e66767; --warn-ink: #fab219;
   --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
   --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+  --seq-0: #104281; --seq-1: #184f95; --seq-2: #1c5cab; --seq-3: #2a78d6; --seq-4: #5598e7; --seq-5: #86b6ef; --seq-6: #b7d3f6;
 }
 
 * { box-sizing: border-box; }
@@ -284,6 +287,12 @@ pre.log .cmd { color: #8ec5ff; }
 .plot .tip .tip-row { display: flex; align-items: center; gap: 6px; }
 .plot .tip .tip-row b { font-variant-numeric: tabular-nums; }
 .plot .tip .key { width: 12px; height: 2px; border-radius: 1px; flex-shrink: 0; }
+.heat rect.cell { stroke: var(--surface-2); stroke-width: 2; }
+.heat rect.cell.on { stroke: var(--ink-1); stroke-width: 1.5; }
+.heat-legend { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; }
+.heat-legend .ramp { display: inline-flex; gap: 2px; }
+.heat-legend .ramp i { width: 22px; height: 10px; border-radius: 2px; display: inline-block; }
+.tag.type-restraints { background: rgba(237, 161, 0, .14); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); margin: 2px 0 6px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 14px; height: 2px; border-radius: 1px; display: inline-block; }

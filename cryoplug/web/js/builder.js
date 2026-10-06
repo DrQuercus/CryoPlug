@@ -17,6 +17,7 @@ export function openBuilder({ type = null, editing = null, prefillFrom = null } 
   }
   state.builder = b;
   if (b.type && !editing) applyType(b.type);
+  panel().scrollTop = 0;
   renderBuilder();
 }
 
@@ -231,8 +232,8 @@ function renderTypePicker(p) {
       items.push(h('div', { class: 'cat' }, cat));
       for (const t of types) {
         items.push(h('div', { class: 'type-item', tabindex: 0, role: 'button',
-          onclick: () => { applyType(t.name); renderBuilder(); },
-          onkeydown: (e) => { if (e.key === 'Enter') { applyType(t.name); renderBuilder(); } } },
+          onclick: () => { applyType(t.name); panel().scrollTop = 0; renderBuilder(); },
+          onkeydown: (e) => { if (e.key === 'Enter') { applyType(t.name); panel().scrollTop = 0; renderBuilder(); } } },
         h('span', { class: `tooldot ${t.tool_status}`, title: t.tool ? `${t.tool}: ${t.tool_status}` : 'built-in' }),
         h('div', { style: { minWidth: 0, flex: 1 } }, h('div', { class: 't' }, t.title), h('div', { class: 'd' }, t.description)),
         t.gpu ? h('span', { class: 'tag' }, 'GPU') : null,

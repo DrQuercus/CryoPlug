@@ -1,7 +1,7 @@
 // Job details panel: overview, report, outputs, interactive session controls, live log and files.
 import { api } from './api.js';
 import { openBuilder } from './builder.js';
-import { lineChart } from './plots.js';
+import { heatmap, lineChart } from './plots.js';
 import { navigate, refreshJobs, state, typeTitle } from './state.js';
 import {
   ACTIVE, ago, btn, clear, confirmDialog, copyText, fmtSize, fmtTime, guard, h, icon, jobDuration, LIVE, popupMenu,
@@ -12,7 +12,10 @@ const D = { uid: null, job: null, tab: 'overview', log: '', logOffset: 0, filesS
 const panel = () => document.getElementById('panel');
 
 export function openDetail(uid) {
-  if (D.uid !== uid) Object.assign(D, { uid, job: null, tab: 'overview', log: '', logOffset: 0, filesSub: '' });
+  if (D.uid !== uid) {
+    Object.assign(D, { uid, job: null, tab: 'overview', log: '', logOffset: 0, filesSub: '' });
+    panel().scrollTop = 0;
+  }
   panel().hidden = false;
   return refreshDetail(true);
 }
@@ -186,7 +189,7 @@ function renderOverview(body) {
       const items = outputViewItems(job, o);
       return h('div', { class: 'output-row' },
         o.thumbnail ? h('img', { src: api.fileUrl(puid, o.thumbnail), alt: '', loading: 'lazy' })
-          : h('div', { class: 'noimg' }, icon({ model: 'model', map: 'map', mask: 'map', half_maps: 'map', report: 'check', fsc: 'graph' }[o.type] || 'file')),
+          : h('div', { class: 'noimg' }, icon({ model: 'model', map: 'map', mask: 'map', half_maps: 'map', report: 'check', fsc: 'graph', restraints: 'file' }[o.type] || 'file')),
         h('div', {},
           h('div', { class: 'row' }, h('b', {}, o.label || o.name), h('span', { class: `tag type-${o.type}` }, state.info.data_types[o.type] || o.type),
             h('span', { class: 'muted small' }, o.name)),
@@ -247,6 +250,8 @@ function reportSection(sec, puid) {
         h('td', {}, statusMark(m.status) || ''), h('td', { class: 'muted' }, m.target || '')))))));
   } else if (sec.kind === 'plot') {
     wrap.append(h('div', { class: 'box' }, lineChart(sec)));
+  } else if (sec.kind === 'heatmap') {
+    wrap.append(h('div', { class: 'box' }, heatmap(sec)));
   } else if (sec.kind === 'table') {
     const statusCol = sec.columns.indexOf('Status');
     wrap.append(h('h4', {}, sec.title), h('div', { class: 'box table-scroll' }, h('table', { class: 'data' },

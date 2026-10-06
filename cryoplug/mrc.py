@@ -176,10 +176,13 @@ def fsc(a: np.ndarray, b: np.ndarray, voxel: np.ndarray) -> tuple[np.ndarray, np
     return freqs, curve
 
 
-def resolution_at(freqs: np.ndarray, curve: np.ndarray, threshold: float = 0.143) -> float:
-    """Resolution (A) where the FSC first drops below ``threshold`` (linear interpolation)."""
+def resolution_at(freqs: np.ndarray, curve: np.ndarray, threshold: float = 0.143, persist: int = 1) -> float:
+    """Resolution (A) where the FSC first drops below ``threshold`` (linear interpolation).
+
+    ``persist`` > 1 ignores dips that recover within that many shells (useful for noisy conical FSCs).
+    """
     for i in range(1, len(curve)):
-        if curve[i] < threshold:
+        if all(c < threshold for c in curve[i:i + persist]):
             f0, f1 = freqs[i - 1], freqs[i]
             c0, c1 = curve[i - 1], curve[i]
             f = f1 if c0 == c1 else f0 + (threshold - c0) * (f1 - f0) / (c1 - c0)
@@ -195,7 +198,7 @@ def randomize_phases_beyond(data: np.ndarray, voxel: np.ndarray, frequency: floa
     sel = shells > cutoff_shell
     phases = rng.uniform(0, 2 * np.pi, size=int(sel.sum())).astype(np.float32)
     f[sel] = np.abs(f[sel]) * np.exp(1j * phases)
-    return np.fft.irfftn(f, s=data.shape).astype(np.float32)
+    return np.fft.irfftn(f, s=data.shape, axes=(0, 1, 2)).astype(np.float32)
 
 
 def half_map_fsc(half_a: MapVolume, half_b: MapVolume, mask: MapVolume | None = None) -> dict[str, Any]:
@@ -240,6 +243,72 @@ def half_map_fsc(half_a: MapVolume, half_b: MapVolume, mask: MapVolume | None = 
     return result
 
 
+def directional_fsc(a: np.ndarray, b: np.ndarray, voxel: np.ndarray, mask: np.ndarray | None = None,
+                    half_angle: float = 20.0, az_step: float = 15.0, el_step: float = 15.0,
+                    threshold: float = 0.143, min_coefficients: int = 20) -> dict[str, Any]:
+    """Conical FSC (3D FSC, Tan et al. 2017) over a hemisphere of directions.
+
+    Returns the FSC curve and the threshold resolution for every direction (azimuth, elevation in degrees),
+    plus the global curve. Directions d and -d are equivalent (Friedel symmetry), hence the hemisphere.
+    """
+    if a.shape != b.shape:
+        raise ValueError(f"Map dimensions differ: {a.shape} vs {b.shape}")
+    if mask is not None:
+        m = np.clip(mask, 0, 1).astype(np.float32)
+        a, b = a * m, b * m
+    fa = np.fft.rfftn(a.astype(np.float32))
+    fb = np.fft.rfftn(b.astype(np.float32))
+    shells, freqs, nshell = _frequency_shells(a.shape, voxel)
+    nz, ny, nx = a.shape
+    kz = np.broadcast_to((np.fft.fftfreq(nz) / voxel[2])[:, None, None], fa.shape)
+    ky = np.broadcast_to((np.fft.fftfreq(ny) / voxel[1])[None, :, None], fa.shape)
+    kx = np.broadcast_to((np.fft.rfftfreq(nx) / voxel[0])[None, None, :], fa.shape)
+    sel = (shells < nshell) & (shells > 0)
+    sh = shells[sel]
+    cross = (fa[sel] * np.conj(fb[sel])).real.astype(np.float64)
+    p1 = (np.abs(fa[sel]) ** 2).astype(np.float64)
+    p2 = (np.abs(fb[sel]) ** 2).astype(np.float64)
+    del fa, fb
+    norm = np.sqrt(kx[sel] ** 2 + ky[sel] ** 2 + kz[sel] ** 2)
+    ux = (kx[sel] / norm).astype(np.float32)
+    uy = (ky[sel] / norm).astype(np.float32)
+    uz = (kz[sel] / norm).astype(np.float32)
+
+    def curve(keep: np.ndarray | None, fallback: np.ndarray | None = None) -> np.ndarray:
+        s_ = sh if keep is None else sh[keep]
+        num = np.bincount(s_, weights=cross if keep is None else cross[keep], minlength=nshell)
+        d1 = np.bincount(s_, weights=p1 if keep is None else p1[keep], minlength=nshell)
+        d2 = np.bincount(s_, weights=p2 if keep is None else p2[keep], minlength=nshell)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            c = np.nan_to_num(num / np.sqrt(d1 * d2), nan=0.0)
+        if fallback is not None:
+            # low-frequency shells hold too few coefficients inside a narrow cone: use the global value there
+            sparse = np.bincount(s_, minlength=nshell) < min_coefficients
+            c[sparse] = fallback[sparse]
+        c[0] = 1.0
+        return c
+
+    global_curve = curve(None)
+    cos_lim = float(np.cos(np.radians(half_angle)))
+    elevations = list(np.arange(0.0, 90.0 + 1e-6, el_step))
+    azimuths = list(np.arange(0.0, 360.0 - 1e-6, az_step))
+    directions = []
+    for el in elevations:
+        for az in (azimuths if el < 89.999 else [0.0]):
+            d = (np.cos(np.radians(el)) * np.cos(np.radians(az)), np.cos(np.radians(el)) * np.sin(np.radians(az)),
+                 np.sin(np.radians(el)))
+            keep = np.abs(ux * d[0] + uy * d[1] + uz * d[2]) >= cos_lim
+            c = curve(keep, global_curve)
+            # 3-shell running mean: conical FSCs are noisy because each cone holds few coefficients
+            smooth = c.copy()
+            smooth[1:-1] = (c[:-2] + c[1:-1] + c[2:]) / 3.0
+            directions.append({"azimuth": float(az), "elevation": float(el), "fsc": smooth,
+                               "resolution": resolution_at(freqs, smooth, threshold, persist=2)})
+    return {"frequency": freqs, "global": global_curve, "global_resolution": resolution_at(freqs, global_curve, threshold),
+            "directions": directions, "azimuths": [float(x) for x in azimuths],
+            "elevations": [float(x) for x in elevations], "half_angle": half_angle, "threshold": threshold}
+
+
 def fsc_to_emdb_xml(freqs: list[float], curve: list[float], title: str = "FSC") -> str:
     """FSC curve in the XML format accepted by EMDB/OneDep."""
     lines = ['<?xml version="1.0" encoding="UTF-8"?>', f'<fsc title="{title}" xaxis="Resolution (A-1)" yaxis="Correlation Coefficient">']
@@ -271,7 +340,7 @@ def fourier_filter(vol: MapVolume, bfactor: float = 0.0, lowpass: float = 0.0, h
         fc = 1.0 / highpass
         w = np.clip((fc - s) / edge_width, 0, 1)
         weight *= (0.5 + 0.5 * np.cos(np.pi * w)).astype(np.float32)
-    return np.fft.irfftn(f * weight, s=vol.data.shape).astype(np.float32)
+    return np.fft.irfftn(f * weight, s=vol.data.shape, axes=(0, 1, 2)).astype(np.float32)
 
 
 def flip_hand(vol: MapVolume) -> np.ndarray:

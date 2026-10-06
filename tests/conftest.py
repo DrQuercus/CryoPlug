@@ -98,13 +98,71 @@ def fakebin(tmp_path_factory, synthetic) -> Path:
     """Fake external programs mimicking the CLI and outputs of the real tools."""
     d = tmp_path_factory.mktemp("fakebin")
     model = synthetic["model"]
+    write_cif = f"{sys.executable} -c \"import gemmi,sys; gemmi.read_structure('{model}').make_mmcif_document().write_file(sys.argv[1])\""
     _script(d / "model_angelo", f"""
-# model_angelo build -v map -pf fasta -o out --device 0
+# model_angelo build|build_no_seq -v map [-pf fasta] -o out --device 0  |  model_angelo hmm_search -i dir -f db -o out
 echo "fake ModelAngelo $@"
-out=""
+cmd="$1"; out=""
 while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; esac; shift; done
 mkdir -p "$out"
-{sys.executable} -c "import gemmi; gemmi.read_structure('{model}').make_mmcif_document().write_file('$out/$out.cif')"
+if [ "$cmd" = "hmm_search" ]; then
+  printf 'target_name,query_name,accession,E-value,score,bias,description\nsp|P0TEST|HELIX_TEST,A,,1e-30,250.0,0.1,Test helix protein\ntr|Q0WEAK|WEAK,B,,0.5,12.0,0.0,Weak hit\n' > "$out/best_hits.csv"
+  cp "$out/best_hits.csv" "$out/all_hits.csv"
+  exit 0
+fi
+{write_cif} "$out/$out.cif"
+[ "$cmd" = "build_no_seq" ] && mkdir -p "$out/hmm_profiles" && touch "$out/hmm_profiles/A.hmm"
+exit 0
+""")
+    _script(d / "cryoatom", f"""
+# cryoatom build -v map [-ps p.fasta] [-pf db] -o out -d 0
+echo "fake CryoAtom2 $@"
+out=""; db=""
+while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; -pf) db="$2"; shift;; esac; shift; done
+mkdir -p "$out"
+{write_cif} "$out/$out.cif"
+cp "$out/$out.cif" "$out/${{out}}_raw.cif"
+[ -n "$db" ] && head -2 "$db" > "$out/${{out}}_prot.fasta"
+exit 0
+""")
+    _script(d / "boltz", f"""
+# boltz predict input.yaml --out_dir out ...
+echo "fake boltz $@"
+cat "$2"
+out=""
+while [ $# -gt 0 ]; do case "$1" in --out_dir) out="$2"; shift;; esac; shift; done
+p="$out/boltz_results_boltz_input/predictions/boltz_input"
+mkdir -p "$p"
+{write_cif} "$p/boltz_input_model_0.cif"
+echo '{{"confidence_score": 0.83, "ptm": 0.81, "iptm": 0.77, "complex_plddt": 0.86}}' > "$p/confidence_boltz_input_model_0.json"
+""")
+    _script(d / "spisonet.py", """
+echo "fake spisonet $@"
+if [ "$1" = "fsc3d" ]; then cp "$2" FSC3D.mrc; exit 0; fi
+mkdir -p isonet_maps
+cp "$(readlink -f "$2")" isonet_maps/corrected_half_map_1.mrc
+cp "$(readlink -f "$3")" isonet_maps/corrected_half_map_2.mrc
+""")
+    _script(d / "phenix.douse", f"""
+echo "fake phenix.douse $@"
+{sys.executable} - <<PY
+import gemmi
+st = gemmi.read_structure('{model}')
+ch = gemmi.Chain('W')
+for i in range(3):
+    r = gemmi.Residue(); r.name = 'HOH'; r.seqid = gemmi.SeqId(i + 1, ' '); r.het_flag = 'H'
+    a = gemmi.Atom(); a.name = 'O'; a.element = gemmi.Element('O'); a.pos = gemmi.Position(30 + i, 30, 30); a.occ = 1; a.b_iso = 30
+    r.add_atom(a); ch.add_residue(r)
+st[0].add_chain(ch)
+st.write_pdb('helix_douse_000.pdb')
+PY
+""")
+    _script(d / "phenix.elbow", """
+echo "fake phenix.elbow $@"
+name=""
+for a in "$@"; do case "$a" in --output=*) name="${a#--output=}";; esac; done
+printf 'data_comp_list\nloop_\n_chem_comp.id\n%s\n' "$name" > "$name.cif"
+printf 'HETATM    1  C1  %s A   1       0.000   0.000   0.000  1.00 20.00           C\nEND\n' "$name" > "$name.pdb"
 """)
     _script(d / "phenix.real_space_refine", f"""
 echo "fake phenix.real_space_refine $@"
@@ -141,7 +199,8 @@ def manager(tmp_path, fakebin) -> Manager:
         projects_root=tmp_path / "projects",
         browse_roots=[str(tmp_path.parent), "/tmp"],
         lanes=[LaneConfig(name="local", type="local", max_jobs=4, gpus=[0, 1])],
-        tools={k: ToolConfig(name=k, bin_dir=str(fakebin)) for k in ("modelangelo", "phenix", "locscale")},
+        tools={k: ToolConfig(name=k, bin_dir=str(fakebin))
+               for k in ("modelangelo", "phenix", "locscale", "cryoatom", "boltz", "spisonet")},
     )
     m = Manager(cfg)
     m.check_tools()

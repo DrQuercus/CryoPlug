@@ -9,18 +9,31 @@ installés sur votre serveur local :
 | Étape | Logiciels pilotés | Jobs CryoPlug |
 |---|---|---|
 | Import | CryoSPARC, RELION, fichiers MRC, PDB, AlphaFold DB, UniProt | `Import from CryoSPARC`, `Import maps`, `Import atomic model`, `Import sequence` |
-| Amélioration de carte | **LocScale 2** (model-free / pseudo-modèle / model-based / hybride), **EMmerNet**, **DeepEMhancer**, **EMReady**, Phenix `resolve_cryo_em`, `auto_sharpen`, `local_aniso_sharpen` | + FSC demi-cartes intégrée (masquée, corrigée par randomisation de phase) et opérations de carte (main, B-factor, filtre, masque, boîte) |
-| Construction de modèle | **ModelAngelo** (avec ou sans séquence), ColabFold/AlphaFold2, Phenix `process_predicted_model`, `dock_in_map`, ChimeraX `fitmap` | + fusion et édition de modèles (gemmi) |
+| Amélioration de carte | **LocScale 2** (model-free / pseudo-modèle / model-based / hybride), **EMmerNet**, **DeepEMhancer**, **EMReady**, **spIsoNet** (correction de l'anisotropie due à l'orientation préférentielle), Phenix `resolve_cryo_em`, `auto_sharpen`, `local_aniso_sharpen` | + FSC demi-cartes (masquée, corrigée par randomisation de phase), **résolution directionnelle / 3D FSC** et opérations de carte (main, B-factor, filtre, masque, boîte) intégrées |
+| Construction de modèle | **ModelAngelo** (avec ou sans séquence) et **identification de chaînes inconnues** (`hmm_search`), **CryoAtom2** (protéines, ARN/ADN, complexes, identification par base de séquences), ColabFold/AlphaFold2, **Boltz-2** (complexes protéines/acides nucléiques/ligands), Phenix `process_predicted_model`, `dock_in_map`, ChimeraX `fitmap` | + restreintes de ligands (Phenix eLBOW), fusion et édition de modèles (gemmi) |
 | Reconstruction interactive | **ISOLDE** (ChimeraX), **Coot** | sessions ouvertes en un clic sur l'écran du serveur, ou paquet téléchargeable pour votre poste |
-| Affinement | Phenix `real_space_refine`, **Servalcat** (demi-cartes, cartes Fo-Fc) | |
+| Affinement | Phenix `real_space_refine`, **Servalcat** (demi-cartes, cartes Fo-Fc), `phenix.douse` (eaux) | restreintes de ligands branchées directement sur l'affinement |
 | Validation | MolProbity, EMRinger, Phenix `validation_cryoem` | + **Q-score**, FSC carte-modèle, CC_mask, inclusion d'atomes intégrés (sans logiciel externe) |
 | Dépôt | — | **Checklist pré-dépôt** automatique et **paquet OneDep** : mmCIF, cartes, FSC XML, niveau de contour recommandé, brouillon de *Méthodes* avec citations et de « Table 1 » |
 
 ![Jobs d'un projet](docs/images/jobs.png)
 
-| Graphe du pipeline | Validation carte-modèle | Checklist avant dépôt |
+| Constructeur de job (pré-rempli, glisser-déposer) | Résolution directionnelle (3D FSC) |
+|---|---|
+| ![](docs/images/builder.png) | ![](docs/images/directional_fsc.png) |
+| **Session ISOLDE en attente** (les jobs suivants attendent) | **Graphe du pipeline** |
+| ![](docs/images/isolde.png) | ![](docs/images/graph.png) |
+| **Workflows** | **Checklist avant dépôt** |
+| ![](docs/images/workflows.png) | ![](docs/images/checklist.png) |
+| **Visualiseur 3D (Mol\*, hors-ligne)** | **Mode sombre** |
+| ![](docs/images/viewer.png) | ![](docs/images/dark.png) |
+
+| Validation carte-modèle (Q-score, FSC) | Paquet de dépôt (méthodes, Table 1) | Boltz-2 (complexe + ligands) |
 |---|---|---|
-| ![](docs/images/graph.png) | ![](docs/images/validation.png) | ![](docs/images/checklist.png) |
+| ![](docs/images/validation.png) | ![](docs/images/package.png) | ![](docs/images/boltz.png) |
+
+*Captures réalisées avec le jeu de données synthétique `cryoplug demo-data` et des programmes de substitution
+(aucun calcul réel de ModelAngelo, CryoAtom2, Phenix… dans ces images).*
 
 ---
 
@@ -89,8 +102,17 @@ setup = "source /opt/phenix-1.21.2/phenix_env.sh"
 [tools.modelangelo]
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate model_angelo"
 
+[tools.cryoatom]            # CryoAtom2 (installé par son install.sh dans l'env conda CryoAtom2)
+setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate CryoAtom2"
+
 [tools.locscale]            # LocScale 2 et EMmerNet
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate locscale"
+
+[tools.spisonet]
+setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate spisonet"
+
+[tools.boltz]               # pip install boltz
+setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate boltz"
 
 [tools.deepemhancer]
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate deepEMhancer_env"
@@ -118,8 +140,9 @@ La page **Tools** de l'interface montre l'état de détection, le chemin et la v
 Chaque job a aussi un champ *Extra arguments* (paramètres avancés) pour passer n'importe quelle option
 supplémentaire, et le job **Custom command** permet d'intégrer un logiciel non prévu en quelques secondes.
 
-> Les lignes de commande suivent la documentation actuelle de chaque logiciel (ModelAngelo 1.x,
-> LocScale 2, DeepEMhancer, EMReady, Servalcat `refine_spa_norefmac`, Phenix 1.21). Si votre version
+> Les lignes de commande suivent la documentation et le code source actuels de chaque logiciel
+> (ModelAngelo 1.x, CryoAtom2 v2.1, LocScale 2, spIsoNet 1.0, Boltz-2, DeepEMhancer, EMReady, Servalcat
+> `refine_spa_norefmac`, Phenix 1.21). Si votre version
 > diffère, utilisez *Extra arguments* ou adaptez le job correspondant (§7) ; la commande exacte exécutée
 > est toujours enregistrée dans `commands.sh` et dans le log du job.
 
@@ -144,8 +167,9 @@ supplémentaire, et le job **Custom command** permet d'intégrer un logiciel non
    (par ex. LocScale 2 avec les demi-cartes et le masque).
 3. Pendant que le constructeur de job est ouvert, les **pastilles de sortie** apparaissent sur les cartes
    de jobs : glissez-les sur les entrées.
-4. **Workflows** crée une chaîne complète en un clic, par exemple
-   *De novo model → deposition (ModelAngelo)* :
+4. **Workflows** crée une chaîne complète en un clic (de novo avec ModelAngelo ou CryoAtom2, modèle prédit
+   AlphaFold, identification de protéines inconnues, comparaison des méthodes d'amélioration de carte,
+   validation et dépôt), par exemple *De novo model → deposition (ModelAngelo)* :
    import → LocScale → ModelAngelo → real_space_refine → ISOLDE → affinement final → validation →
    checklist → paquet de dépôt. Les étapes optionnelles (ISOLDE, LocScale…) peuvent être retirées, les
    jobs en aval sont recâblés automatiquement.
@@ -219,21 +243,23 @@ passe (`[server] password`, authentification HTTP basique). Le navigateur de fic
 
 ## 6. Référence des jobs
 
-`cryoplug jobtypes` liste les 32 types de jobs :
+`cryoplug jobtypes` liste les 39 types de jobs :
 
 | Catégorie | Jobs |
 |---|---|
 | Import | Import from CryoSPARC · Import maps · Import atomic model (fichier / PDB / AlphaFold DB) · Import sequence (FASTA / UniProt, séparation protéine/ARN/ADN) |
-| Map processing | Half-map FSC · Map operations · LocScale 2 · EMmerNet · DeepEMhancer · EMReady · Density modification (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
-| Model building | ModelAngelo build · AlphaFold2 (ColabFold) · Process predicted model (Phenix) · Dock in map (Phenix) · Rigid-body fit (ChimeraX) |
+| Map processing | Half-map FSC · Directional resolution (3D FSC) · Map operations · LocScale 2 · EMmerNet · DeepEMhancer · EMReady · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
+| Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
 | Interactive | ISOLDE session · Coot session |
-| Refinement | Real-space refinement (Phenix) · Refinement (Servalcat) |
+| Refinement | Real-space refinement (Phenix) · Refinement (Servalcat) · Add waters (phenix.douse) |
 | Validation | Comprehensive validation (Phenix) · MolProbity · EMRinger · Map-model validation (Q-score, FSC) |
 | Deposition | Pre-deposition checks · Deposition package |
 | Utilities | Model operations · Merge models · Render images (ChimeraX) · Custom command |
 
-Les métriques intégrées (FSC, Q-score, FSC carte-modèle, CC, inclusion d'atomes) sont calculées en
-NumPy. Le Q-score suit la méthode de Pintilie et al. (2020) (σ = 0,6 Å, coquilles de 0 à 2 Å, points plus
+Les métriques intégrées (FSC, résolution directionnelle, Q-score, FSC carte-modèle, CC, inclusion
+d'atomes) sont calculées en NumPy. La résolution directionnelle utilise des FSC coniques (demi-angle 20°,
+comme 3DFSC) sur un hémisphère de directions, lissées sur 3 coquilles ; le rapport pire/meilleure direction
+signale une orientation préférentielle. Le Q-score suit la méthode de Pintilie et al. (2020) (σ = 0,6 Å, coquilles de 0 à 2 Å, points plus
 proches de l'atome que de ses voisins) ; il est comparé à la valeur attendue à la résolution de la carte.
 
 ## 7. Architecture et ajout d'un nouveau logiciel
@@ -292,4 +318,5 @@ pytest
 
 Les tests lancent de vrais workers sur des données synthétiques, avec de faux exécutables qui imitent les
 interfaces de ModelAngelo, LocScale et Phenix : import CryoSPARC, FSC, chaîne complète jusqu'au paquet de
-dépôt, session ISOLDE, échec / arrêt de jobs, workflows, API HTTP et concurrence API/planificateur.
+dépôt, CryoAtom2, recherche HMM, Boltz-2, spIsoNet, 3D FSC, eLBOW/douse, session ISOLDE, échec / arrêt de
+jobs, workflows, API HTTP et concurrence API/planificateur.

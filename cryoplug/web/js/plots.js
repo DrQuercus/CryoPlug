@@ -191,3 +191,82 @@ export function lineChart(section) {
   ].filter(Boolean));
   return wrap;
 }
+
+// Heatmap with a quantised single-hue sequential ramp (rows = y labels), per-cell tooltip, legend and table view.
+const RAMP_STEPS = 7;
+
+export function heatmap(section) {
+  const xs = section.x_labels || [];
+  const ys = section.y_labels || [];
+  const values = section.values || [];
+  const flat = values.flat().filter((v) => Number.isFinite(v));
+  const wrap = h('div', { class: 'plot heat' });
+  if (!flat.length) return h('div', { class: 'muted small' }, 'No data');
+  const vmin = Math.min(...flat), vmax = Math.max(...flat);
+  const step = (vmax - vmin) / RAMP_STEPS || 1;
+  const bin = (v) => Math.min(RAMP_STEPS - 1, Math.max(0, Math.floor((v - vmin) / step)));
+  const unit = section.unit ? ` ${section.unit}` : '';
+  const fmt = (v) => (Number.isFinite(v) ? `${v.toFixed(2)}${unit}` : '–');
+  const W = 560, m = { l: 46, r: 8, t: 6, b: 40 };
+  const cw = (W - m.l - m.r) / Math.max(1, xs.length);
+  const ch = 22;
+  const H = m.t + ch * ys.length + m.b;
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': section.title || 'Heatmap' });
+  const tip = h('div', { class: 'tip', hidden: true });
+  const cells = s('g', {});
+  ys.forEach((yl, r) => {
+    xs.forEach((xl, c) => {
+      const v = values[r]?.[c];
+      const rect = s('rect', {
+        x: m.l + c * cw, y: m.t + r * ch, width: Math.max(1, cw), height: ch, class: 'cell',
+        fill: Number.isFinite(v) ? `var(--seq-${bin(v)})` : 'var(--surface-3)',
+      });
+      rect.addEventListener('pointerenter', () => {
+        tip.replaceChildren(h('div', { class: 'tip-row' }, h('b', {}, fmt(v))),
+          h('div', { class: 'tip-x' }, `${section.x_label || 'x'} ${xl} · ${section.y_label || 'y'} ${yl}`));
+        tip.hidden = false;
+        const box = svg.getBoundingClientRect();
+        const sc = box.width / W;
+        const px = (m.l + (c + 0.5) * cw) * sc;
+        tip.style.top = `${(m.t + (r + 1) * ch) * sc + 6}px`;
+        tip.style.left = px > box.width / 2 ? `${px - tip.offsetWidth - 8}px` : `${px + 8}px`;
+        rect.classList.add('on');
+      });
+      rect.addEventListener('pointerleave', () => { tip.hidden = true; rect.classList.remove('on'); });
+      cells.appendChild(rect);
+    });
+    svg.appendChild(s('text', { x: m.l - 6, y: m.t + r * ch + ch / 2 + 4, 'text-anchor': 'end' }, yl));
+  });
+  svg.appendChild(cells);
+  const every = Math.max(1, Math.ceil(xs.length / 8));
+  xs.forEach((xl, c) => {
+    if (c % every) return;
+    svg.appendChild(s('text', { x: m.l + (c + 0.5) * cw, y: m.t + ys.length * ch + 15, 'text-anchor': 'middle' }, xl));
+  });
+  if (section.x_label) svg.appendChild(s('text', { x: m.l + (W - m.l - m.r) / 2, y: H - 6, 'text-anchor': 'middle' }, section.x_label));
+  if (section.y_label) svg.appendChild(s('text', { x: 10, y: m.t + (ys.length * ch) / 2, transform: `rotate(-90 10 ${m.t + (ys.length * ch) / 2})`, 'text-anchor': 'middle' }, section.y_label));
+
+  const legend = h('div', { class: 'heat-legend' },
+    h('span', { class: 'muted small' }, fmt(vmin)),
+    h('span', { class: 'ramp' }, Array.from({ length: RAMP_STEPS }, (_, i) => h('i', { style: { background: `var(--seq-${i})` },
+      title: `${(vmin + i * step).toFixed(2)}–${(vmin + (i + 1) * step).toFixed(2)}${unit}` }))),
+    h('span', { class: 'muted small' }, fmt(vmax)));
+
+  const tableBox = h('div', { class: 'table-scroll', hidden: true });
+  const toggle = h('button', { class: 'btn small', type: 'button', onclick: () => {
+    if (!tableBox.childElementCount) {
+      tableBox.appendChild(h('table', { class: 'data' },
+        h('thead', {}, h('tr', {}, h('th', {}, `${section.y_label || ''} / ${section.x_label || ''}`), xs.map((x) => h('th', {}, x)))),
+        h('tbody', {}, ys.map((yl, r) => h('tr', {}, h('th', {}, yl), xs.map((_, c) => h('td', {}, Number.isFinite(values[r]?.[c]) ? values[r][c].toFixed(2) : '–')))))));
+    }
+    tableBox.hidden = !tableBox.hidden;
+    toggle.textContent = tableBox.hidden ? 'Table' : 'Chart';
+    svg.style.display = tableBox.hidden ? '' : 'none';
+  } }, 'Table');
+  wrap.append(...[
+    h('div', { class: 'plot-head' }, h('h5', {}, section.title || ''), h('span', { class: 'grow' }), toggle),
+    legend, svg, tip, tableBox,
+    section.note ? h('div', { class: 'muted small' }, section.note) : null,
+  ].filter(Boolean));
+  return wrap;
+}

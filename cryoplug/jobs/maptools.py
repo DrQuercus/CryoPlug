@@ -8,7 +8,9 @@ import numpy as np
 
 from cryoplug.jobs import register
 from cryoplug.jobs.base import JobContext, JobError, JobType, OutputDef, Param, Slot
-from cryoplug.mrc import MapVolume, crop_or_pad, flip_hand, fourier_filter, fsc_to_emdb_xml, half_map_fsc
+from cryoplug.mrc import (
+    MapVolume, crop_or_pad, directional_fsc, flip_hand, fourier_filter, fsc_to_emdb_xml, half_map_fsc,
+)
 
 CURVE_LABELS = {
     "unmasked": "No mask",
@@ -138,3 +140,84 @@ class MapTools(JobType):
             meta["hand_flipped"] = True
         ctx.add_output("map", "map", out, "Processed map", meta=meta)
         ctx.add_text("Operations", "\n".join(f"{i + 1}. {s}" for i, s in enumerate(steps)))
+
+
+@register
+class DirectionalFSC(JobType):
+    name = "directional_fsc"
+    title = "Directional resolution (3D FSC)"
+    category = "Map processing"
+    software = ["CryoPlug"]
+    cpus = 2
+    description = ("Conical FSC in every direction (3D FSC, Tan et al. 2017): reveals the resolution anisotropy caused by "
+                   "preferred orientation, with the best / worst directions and a direction map. Strong anisotropy: "
+                   "consider spIsoNet, tilted data collection or orientation rebalancing.")
+    inputs = [Slot("half_maps", ("half_maps",), "Half maps"), Slot("mask", ("mask",), "Mask", required=False)]
+    params = [
+        Param("cone_angle", "float", 20.0, label="Cone half-angle", unit="°", min=5.0, max=45.0),
+        Param("sampling", "float", 15.0, label="Direction sampling", unit="°", min=5.0, max=30.0),
+        Param("threshold", "float", 0.143, label="FSC threshold", min=0.01, max=0.99),
+        Param("max_box", "int", 256, label="Maximum box", unit="px", min=64, advanced=True,
+              help="Larger maps are cropped around the centre to limit memory use."),
+    ]
+    outputs = [OutputDef("report", "report", "Directional FSC")]
+
+    def run(self, ctx: JobContext) -> None:
+        hm = ctx.require("half_maps")
+        a, b = MapVolume.read(hm.files[0]), MapVolume.read(hm.files[1])
+        if a.data.shape != b.data.shape:
+            raise JobError("Half maps have different dimensions")
+        mask_in = ctx.input("mask")
+        m = MapVolume.read(mask_in.path) if mask_in else None
+        if m is not None and m.data.shape != a.data.shape:
+            ctx.warn("Mask dimensions differ from the half maps: ignoring the mask")
+            m = None
+        box = int(ctx.params["max_box"])
+        if max(a.shape_xyz) > box:
+            ctx.warn(f"Box {a.shape_xyz} cropped to {box}^3 around the centre")
+            a, b = crop_or_pad(a, box), crop_or_pad(b, box)
+            m = crop_or_pad(m, box) if m is not None else None
+        ctx.progress(0.1, "Computing conical FSCs")
+        r = directional_fsc(a.data, b.data, a.voxel, m.data if m is not None else None,
+                            half_angle=ctx.params["cone_angle"], az_step=ctx.params["sampling"],
+                            el_step=ctx.params["sampling"], threshold=ctx.params["threshold"])
+        dirs = r["directions"]
+        res = np.array([d["resolution"] for d in dirs])
+        best, worst = dirs[int(np.argmin(res))], dirs[int(np.argmax(res))]
+        ratio = float(res.max() / res.min())
+        freqs = r["frequency"].tolist()
+        ctx.add_plot("Global and extreme directional FSC", [
+            {"name": "Global", "x": freqs, "y": r["global"].tolist()},
+            {"name": f"Best direction (az {best['azimuth']:.0f}°, el {best['elevation']:.0f}°)", "x": freqs,
+             "y": best["fsc"].tolist()},
+            {"name": f"Worst direction (az {worst['azimuth']:.0f}°, el {worst['elevation']:.0f}°)", "x": freqs,
+             "y": worst["fsc"].tolist()},
+        ], x_label="Resolution (Å)", y_label="FSC", x_kind="resolution",
+            hlines=[{"y": ctx.params["threshold"], "label": f"{ctx.params['threshold']:g}"}], y_range=[-0.1, 1.05])
+        lookup = {(d["azimuth"], d["elevation"]): d["resolution"] for d in dirs}
+        elevations = sorted(r["elevations"], reverse=True)
+        rows = [[round(lookup.get((az, el), lookup.get((0.0, el), float("nan"))), 2) for az in r["azimuths"]]
+                for el in elevations]
+        ctx.add_heatmap("Resolution by direction", [f"{az:.0f}°" for az in r["azimuths"]], [f"{el:.0f}°" for el in elevations],
+                        rows, unit="Å", x_label="Azimuth", y_label="Elevation",
+                        note="Lower is better. Elevation 90° is the map z axis; opposite directions are equivalent.")
+        status = "good" if ratio <= 1.25 else "warn" if ratio <= 1.6 else "bad"
+        ctx.add_metrics("Directional resolution", [
+            {"label": "Global resolution", "value": f"{r['global_resolution']:.2f} Å"},
+            {"label": "Best direction",
+             "value": f"{best['resolution']:.2f} Å (az {best['azimuth']:.0f}°, el {best['elevation']:.0f}°)"},
+            {"label": "Worst direction",
+             "value": f"{worst['resolution']:.2f} Å (az {worst['azimuth']:.0f}°, el {worst['elevation']:.0f}°)"},
+            {"label": "Mean directional resolution", "value": f"{float(res.mean()):.2f} Å"},
+            {"label": "Anisotropy (worst / best)", "value": f"{ratio:.2f}", "status": status, "target": "≤ 1.25"},
+            {"label": "Cone half-angle", "value": f"{ctx.params['cone_angle']:g}°"},
+        ])
+        ctx.add_highlight("Directional", f"{best['resolution']:.2f}–{worst['resolution']:.2f} Å")
+        ctx.add_highlight("Anisotropy", f"{ratio:.2f}", status)
+        out = ctx.path("directional_fsc.json")
+        out.write_text(json.dumps({
+            "global_resolution": r["global_resolution"], "anisotropy": ratio, "cone_angle": r["half_angle"],
+            "directions": [{k: d[k] for k in ("azimuth", "elevation", "resolution")} for d in dirs]}, indent=1))
+        ctx.add_output("report", "report", out, "Directional FSC",
+                       meta={"anisotropy": round(ratio, 3), "best": round(best["resolution"], 3),
+                             "worst": round(worst["resolution"], 3)})

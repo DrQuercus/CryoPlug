@@ -135,18 +135,28 @@ function renderGraph(area, jobs) {
     failed: '--st-critical', killed: '--st-serious', building: '--st-idle' };
   for (const j of jobs) {
     const p = pos[j.uid];
-    const title = j.title.length > 24 ? `${j.title.slice(0, 23)}…` : j.title;
+    const title = clip(j.title, 24);
     const g = s('g', { class: `gnode ${detailUid() === j.uid ? 'selected' : ''}`, transform: `translate(${p.x},${p.y})`, tabindex: 0, role: 'button',
       style: 'cursor:pointer', onclick: () => navigate(`#/p/${puid}/${j.uid}`), onkeydown: (e) => { if (e.key === 'Enter') navigate(`#/p/${puid}/${j.uid}`); } },
     s('rect', { class: 'body', width: NW, height: NH, rx: 7 }),
     s('rect', { width: 5, height: NH, rx: 2, fill: `var(${colorVar[j.status] || '--st-idle'})` }),
     s('text', { x: 14, y: 20, 'font-weight': 600 }, `${j.uid}  `, s('tspan', { 'font-weight': 400 }, title)),
-    s('text', { x: 14, y: 38, class: 'sub' }, `${j.status}${j.highlights?.[0] ? ` · ${j.highlights[0].label} ${j.highlights[0].value}` : ''}`),
+    s('text', { x: 14, y: 38, class: 'sub' }, clip(`${j.status}${j.highlights?.[0] ? ` · ${j.highlights[0].label} ${j.highlights[0].value}` : ''}`, 30)),
     s('title', {}, `${j.uid} ${j.title} (${typeTitle(j.type)}) — ${j.status}`));
     svg.appendChild(g);
   }
-  clear(area, h('div', { class: 'graph-wrap' }, svg),
-    h('div', { class: 'muted small', style: { marginTop: '6px' } }, 'Each column is one step further from the imported data. Arrows follow outputs into inputs; the left bar shows the job status.'));
+  const fit = localStorage.getItem('cryoplug.graphFit') !== '0';
+  if (fit) Object.assign(svg.style, { width: '100%', height: 'auto', maxWidth: `${W}px` });
+  const zoom = h('div', { class: 'seg', role: 'group', 'aria-label': 'Graph zoom' },
+    [['Fit', true], ['100%', false]].map(([label, val]) => h('button', { type: 'button', class: fit === val ? 'on' : '', 'aria-pressed': fit === val ? 'true' : 'false',
+      onclick: () => { localStorage.setItem('cryoplug.graphFit', val ? '1' : '0'); renderGraph(area, jobs); } }, label)));
+  clear(area, h('div', { class: 'row', style: { marginBottom: '8px' } }, zoom,
+    h('span', { class: 'muted small' }, 'Each column is one step further from the imported data. Lines follow outputs into inputs; the left bar shows the job status.')),
+  h('div', { class: 'graph-wrap' }, svg));
+}
+
+function clip(text, n) {
+  return text.length > n ? `${text.slice(0, n - 1)}…` : text;
 }
 
 // ---------------------------------------------------------------- workflows

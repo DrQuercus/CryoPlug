@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cryoplug"
 version = "0.1.0"
-description = "Browser-based cryo-EM post-processing suite: map enhancement, model building, refinement, validation and PDB/EMDB deposition, orchestrating ModelAngelo, LocScale, Phenix, ISOLDE, Coot, Servalcat and more."
+description = "Browser-based cryo-EM post-processing suite: map enhancement, model building, refinement, validation and PDB/EMDB deposition, orchestrating ModelAngelo, CryoAtom2, LocScale, spIsoNet, Boltz-2, Phenix, ISOLDE, Coot, Servalcat and more."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "CryoPlug contributors" }]

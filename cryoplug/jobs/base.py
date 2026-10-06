@@ -35,6 +35,7 @@ DATA_TYPES = {
     "sequence": "Sequence",
     "fsc": "FSC curve",
     "report": "Report",
+    "restraints": "Restraints (CIF)",
     "files": "Files",
 }
 TERMINAL_STATUSES = {"completed", "failed", "killed"}
@@ -497,7 +498,10 @@ class JobContext:
                 return target
             if type == "model":
                 from cryoplug.modelio import ca_traces, read_structure
-                write_png(target, trace_image(ca_traces(read_structure(path))))
+                traces = ca_traces(read_structure(path))
+                if sum(len(t) for t in traces) < 3:  # a ligand or a few atoms: no meaningful trace
+                    return None
+                write_png(target, trace_image(traces))
                 return target
         except Exception as exc:  # thumbnails are cosmetic
             self.warn(f"Thumbnail for '{name}' failed: {exc}")
@@ -522,6 +526,12 @@ class JobContext:
         """series: [{name, x: [...], y: [...]}]; x_kind 'resolution' labels 1/A axes in A."""
         self._section("plot", title, series=series, x_label=x_label, y_label=y_label, x_kind=x_kind,
                       hlines=hlines or [], y_range=y_range)
+
+    def add_heatmap(self, title: str, x_labels: list[str], y_labels: list[str], values: list[list[float]],
+                    unit: str = "", x_label: str = "", y_label: str = "", note: str = "") -> None:
+        """Grid of values (rows follow y_labels) drawn with a sequential colour ramp."""
+        self._section("heatmap", title, x_labels=x_labels, y_labels=y_labels, values=values, unit=unit,
+                      x_label=x_label, y_label=y_label, note=note)
 
     def add_table(self, title: str, columns: list[str], rows: list[list[Any]]) -> None:
         self._section("table", title, columns=columns, rows=rows)

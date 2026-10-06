@@ -24,7 +24,9 @@ class PhenixRealSpaceRefine(JobType):
     cpus = 4
     description = ("phenix.real_space_refine: global minimisation with secondary-structure, Ramachandran and rotamer "
                    "restraints, morphing, simulated annealing and ADP refinement against the map.")
-    inputs = [Slot("model", ("model",), "Model"), Slot("map", ("map",), "Map")]
+    inputs = [Slot("model", ("model",), "Model"), Slot("map", ("map",), "Map"),
+              Slot("restraints", ("restraints",), "Ligand restraints", required=False,
+                   help="CIF restraints from 'Ligand restraints (eLBOW)'.")]
     params = [
         resolution_param(),
         Param("macro_cycles", "int", 5, label="Macro cycles", min=1),
@@ -44,7 +46,10 @@ class PhenixRealSpaceRefine(JobType):
     def run(self, ctx: JobContext) -> None:
         model, m = ctx.require("model"), ctx.require("map")
         res = ctx.resolution(slots=["map", "model"])
-        args = [ctx.program("phenix", "phenix.real_space_refine"), model.path, m.path, *_restraint_files(ctx.params["restraints"]),
+        restraints = _restraint_files(ctx.params["restraints"])
+        if ctx.input("restraints"):
+            restraints.append(ctx.input("restraints").path)
+        args = [ctx.program("phenix", "phenix.real_space_refine"), model.path, m.path, *restraints,
                 f"resolution={res}", f"macro_cycles={ctx.params['macro_cycles']}", f"nproc={ctx.params['nproc']}",
                 f"secondary_structure.enabled={ctx.params['secondary_structure']}",
                 f"ramachandran_plot_restraints.enabled={ctx.params['rama_restraints']}",
@@ -77,7 +82,8 @@ class ServalcatRefine(JobType):
                    "atomic B-factors, sharpened Fo and Fo-Fc difference maps (Yamashita et al. 2021).")
     inputs = [Slot("model", ("model",), "Model"), Slot("half_maps", ("half_maps",), "Half maps", required=False),
               Slot("map", ("map",), "Map", required=False, help="Only if half maps are not available."),
-              Slot("mask", ("mask",), "Mask for Fo-Fc", required=False)]
+              Slot("mask", ("mask",), "Mask for Fo-Fc", required=False),
+              Slot("restraints", ("restraints",), "Ligand restraints", required=False)]
     params = [
         resolution_param(),
         Param("ncycle", "int", 10, label="Cycles", min=1),
@@ -118,6 +124,8 @@ class ServalcatRefine(JobType):
         if ctx.params["weight"] > 0:
             args += ["--weight", str(ctx.params["weight"])]
         ligands = _restraint_files(ctx.params["ligand"])
+        if ctx.input("restraints"):
+            ligands.append(ctx.input("restraints").path)
         if ligands:
             args += ["--ligand", *ligands]
         args += ctx.split_extra()

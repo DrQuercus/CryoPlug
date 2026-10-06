@@ -237,8 +237,17 @@ gpus = [0]
 # [tools.modelangelo]
 # setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate model_angelo"
 #
+# [tools.cryoatom]
+# setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate CryoAtom2"
+#
 # [tools.locscale]
 # setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate locscale"
+#
+# [tools.spisonet]
+# setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate spisonet"
+#
+# [tools.boltz]
+# setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate boltz"
 #
 # [tools.deepemhancer]
 # setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate deepEMhancer_env"

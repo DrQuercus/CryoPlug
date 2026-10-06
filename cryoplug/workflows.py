@@ -55,6 +55,47 @@ WORKFLOWS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "denovo_cryoatom",
+        "title": "De novo model → deposition (CryoAtom2)",
+        "description": ("CryoSPARC refinement → LocScale 2 → CryoAtom2 (proteins and nucleic acids) → Phenix refinement → "
+                        "ISOLDE → final refinement → validation → pre-deposition checks → deposition package."),
+        "nodes": [
+            IMPORT_NODE,
+            {"id": "seq", "type": "import_sequence", "title": "Sample sequence", "ask": ["fasta", "uniprot"]},
+            {"id": "locscale", "type": "locscale", "title": "LocScale (model-free)", "params": {"mode": "model_free"},
+             "inputs": {"half_maps": ["import", "half_maps"], "mask": ["import", "mask"]}, "optional": True, "ask": ["mode"]},
+            {"id": "build", "type": "cryoatom_build",
+             "inputs": {"map": [["locscale", "map"], ["import", "map_sharp"]], "sequence": ["seq", "sequence"]}},
+            {"id": "refine1", "type": "phenix_real_space_refine", "title": "Initial refinement",
+             "inputs": {"model": ["build", "model"], "map": [["locscale", "map"], ["import", "map_sharp"]]}},
+            {"id": "isolde", "type": "isolde_session", "title": "Rebuild in ISOLDE", "optional": True,
+             "inputs": {"model": ["refine1", "model"], "map": [["locscale", "map"], ["import", "map_sharp"]],
+                        "map2": ["import", "map_sharp"]}},
+            {"id": "refine2", "type": "phenix_real_space_refine", "title": "Final refinement",
+             "params": {"macro_cycles": 3, "run": "minimization_global+adp"},
+             "inputs": {"model": [["isolde", "model"], ["refine1", "model"]], "map": ["import", "map_sharp"]}},
+            *_final_steps(["refine2", "model"], ["import", "map_sharp"], ["seq", "sequence"]),
+        ],
+    },
+    {
+        "id": "identify_unknown",
+        "title": "Identify unknown proteins in the map",
+        "description": ("For maps containing unexpected or unknown subunits: ModelAngelo without sequence + HMM search "
+                        "against a proteome, and/or CryoAtom2 identification, then a rebuild with the identified sequences."),
+        "nodes": [
+            IMPORT_NODE,
+            {"id": "noseq", "type": "modelangelo_build", "title": "ModelAngelo (no sequence)",
+             "inputs": {"map": ["import", "map_sharp"]}},
+            {"id": "hmm", "type": "modelangelo_hmm_search", "title": "HMM search", "ask": ["database"],
+             "inputs": {"model": ["noseq", "model"]}},
+            {"id": "cryo_ident", "type": "cryoatom_build", "title": "CryoAtom2 identification", "optional": True,
+             "default": False, "ask": ["protein_db"], "inputs": {"map": ["import", "map_sharp"]}},
+            {"id": "rebuild", "type": "cryoatom_build", "title": "Rebuild with identified sequences",
+             "inputs": {"map": ["import", "map_sharp"], "sequence": [["hmm", "sequence"], ["cryo_ident", "sequence"]]}},
+            {"id": "qscore", "type": "mapmodel_validation", "inputs": {"model": ["rebuild", "model"], "map": ["import", "map_sharp"]}},
+        ],
+    },
+    {
         "id": "alphafold_docking",
         "title": "Predicted model → deposition (AlphaFold)",
         "description": ("CryoSPARC refinement + AlphaFold DB / file model → trim low pLDDT → global rigid-body fit → "
@@ -81,11 +122,14 @@ WORKFLOWS: list[dict[str, Any]] = [
     {
         "id": "map_enhancement",
         "title": "Map enhancement comparison",
-        "description": ("Run the main sharpening / enhancement methods side by side on the same half maps to choose "
-                        "the most interpretable map: LocScale 2, EMmerNet, DeepEMhancer, Phenix density modification "
-                        "and auto-sharpening."),
+        "description": ("Check the directional resolution, then run the main sharpening / enhancement methods side by "
+                        "side on the same half maps to choose the most interpretable map: LocScale 2, EMmerNet, "
+                        "DeepEMhancer, Phenix density modification and auto-sharpening (+ optional spIsoNet, EMReady)."),
         "nodes": [
             IMPORT_NODE,
+            {"id": "dirfsc", "type": "directional_fsc", "inputs": {"half_maps": ["import", "half_maps"], "mask": ["import", "mask"]}},
+            {"id": "spisonet", "type": "spisonet", "inputs": {"half_maps": ["import", "half_maps"], "mask": ["import", "mask"]},
+             "optional": True, "default": False},
             {"id": "locscale", "type": "locscale", "inputs": {"half_maps": ["import", "half_maps"], "mask": ["import", "mask"]}},
             {"id": "emmernet", "type": "emmernet", "inputs": {"half_maps": ["import", "half_maps"]}, "optional": True},
             {"id": "deepemhancer", "type": "deepemhancer", "inputs": {"half_maps": ["import", "half_maps"]}, "optional": True},

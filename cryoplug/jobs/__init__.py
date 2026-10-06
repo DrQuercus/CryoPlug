@@ -45,6 +45,7 @@ def _load() -> None:
         deposition,
         imports,
         interactive,
+        ligands,
         maptools,
         refinement,
         sharpening,

@@ -216,6 +216,13 @@ METHOD_TEMPLATES = {
     "deepemhancer": "The map was post-processed with DeepEMhancer ({model} network).",
     "emready": "The map was enhanced with EMReady.",
     "modelangelo_build": "An initial model was built automatically with ModelAngelo.",
+    "cryoatom_build": "An initial model was built automatically with CryoAtom2.",
+    "modelangelo_hmm_search": "Unknown chains were identified by searching the ModelAngelo HMM profiles against a sequence database with HMMER.",
+    "boltz_predict": "A starting model of the complex was predicted with Boltz-2.",
+    "spisonet": "Preferred-orientation anisotropy was corrected with spIsoNet.",
+    "directional_fsc": "Directional resolution was assessed by conical (3D) FSC.",
+    "phenix_elbow": "Ligand restraints were generated with phenix.elbow.",
+    "phenix_douse": "Ordered water molecules were placed with phenix.douse.",
     "colabfold_predict": "Starting models were predicted with AlphaFold2 as implemented in ColabFold.",
     "import_model": "A starting model was obtained ({source}).",
     "phenix_process_predicted_model": "Low-confidence regions of the predicted model were removed with phenix.process_predicted_model.",
@@ -229,6 +236,13 @@ METHOD_TEMPLATES = {
     "phenix_molprobity": "Model geometry was assessed with MolProbity.",
     "phenix_emringer": "Side-chain fit was assessed with EMRinger.",
     "mapmodel_validation": "Map-model agreement was assessed with Q-scores and map-model FSC.",
+}
+
+
+EXTRA_CITATIONS = {
+    "modelangelo_hmm_search": "HMMER: Eddy S.R. (2011) PLoS Comput. Biol. 7, e1002195.",
+    "phenix_elbow": "eLBOW: Moriarty N.W., Grosse-Kunstleve R.W., Adams P.D. (2009) Acta Cryst. D65, 1074-1080.",
+    "directional_fsc": "3D FSC: Tan Y.Z. et al. (2017) Nat. Methods 14, 793-796.",
 }
 
 
@@ -257,6 +271,9 @@ def methods_text(ancestors: list[dict[str, Any]]) -> tuple[str, list[str]]:
         if jt and jt.tool and jt.tool not in seen and jt.tool in TOOLS and TOOLS[jt.tool].citation:
             seen.add(jt.tool)
             citations.append(f"{TOOLS[jt.tool].label}: {TOOLS[jt.tool].citation}")
+        extra = EXTRA_CITATIONS.get(job["type"])
+        if extra and extra not in citations:
+            citations.append(extra)
     sentences.append(f"Post-processing was orchestrated with CryoPlug v{__version__}.")
     if any(j["type"] == "mapmodel_validation" for j in ancestors):
         citations.append("Q-score: Pintilie G. et al. (2020) Nat. Methods 17, 328-334.")

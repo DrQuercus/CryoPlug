@@ -13,6 +13,7 @@ from cryoplug.jobs.base import (
     Param,
     Slot,
     extra_args_param,
+    first_existing,
     resolution_param,
 )
 
@@ -337,3 +338,64 @@ class EMReady(JobType):
         args += ctx.split_extra()
         ctx.run(args, tool="emready")
         ctx.add_output("map", "map", out, "EMReady map", inherit=["map"])
+
+
+# ------------------------------------------------------------------ spIsoNet
+@register
+class SpIsoNet(JobType):
+    name = "spisonet"
+    title = "Anisotropy correction (spIsoNet)"
+    category = "Map processing"
+    tool = "spisonet"
+    software = ["spIsoNet"]
+    gpu = 1
+    cpus = 8
+    description = ("Self-supervised correction of the resolution anisotropy caused by preferred orientation (spIsoNet, "
+                   "Liu et al. 2025): computes the 3D FSC, then trains a network on the half maps to restore the poorly "
+                   "sampled directions. The corrected half maps are no longer independent: never use them for the "
+                   "deposited FSC.")
+    inputs = [Slot("half_maps", ("half_maps",), "Half maps", help="Unfiltered, unmasked half maps."),
+              Slot("mask", ("mask",), "Mask", help="Soft mask around the particle (required by spIsoNet).")]
+    params = [
+        resolution_param(),
+        Param("epochs", "int", 30, label="Training epochs", min=1),
+        Param("alpha", "float", 1.0, label="Alpha (missing-direction loss weight)", advanced=True),
+        Param("beta", "float", 0.5, label="Beta (denoising loss weight)", advanced=True),
+        Param("cone_sampling_angle", "float", 10.0, label="3D FSC cone sampling", unit="°", advanced=True),
+        Param("acc_batches", "int", 2, label="Accumulated batches", min=1, advanced=True),
+        Param("ncpus", "int", 8, label="CPUs", min=1),
+        Param("gpu_ids", "str", "", label="GPU ids", advanced=True, help="Physical GPU ids (--gpuID). Empty = lane GPU(s)."),
+        extra_args_param(),
+    ]
+    outputs = [OutputDef("half_maps", "half_maps", "Corrected half maps"), OutputDef("map", "map", "Corrected map"),
+               OutputDef("fsc3d", "map", "3D FSC volume")]
+
+    def run(self, ctx: JobContext) -> None:
+        from cryoplug.mrc import MapVolume
+        hm, mask = ctx.require("half_maps"), ctx.require("mask")
+        res = ctx.resolution()
+        h1 = ctx.link_input(hm.files[0], "half_map_1.mrc")
+        h2 = ctx.link_input(hm.files[1], "half_map_2.mrc")
+        exe = ctx.executable("spisonet")
+        ctx.progress(0.05, "Computing the 3D FSC")
+        ctx.run([exe, "fsc3d", h1, h2, mask.path, "--ncpus", str(ctx.params["ncpus"]), "--limit_res", f"{res:.3f}",
+                 "--cone_sampling_angle", str(ctx.params["cone_sampling_angle"])], tool="spisonet")
+        fsc3d = ctx.path("FSC3D.mrc")
+        if not fsc3d.exists():
+            raise JobError("spIsoNet did not write FSC3D.mrc")
+        ctx.progress(0.2, "Training the anisotropy-correction network")
+        ctx.run([exe, "reconstruct", h1, h2, "--aniso_file", fsc3d, "--mask", mask.path, "--limit_res", f"{res:.3f}",
+                 "--epochs", str(ctx.params["epochs"]), "--alpha", str(ctx.params["alpha"]), "--beta", str(ctx.params["beta"]),
+                 "--output_dir", "isonet_maps", "--gpuID", ",".join(ctx.physical_gpus(ctx.params.get("gpu_ids", ""))),
+                 "--acc_batches", str(ctx.params["acc_batches"]), "--ncpus", str(ctx.params["ncpus"]), *ctx.split_extra()],
+                tool="spisonet")
+        c1 = first_existing([ctx.path("isonet_maps", "corrected_half_map_1.mrc")])
+        c2 = first_existing([ctx.path("isonet_maps", "corrected_half_map_2.mrc")])
+        if not (c1 and c2):
+            raise JobError("Corrected half maps not found in isonet_maps/")
+        a, b = MapVolume.read(c1), MapVolume.read(c2)
+        avg = a.write(ctx.path("corrected_map.mrc"), (a.data + b.data) / 2)
+        meta = {"anisotropy_corrected": True}
+        ctx.add_output("half_maps", "half_maps", [c1, c2], "spIsoNet corrected half maps", inherit=["half_maps"], meta=meta)
+        ctx.add_output("map", "map", avg, "spIsoNet corrected map", inherit=["half_maps"], meta=meta)
+        ctx.add_output("fsc3d", "map", fsc3d, "3D FSC volume (before correction)", inherit=["half_maps"])

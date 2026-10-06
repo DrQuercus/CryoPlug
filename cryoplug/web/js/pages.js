@@ -125,6 +125,7 @@ export async function renderTools(content) {
       h('tbody', {}, rows))),
     h('div', { class: 'section' }, h('h4', {}, 'Example configuration'), h('pre', { class: 'box mono', style: { whiteSpace: 'pre-wrap' } },
       '[tools.phenix]\nsetup = "source /opt/phenix-1.21.2/phenix_env.sh"\n\n[tools.modelangelo]\nsetup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate model_angelo"\n\n'
+      + '[tools.cryoatom]\nsetup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate CryoAtom2"\n\n'
       + '[tools.locscale]\nsetup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate locscale"\n\n[tools.chimerax]\nexecutable = "/usr/bin/chimerax"\n\n'
       + '[interactive]\ndisplay = ":0"   # screen used to open Coot / ISOLDE from the browser')));
 }
