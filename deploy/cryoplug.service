@@ -1,0 +1,18 @@
+# Example systemd unit. Adapt User, the virtualenv path and the configuration path, then:
+#   sudo cp deploy/cryoplug.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now cryoplug
+[Unit]
+Description=CryoPlug cryo-EM post-processing server
+After=network.target
+
+[Service]
+Type=simple
+User=cryoem
+Environment=CRYOPLUG_CONFIG=/home/cryoem/.cryoplug/config.toml
+ExecStart=/home/cryoem/cryoplug-venv/bin/cryoplug start
+Restart=on-failure
+# Restarting the server must not kill running jobs (they run in their own process groups).
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

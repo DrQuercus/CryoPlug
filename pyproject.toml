@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cryoplug"
+version = "0.1.0"
+description = "Browser-based cryo-EM post-processing suite: map enhancement, model building, refinement, validation and PDB/EMDB deposition, orchestrating ModelAngelo, LocScale, Phenix, ISOLDE, Coot, Servalcat and more."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "CryoPlug contributors" }]
+dependencies = [
+    "fastapi>=0.100",
+    "uvicorn>=0.23",
+    "python-multipart>=0.0.6",
+    "numpy>=1.22",
+    "mrcfile>=1.4",
+    "gemmi>=0.6",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "httpx>=0.24"]
+
+[project.scripts]
+cryoplug = "cryoplug.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cryoplug*"]
+
+[tool.setuptools.package-data]
+cryoplug = ["web/*", "web/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
