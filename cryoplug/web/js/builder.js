@@ -73,6 +73,21 @@ export function builderDrop(slotName, ref) {
   renderInputs(slotName);
 }
 
+// "Continue with" a job when the builder already has that job type: connect the job's outputs
+// (they replace what was there) and, for still-empty slots, what the job itself consumed.
+// Returns the names of the slots that changed.
+export function builderPrefill(job) {
+  const b = state.builder;
+  const found = {};
+  prefill({ inputs: found }, state.types[b.type], job);
+  const changed = Object.entries(found)
+    .filter(([slot, ref]) => ref.job === job.uid || !b.inputs[slot])
+    .filter(([slot, ref]) => JSON.stringify(b.inputs[slot]) !== JSON.stringify(ref))
+    .map(([slot, ref]) => { b.inputs[slot] = ref; return slot; });
+  renderInputs(changed);
+  return changed;
+}
+
 // Slots of the open builder that accept an output of this type.
 export function builderSlotsFor(type) {
   const b = state.builder;
@@ -162,9 +177,10 @@ function slotLabel(c) {
   return `${c.job.uid} · ${c.job.title} → ${c.output.label || c.output.name}${st}`;
 }
 
-function renderInputs(flash = null) {
+function renderInputs(flash = []) {
   const b = state.builder;
   if (!inputsBox) return;
+  const flashed = new Set([].concat(flash || []));
   const t = state.types[b.type];
   const rows = t.inputs.map((slot) => {
     const cands = compatibleOutputs(slot, b.editing?.uid);
@@ -180,7 +196,7 @@ function renderInputs(flash = null) {
       sel.appendChild(h('option', { value: curKey, selected: true }, `${cur.job} → ${cur.output}`));
     }
     const box = h('div', {
-      class: `slot ${cur ? 'filled' : ''} ${slot.name === flash ? 'flash' : ''}`,
+      class: `slot ${cur ? 'filled' : ''} ${flashed.has(slot.name) ? 'flash' : ''}`,
       ondragover: (e) => { e.preventDefault(); box.classList.add('dragover'); },
       ondragleave: () => box.classList.remove('dragover'),
       ondrop: (e) => {

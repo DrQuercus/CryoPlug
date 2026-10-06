@@ -108,6 +108,7 @@ export async function guard(promise, okMessage) {
     return result;
   } catch (err) {
     toast(err.message || String(err), 'error', 8000);
+    if (err && typeof err === 'object') err.shown = true;
     throw err;
   }
 }
@@ -152,17 +153,46 @@ export function confirmDialog(title, message, okLabel = 'Confirm', danger = fals
 export function popupMenu(anchor, items) {
   document.querySelectorAll('.menu').forEach((m) => m.remove());
   const menu = h('div', { class: 'menu', role: 'menu' });
+  const close = () => {
+    menu.remove();
+    document.removeEventListener('pointerdown', outside, true);
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const outside = (e) => { if (!menu.contains(e.target)) close(); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
   for (const it of items) {
     if (it.category) menu.appendChild(h('div', { class: 'menu-cat' }, it.category));
-    else menu.appendChild(h('button', { role: 'menuitem', onclick: () => { menu.remove(); it.action(); } }, it.label));
+    else menu.appendChild(h('button', { type: 'button', role: 'menuitem', onclick: () => { close(); runAction(it.action); } }, it.label));
   }
-  const r = anchor.getBoundingClientRect();
-  menu.style.top = `${r.bottom + window.scrollY + 4}px`;
-  menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 280))}px`;
   document.body.appendChild(menu);
-  const off = (e) => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('mousedown', off); } };
-  setTimeout(() => document.addEventListener('mousedown', off), 0);
+  // Fixed next to the anchor and kept inside the window (opens upwards when there is more room there).
+  const r = anchor.getBoundingClientRect();
+  const below = window.innerHeight - r.bottom - 12;
+  const above = r.top - 12;
+  const up = below < 220 && above > below;
+  menu.style.maxHeight = `${Math.max(120, Math.min(360, up ? above : below))}px`;
+  menu.style.top = `${up ? r.top - 4 - menu.offsetHeight : r.bottom + 4}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+  // Menus open on click, i.e. after the pointer went down: listening right away is safe.
+  document.addEventListener('pointerdown', outside, true);
+  document.addEventListener('keydown', onKey, true);
   return menu;
+}
+
+// Run a click action; a failure is shown instead of silently doing nothing.
+export function runAction(fn) {
+  try {
+    const result = fn();
+    if (result && typeof result.catch === 'function') result.catch(showError);
+  } catch (err) {
+    showError(err);
+  }
+}
+
+export function showError(err) {
+  if (err && err.shown) return; // already reported (guard)
+  console.error(err);
+  toast(`Interface error: ${err?.message || err}`, 'error', 10000);
 }
 
 // ------------------------------------------------------------- formatting

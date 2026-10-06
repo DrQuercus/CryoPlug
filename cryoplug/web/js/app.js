@@ -5,7 +5,7 @@ import { closeDetail, detailIsLive, detailMode, detailUid, openDetail, refreshDe
 import { renderHelp, renderProjects, renderQueue, renderTools } from './pages.js';
 import { renderJobs, renderProject } from './project.js';
 import { loadStatic, onJobsChanged, refreshJobs, state } from './state.js';
-import { clear, guard, h, toast } from './ui.js';
+import { clear, guard, h, showError, toast } from './ui.js';
 
 const content = document.getElementById('content');
 const panel = document.getElementById('panel');
@@ -28,6 +28,10 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
   localStorage.setItem('cryoplug.theme', next);
   applyTheme(next);
 });
+
+// Never fail silently: errors that escape a handler are shown (guard() errors are already).
+window.addEventListener('error', (e) => showError(e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => showError(e.reason));
 
 document.addEventListener('dragstart', () => { dragging = true; });
 document.addEventListener('dragend', () => { dragging = false; });

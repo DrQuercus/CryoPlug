@@ -2,7 +2,7 @@
 // Shown in the right panel, or in the main area while the job builder occupies the panel
 // (as in CryoSPARC), where its outputs can be dragged onto the builder's inputs.
 import { api } from './api.js';
-import { builderConnect, builderSlotsFor, openBuilder } from './builder.js';
+import { builderConnect, builderPrefill, builderSlotsFor, openBuilder } from './builder.js';
 import { helpSheet } from './help.js';
 import { heatmap, lineChart } from './plots.js';
 import { builderHref, jobHref, navigate, refreshJobs, state, typeTitle } from './state.js';
@@ -161,11 +161,27 @@ function continueMenu(anchor, job) {
     if (!types.length) continue;
     items.push({ category: cat });
     for (const t of types) {
-      items.push({ label: t.title, action: () => { openBuilder({ type: t.name, prefillFrom: job }); navigate(`#/p/${state.project.uid}/new`); } });
+      items.push({ label: t.title, action: () => continueWith(job, t.name) });
     }
   }
   if (!items.length) { toast('No job type consumes these outputs'); return; }
   popupMenu(anchor, items);
+}
+
+// Prepare a job of type `typeName` fed by `job`'s outputs. When the job is open next to the builder
+// it stays open; if the builder already has that type, the outputs are added to its inputs.
+function continueWith(job, typeName) {
+  const puid = state.project.uid;
+  const title = state.types[typeName].title;
+  if (D.mode === 'page' && state.builder?.type === typeName) {
+    const changed = builderPrefill(job);
+    toast(changed.length ? `${job.uid} → ${changed.length} input(s) of “${title}”` : `“${title}” already uses ${job.uid}'s outputs`,
+      changed.length ? 'ok' : 'info', 3000);
+    return;
+  }
+  openBuilder({ type: typeName, prefillFrom: job });
+  navigate(D.mode === 'page' ? `#/p/${puid}/new/${job.uid}` : `#/p/${puid}/new`);
+  toast(`New “${title}” job prepared from ${job.uid}: check the inputs on the right`, 'ok', 3500);
 }
 
 // ---------------------------------------------------------------- overview
@@ -269,7 +285,7 @@ function renderOverview(body) {
     const canContinue = job.status === 'completed';
     body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'À propos de ce job'),
       h('details', { class: 'help-details box' }, h('summary', {}, t.help.purpose),
-        helpSheet(t, { showPurpose: false, onNext: canContinue ? (n) => { openBuilder({ type: n, prefillFrom: job }); navigate(`#/p/${puid}/new`); } : null }))));
+        helpSheet(t, { showPurpose: false, onNext: canContinue ? (n) => continueWith(job, n) : null }))));
   }
 
   const notes = h('textarea', { rows: 3, placeholder: 'Notes for this job (saved automatically)…', onchange: async (e) => {
