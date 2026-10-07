@@ -2,8 +2,9 @@
 // Shown in the right panel, or in the main area while the job builder occupies the panel
 // (as in CryoSPARC), where its outputs can be dragged onto the builder's inputs.
 import { api } from './api.js';
-import { builderConnect, builderPrefill, builderSlotsFor, openBuilder } from './builder.js';
+import { builderConnect, builderPrefill, builderSetParams, builderSlotsFor, openBuilder } from './builder.js';
 import { helpSheet } from './help.js';
+import { latentExplorer } from './latent.js';
 import { heatmap, lineChart } from './plots.js';
 import { builderHref, jobHref, navigate, refreshJobs, state, typeTitle } from './state.js';
 import {
@@ -168,18 +169,19 @@ function continueMenu(anchor, job) {
   popupMenu(anchor, items);
 }
 
-// Prepare a job of type `typeName` fed by `job`'s outputs. When the job is open next to the builder
-// it stays open; if the builder already has that type, the outputs are added to its inputs.
-function continueWith(job, typeName) {
+// Prepare a job of type `typeName` fed by `job`'s outputs (and starting from `params`). When the job is open
+// next to the builder it stays open; if the builder already has that type, the outputs are added to its inputs.
+function continueWith(job, typeName, params = null) {
   const puid = state.project.uid;
   const title = state.types[typeName].title;
   if (D.mode === 'page' && state.builder?.type === typeName) {
     const changed = builderPrefill(job);
-    toast(changed.length ? `${job.uid} → ${changed.length} input(s) of “${title}”` : `“${title}” already uses ${job.uid}'s outputs`,
+    builderSetParams(params);
+    toast(changed.length ? `${job.uid} → ${changed.length} input(s) of “${title}”` : `“${title}” ${params ? 'updated' : `already uses ${job.uid}'s outputs`}`,
       changed.length ? 'ok' : 'info', 3000);
     return;
   }
-  openBuilder({ type: typeName, prefillFrom: job });
+  openBuilder({ type: typeName, prefillFrom: job, params });
   navigate(D.mode === 'page' ? `#/p/${puid}/new/${job.uid}` : `#/p/${puid}/new`);
   toast(`New “${title}” job prepared from ${job.uid}: check the inputs on the right`, 'ok', 3500);
 }
@@ -189,9 +191,12 @@ export function viewerUrl(items) {
   return `viewer.html#${encodeURIComponent(JSON.stringify({ project: state.project.uid, items }))}`;
 }
 
-// Everything of a job the 3D viewer can show (its maps, or its model with the map it was fitted in).
+// Everything of a job the 3D viewer can show (its maps, or its model with the map it was fitted in);
+// a single volume series (the first: cluster volumes before trajectories), as each one holds many maps.
 export function jobViewItems(job) {
-  return (job.outputs || []).flatMap((o) => outputViewItems(job, o)).filter((it, i, arr) => arr.findIndex((x) => x.path === it.path) === i);
+  const items = (job.outputs || []).flatMap((o) => outputViewItems(job, o)).filter((it, i, arr) => arr.findIndex((x) => x.path === it.path) === i);
+  const firstSeries = items.find((it) => it.series);
+  return items.filter((it) => !it.series || it === firstSeries);
 }
 
 function outputViewItems(job, out) {
@@ -207,11 +212,14 @@ function outputViewItems(job, out) {
       const parentOut = ref && (state.jobsByUid[ref.job]?.outputs || []).find((o) => o.name === ref.output);
       if (parentOut) items.push({ kind: 'map', path: parentOut.path, label: `${ref.job} ${parentOut.label || parentOut.name}` });
     }
-  } else if (out.type === 'locres' && out.meta?.colour_map) {
-    // a local resolution map is shown as the colours of the map it describes
+  } else if ((out.type === 'locres' || out.type === 'variability') && out.meta?.colour_map) {
+    // a local resolution or variability map is shown as the colours of the map it describes
     items.push({ kind: 'map', path: out.meta.colour_map, label: `${job.uid} ${out.meta.colour_map.split('/').pop()}`,
-      colorBy: out.path, colorRange: out.meta.display_range });
-  } else if (['map', 'mask', 'half_maps', 'locres'].includes(out.type)) {
+      colorBy: out.path, colorRange: out.meta.display_range, ...(out.type === 'variability' ? { colorKind: 'variability' } : {}) });
+  } else if (out.type === 'volume_series') {
+    const files = out.files || [out.path];
+    items.push({ kind: 'map', path: files[0], label: `${job.uid} ${out.label || out.name}`, series: files, labels: out.meta?.frame_labels || [] });
+  } else if (['map', 'mask', 'half_maps', 'locres', 'variability'].includes(out.type)) {
     items.push({ kind: 'map', path: out.path, label: `${job.uid} ${out.label}`, ...(out.type === 'mask' ? { otype: 'mask' } : {}) });
   }
   return items;
@@ -252,13 +260,17 @@ function renderOverview(body) {
         },
       },
         o.thumbnail ? h('img', { src: api.fileUrl(puid, o.thumbnail), alt: '', loading: 'lazy' })
-          : h('div', { class: 'noimg' }, icon({ model: 'model', map: 'map', mask: 'map', half_maps: 'map', report: 'check', fsc: 'graph', restraints: 'file' }[o.type] || 'file')),
+          : h('div', { class: 'noimg' }, icon({ model: 'model', map: 'map', mask: 'map', half_maps: 'map', locres: 'map', variability: 'map', volume_series: 'map',
+            report: 'check', fsc: 'graph', restraints: 'file', particles: 'grid', latent: 'graph' }[o.type] || 'file')),
         h('div', {},
           h('div', { class: 'row' }, h('b', {}, o.label || o.name), h('span', { class: `tag type-${o.type}` }, state.info.data_types[o.type] || o.type),
             h('span', { class: 'muted small' }, o.name)),
-          o.meta && (o.meta.resolution || o.meta.pixel_size) ? h('div', { class: 'muted small' },
+          o.meta && (o.meta.resolution || o.meta.pixel_size || o.meta.frames || o.meta.n_particles) ? h('div', { class: 'muted small' },
             [o.meta.resolution ? `${(+o.meta.resolution).toFixed(2)} Å` : null, o.meta.pixel_size ? `${o.meta.pixel_size} Å/px` : null,
-              o.meta.box ? `box ${o.meta.box.join('×')}` : null].filter(Boolean).join(' · ')) : null,
+              Array.isArray(o.meta.box) ? `box ${o.meta.box.join('×')}` : (o.meta.box ? `${o.meta.box} px` : null),
+              o.type === 'volume_series' && o.meta.frames ? `${o.meta.frames} volumes` : null,
+              o.meta.n_particles ? `${Number(o.meta.n_particles).toLocaleString()} particles` : null,
+              o.type === 'latent' && o.meta.zdim ? `${o.meta.zdim}-D${o.meta.k ? ` · ${o.meta.k} clusters` : ''}` : null].filter(Boolean).join(' · ')) : null,
           h('div', { class: 'files' }, (o.files || [o.path]).map((f) => h('div', { class: 'row' },
             h('a', { href: api.fileUrl(puid, f, true), title: 'Download' }, f.split('/').pop()),
             h('button', { class: 'icon-btn', title: 'Copy full path', 'aria-label': 'Copy path', onclick: () => copyText(`${state.project.dir}/${f}`) }, icon('copy'))))),
@@ -267,7 +279,8 @@ function renderOverview(body) {
               const slot = builderConnect(ref);
               if (slot) toast(`${job.uid} ${o.name} → '${slot.label}'`, 'ok', 2500);
             }, { cls: 'small', ic: 'next', title: `Connect to the builder (${slots.map((sl) => sl.label).join(' / ')})` }) : null,
-            items.length ? h('a', { class: 'btn small', href: viewerUrl(items), target: '_blank', rel: 'noopener' }, icon('eye'), 'View 3D') : null)));
+            items.length ? h('a', { class: 'btn small', href: viewerUrl(items), target: '_blank', rel: 'noopener' },
+              icon(o.type === 'volume_series' ? 'play' : 'eye'), o.type === 'volume_series' ? 'Play in 3D' : 'View 3D') : null)));
     });
     const viewAll = jobViewItems(job);
     body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'Outputs'),
@@ -277,7 +290,7 @@ function renderOverview(body) {
       h('div', { class: 'box' }, rows)));
   }
 
-  for (const sec of job.report?.sections || []) body.appendChild(reportSection(sec, puid));
+  for (const sec of job.report?.sections || []) body.appendChild(reportSection(sec, puid, job));
 
   const inputs = Object.entries(job.input_details || {});
   if (inputs.length) {
@@ -317,8 +330,20 @@ function renderOverview(body) {
       h('button', { class: 'icon-btn', 'aria-label': 'Copy path', onclick: () => copyText(job.job_dir) }, icon('copy'))))));
 }
 
-function reportSection(sec, puid) {
+function reportSection(sec, puid, job) {
   const wrap = h('div', { class: 'section' });
+  if (sec.kind === 'latent') {
+    const latent = (job.outputs || []).find((o) => o.type === 'latent');
+    wrap.append(h('h4', {}, sec.title), latentExplorer(sec, {
+      url: api.fileUrl(puid, sec.path),
+      jobUid: job.uid,
+      openViewer: (items) => window.open(viewerUrl(items), '_blank', 'noopener'),
+      newJob: latent && job.status === 'completed' ? (type, params) => continueWith(job, type, params) : null,
+      method: latent?.meta?.method,
+      extract: (job.outputs || []).some((o) => o.name === 'kmeans'),
+    }));
+    return wrap;
+  }
   if (sec.kind === 'metrics') {
     wrap.append(h('h4', {}, sec.title), h('div', { class: 'box' }, h('table', { class: 'data' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Metric'), h('th', {}, 'Value'), h('th', {}, 'Assessment'), h('th', {}, 'Target'))),

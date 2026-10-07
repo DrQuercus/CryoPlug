@@ -156,7 +156,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); out
 @keyframes pulse { 50% { opacity: .35; } }
 .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2);
   border: 1px solid var(--border); white-space: nowrap; }
-.tag.type-map, .tag.type-half_maps, .tag.type-mask, .tag.type-locres { background: rgba(42, 120, 214, .1); }
+.tag.type-map, .tag.type-half_maps, .tag.type-mask, .tag.type-locres, .tag.type-variability, .tag.type-volume_series { background: rgba(42, 120, 214, .1); }
+.tag.type-particles, .tag.type-latent { background: rgba(216, 160, 20, .14); }
 .tag.type-model { background: rgba(235, 104, 52, .12); }
 .tag.type-sequence { background: rgba(27, 175, 122, .12); }
 .tag.type-report, .tag.type-fsc { background: rgba(74, 58, 167, .1); }
@@ -315,6 +316,23 @@ pre.log .cmd { color: #8ec5ff; }
 .legend i { width: 14px; height: 2px; border-radius: 1px; display: inline-block; }
 .plot-head { display: flex; align-items: center; gap: 8px; }
 .plot-head h5 { margin: 0; font-size: 13px; font-weight: 600; }
+
+/* latent space explorer ------------------------------------------------------ */
+.lx-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.lx-head .seg button { padding: 3px 10px; font-size: 12px; }
+.lx-plot { display: block; width: 100%; border-radius: 6px; background: var(--surface-1); touch-action: manipulation; }
+.lx-key { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; display: inline-block; }
+.lx-legend { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.lx-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px 2px 5px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface-1); color: var(--ink-2); font-size: 11.5px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.lx-chip i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.lx-chip b { color: var(--ink-1); font-weight: 600; }
+.lx-chip:hover { border-color: var(--accent); }
+.lx-chip.on { border-color: var(--accent); background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent); }
+.lx-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 8px; min-height: 28px; }
+.lx-sel { font-size: 12.5px; color: var(--ink-2); }
+.lx-sel b { color: var(--ink-1); }
+.lx-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; }
 
 /* graph ------------------------------------------------------------------- */
 .graph-wrap { overflow: auto; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); }

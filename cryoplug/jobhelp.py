@@ -86,6 +86,39 @@ HELP: dict[str, dict[str, Any]] = {
         "next": ["modelangelo_build", "cryoatom_build", "boltz_predict", "colabfold_predict"],
     },
     # ----------------------------------------------------------- Map processing
+    "import_particles": {
+        "purpose": "Importe des particules pour l'analyse d'hétérogénéité (cryoDRGN) : un job CryoSPARC ou un fichier .cs "
+                   "(fusionné avec son fichier « passthrough »), ou un fichier .star de RELION. Seules les métadonnées sont "
+                   "lues : les images restent où elles sont.",
+        "when": [
+            "Les particules ne viennent pas d'un job déjà importé avec « Import from CryoSPARC ».",
+            "Particules exportées d'un autre projet, ou d'un autre logiciel (.star).",
+        ],
+        "avoid": ["Particules sans poses (extraction, classification 2D) : cryoDRGN a besoin d'un raffinement consensus."],
+        "inputs": "Le dossier du job de raffinement consensus (ses particules portent les poses), un .cs ou un .star.",
+        "tips": [
+            "« Import from CryoSPARC » importe déjà les particules du job en même temps que les cartes.",
+            "Si les chemins des images sont cassés, indiquez le dossier des images (Image folder).",
+        ],
+        "next": ["cryodrgn_train"],
+    },
+    "import_volume_series": {
+        "purpose": "Importe des séries de volumes : 3D Variability Display et 3D Flex Generate de CryoSPARC, cryoDRGN, "
+                   "multi-body de RELION… depuis un dossier, un ZIP ou un motif de fichiers. Une série par composante.",
+        "when": [
+            "Vous avez lancé la 3D Variability (3DVA) ou 3D Flex dans CryoSPARC et voulez interpréter les mouvements ici.",
+            "Comparer des volumes de différents états produits ailleurs.",
+        ],
+        "avoid": ["Volumes de boîtes ou de tailles de pixel différentes dans une même série."],
+        "inputs": "Le dossier du job 3D Variability Display (ou le ZIP téléchargé d'une composante).",
+        "tips": [
+            "Les fichiers sont regroupés par « component N » dans leur nom, puis triés par numéro de frame.",
+            "Les coordonnées de chaque particule le long des composantes s'importent avec le job 3D Variability "
+            "(Import from CryoSPARC) : elles donnent un espace latent.",
+            "Bouton 3D : la série se joue comme un film dans le visualiseur.",
+        ],
+        "next": ["series_analysis", "extract_volume"],
+    },
     "map_fsc": {
         "purpose": "FSC gold-standard entre demi-cartes : sans masque, avec masque et corrigée par randomisation de phase "
                    "(Chen et al. 2013). Écrit la courbe au format XML de l'EMDB.",
@@ -317,6 +350,108 @@ HELP: dict[str, dict[str, Any]] = {
         "next": ["modelangelo_build", "phenix_real_space_refine"],
     },
     # ----------------------------------------------------------- Model building
+    # ----------------------------------------------------------- Heterogeneity
+    "cryodrgn_train": {
+        "purpose": "Reconstruction hétérogène avec cryoDRGN : un réseau de neurones apprend un espace latent des "
+                   "conformations et compositions présentes dans les particules (poses du raffinement consensus), puis génère "
+                   "des volumes dans tout cet espace. Résultats : explorateur interactif de l'espace latent, volumes de chaque "
+                   "cluster et trajectoires le long des composantes principales.",
+        "when": [
+            "La carte consensus a des régions floues qui pourraient bouger ou être partiellement occupées.",
+            "Chercher des états minoritaires, des sous-unités absentes d'une partie des particules, des mouvements continus.",
+            "Nettoyer les particules : repérer les clusters de « junk » et les retirer.",
+        ],
+        "avoid": [
+            "Particules sans poses fiables : faites d'abord un bon raffinement consensus (NU-refine).",
+            "Lire les volumes cryoDRGN comme des cartes haute résolution : ils servent à voir les états, pas à affiner un modèle fin.",
+        ],
+        "inputs": "Les particules d'un raffinement consensus (Import from CryoSPARC les importe avec les cartes).",
+        "tips": [
+            "Premier passage à 128 px et 25 époques, z = 8 ; passage final à 256 px après nettoyage des particules.",
+            "Vérifiez la convergence : les courbes de perte doivent se stabiliser ; refaire à 50 époques ne doit pas changer les états.",
+            "Les images réduites sont gardées en sortie (particles_prepared) et réutilisées par un nouvel entraînement à la même taille.",
+            "Plusieurs GPU (--multigpu) surtout utiles à 256 px.",
+            "Explorateur : cliquez des clusters (sur le nuage ou leurs pastilles) pour jouer leurs volumes en 3D, les garder ou les "
+            "retirer (Keep… / Remove… préparent le job de sélection), ou suivre la transition (Trajectory…) ; double-clic = ouvrir "
+            "le volume d'un cluster.",
+        ],
+        "next": ["series_analysis", "select_particles", "cryodrgn_trajectory", "cryodrgn_analyze"],
+    },
+    "cryodrgn_analyze": {
+        "purpose": "Analyse à nouveau un modèle cryoDRGN entraîné : autre époque, plus de clusters, trajectoires plus longues, "
+                   "main inversée… Espace latent, volumes des clusters et trajectoires le long des composantes principales.",
+        "when": [
+            "Échantillonner plus finement l'espace latent (k plus grand) pour voir des états rares.",
+            "Comparer deux époques pour juger la convergence.",
+        ],
+        "avoid": ["Relancer un entraînement complet pour seulement changer le nombre de volumes."],
+        "inputs": "L'espace latent d'un entraînement cryoDRGN.",
+        "tips": ["Epoch = 0 reprend l'époque de l'entrée (la dernière de l'entraînement)."],
+        "next": ["series_analysis", "select_particles", "cryodrgn_trajectory"],
+    },
+    "cryodrgn_trajectory": {
+        "purpose": "Génère les volumes le long d'un chemin de l'espace latent entre des clusters choisis (à travers les "
+                   "particules, ou en ligne droite) : un film de la transition à jouer dans le visualiseur.",
+        "when": [
+            "Visualiser le passage d'un état à un autre repéré dans l'explorateur latent.",
+            "Préparer une figure ou une vidéo de mouvement pour l'article.",
+        ],
+        "avoid": ["Interpréter un chemin en ligne droite qui traverse des régions vides de particules : préférez le chemin à travers les particules."],
+        "inputs": "L'espace latent d'un entraînement ou d'une analyse cryoDRGN, et les numéros de clusters à relier.",
+        "tips": [
+            "Dans l'explorateur, cliquez les clusters dans l'ordre du chemin puis « Trajectory… » : le job est préparé.",
+            "Le chemin est tracé sur l'explorateur latent du rapport.",
+            "Volume series analysis sur la trajectoire montre où la densité change.",
+        ],
+        "next": ["series_analysis", "extract_volume"],
+    },
+    "select_particles": {
+        "purpose": "Garde ou retire les particules de clusters latents choisis (cryoDRGN ou 3D variability) : pour éliminer "
+                   "le « junk » ou isoler un état. Écrit un fichier .cs pour CryoSPARC et des indices pour cryoDRGN.",
+        "when": [
+            "Des clusters ont des volumes aberrants (junk, particules cassées) : retirez-les puis réentraînez.",
+            "Un état intéressant : gardez ses particules et raffinez-les dans CryoSPARC pour une carte à haute résolution.",
+        ],
+        "avoid": ["Sélectionner sur un modèle non convergé : les clusters peuvent changer."],
+        "inputs": "Un espace latent avec ses clusters (numéros affichés dans l'explorateur).",
+        "tips": [
+            "Le plus simple : dans l'explorateur, cliquez les clusters puis « Keep… » ou « Remove… » (le job est préparé avec leurs numéros).",
+            "Un nouvel entraînement cryoDRGN sur la sélection réutilise les images déjà réduites (pas de nouveau sous-échantillonnage).",
+            "Dans CryoSPARC : Import Particle Stack avec le fichier .cs produit, puis Homogeneous / NU refinement.",
+        ],
+        "next": ["cryodrgn_train"],
+    },
+    "series_analysis": {
+        "purpose": "Interprète une série de volumes (frames de 3D variability, clusters ou trajectoire cryoDRGN) : carte de "
+                   "variabilité (où la densité change), cartes moyenne et différence, similarité entre frames et, avec un "
+                   "modèle, les chaînes qui bougent ou qui apparaissent et disparaissent.",
+        "when": [
+            "Après cryoDRGN ou la 3DVA : savoir quelles régions varient et si c'est un mouvement ou une occupation partielle.",
+            "Gros complexe : identifier les sous-unités flexibles ou absentes d'une partie des particules.",
+        ],
+        "avoid": ["Séries de volumes non superposés (boîtes ou origines différentes)."],
+        "inputs": "Une série de volumes ; le modèle (ajusté dans ces volumes) et un masque sont facultatifs.",
+        "tips": [
+            "View 3D colore la carte moyenne par la variabilité (bleu = stable, rouge = variable) ; le menu Colour applique la "
+            "même coloration à n'importe quelle carte ou série superposée.",
+            "Matrice de corrélation : des blocs = des états distincts ; un dégradé le long de la diagonale = un mouvement continu.",
+            "Tableau par chaîne : « fades in some frames » = la chaîne perd sa densité dans certains volumes : absente d'une partie "
+            "des particules, ou déplacée hors de sa place dans le modèle (regardez la série pour trancher).",
+        ],
+        "next": ["extract_volume", "select_particles"],
+    },
+    "extract_volume": {
+        "purpose": "Prend un volume d'une série (un cluster cryoDRGN, une frame de 3DVA) comme carte, pour construire ou "
+                   "ajuster un modèle de cet état.",
+        "when": ["Ajuster le modèle dans un état particulier (Rigid-body fit, ISOLDE) ou comparer des états."],
+        "avoid": ["Affiner finement un modèle dans un volume cryoDRGN basse résolution : raffinez plutôt les particules de cet état dans CryoSPARC."],
+        "inputs": "Une série de volumes et le numéro du volume (comme dans le visualiseur).",
+        "tips": [
+            "Depuis l'explorateur latent : un cluster sélectionné → « Extract map… » prépare ce job avec le bon numéro.",
+            "Indiquez la résolution dans les jobs suivants : elle n'est pas connue pour ces volumes.",
+        ],
+        "next": ["chimerax_fitmap", "isolde_session", "mapmodel_validation"],
+    },
     "modelangelo_build": {
         "purpose": "Construction automatique de novo (réseaux de graphes) de protéines, ARN et ADN, guidée par la séquence. "
                    "Sans séquence : construction « build_no_seq » et profils HMM pour identifier les chaînes.",
@@ -677,6 +812,7 @@ SECTION_TITLES = {
 CATEGORY_TITLES_FR = {
     "Import": "Import",
     "Map processing": "Traitement de carte",
+    "Heterogeneity": "Hétérogénéité (variabilité 3D)",
     "Model building": "Construction de modèle",
     "Interactive": "Reconstruction interactive",
     "Refinement": "Affinement",

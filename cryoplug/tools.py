@@ -77,6 +77,11 @@ TOOLS: dict[str, ToolDef] = {
                 "Open-source structure prediction of protein / nucleic-acid / ligand complexes (AlphaFold3-class).",
                 "https://github.com/jwohlwend/boltz",
                 "Passaro S. et al. (2025) Boltz-2, bioRxiv; Wohlwend J. et al. (2024) Boltz-1, bioRxiv."),
+        ToolDef("cryodrgn", "cryoDRGN", ["cryodrgn"],
+                "Heterogeneous reconstruction with neural networks: latent space of conformations from particle images.",
+                "https://github.com/ml-struct-bio/cryodrgn",
+                "Zhong E.D., Bepler T., Berger B., Davis J.H. (2021) Nat. Methods 18, 176-185; Kinman L.F. et al. (2023) "
+                "Nat. Protoc. 18, 319-339.", version_args=["--version"]),
         ToolDef("checkmysequence", "checkMySequence", ["checkmysequence"],
                 "Sequence-assignment validation: register shifts, unidentified chains, sequence mismatches.",
                 "https://gitlab.com/gchojnowski/checkmysequence",

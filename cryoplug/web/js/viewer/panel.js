@@ -7,6 +7,10 @@ import { fmtLevel, fromSigma, toSigma } from './stats.js';
 export const hex = (c) => `#${(c >>> 0).toString(16).padStart(6, '0').slice(-6)}`;
 export const fromHex = (s) => parseInt(s.replace('#', ''), 16);
 
+// Maps that colour other maps: kind -> [name in the menus, unit of the colour scale]
+export const COLOR_KINDS = { locres: ['Local resolution', 'Å'], variability: ['Variability', 'σ'] };
+const fmtScale = (v, unit) => v.toFixed(unit === 'σ' ? 2 : 1);
+
 const MAP_STYLES = [['surface', 'Surface'], ['mesh', 'Mesh'], ['transparent', 'Transparent']];
 const MODEL_STYLES = [['cartoon', 'Cartoon'], ['both', 'Cartoon + side chains'], ['sticks', 'Sticks']];
 const MODEL_COLORS = [['chain', 'By chain'], ['ss', 'Secondary structure'], ['element', 'By element'],
@@ -23,13 +27,16 @@ function row(label, ...children) {
   return h('div', { class: 'vw-row' }, label ? h('span', { class: 'lbl' }, label) : null, ...children);
 }
 
-// Colour bar of the local resolution scale with its end values.
+// Colour bar of the scale with its end values: best resolution or least variable (blue) to worst or most variable (red).
 function legend(by) {
   const stops = RESOLUTION_COLORS.map((c, i) => `${hex(c)} ${Math.round((100 * i) / (RESOLUTION_COLORS.length - 1))}%`).join(', ');
-  const mid = (by.min + by.max) / 2;
-  return h('div', { class: 'vw-legend', role: 'img', 'aria-label': `Colour scale from ${by.min.toFixed(1)} Å (blue) to ${by.max.toFixed(1)} Å (red)` },
+  const u = by.unit || 'Å';
+  const [lo, mid, hi] = [by.min, (by.min + by.max) / 2, by.max].map((v) => fmtScale(v, u));
+  const ends = by.kind === 'variability' ? ['least variable', 'most variable'] : ['best', 'worst'];
+  return h('div', { class: 'vw-legend', role: 'img', 'aria-label': `Colour scale from ${lo} ${u} (blue, ${ends[0]}) to ${hi} ${u} (red, ${ends[1]})` },
     h('div', { class: 'bar', style: { background: `linear-gradient(to right, ${stops})` } }),
-    h('div', { class: 'ticks' }, h('span', {}, `${by.min.toFixed(1)} Å`), h('span', {}, `${mid.toFixed(1)}`), h('span', {}, `${by.max.toFixed(1)} Å`)));
+    h('div', { class: 'ticks' }, h('span', {}, `${lo} ${u}`), h('span', {}, mid), h('span', {}, `${hi} ${u}`)),
+    h('div', { class: 'ends' }, h('span', {}, ends[0]), h('span', {}, ends[1])));
 }
 
 export function drawHistogram(canvas, item) {
@@ -96,7 +103,7 @@ export function createPanel(root, ctl) {
       }),
       h('span', { class: 'vid' }, `#${item.id}`),
       h('span', { class: 'name', title: `${item.label}\n${item.path}` }, item.label),
-      h('span', { class: 'kind' }, item.kind === 'model' ? 'model' : item.otype === 'mask' ? 'mask' : 'map'),
+      h('span', { class: 'kind' }, item.kind === 'model' ? 'model' : item.series ? `series · ${item.series.frames.length}` : item.otype === 'mask' ? 'mask' : 'map'),
       h('button', {
         class: 'icon-btn', type: 'button', title: 'More', 'aria-label': `More actions for #${item.id}`,
         onclick: (e) => { e.stopPropagation(); popupMenu(e.currentTarget, menuItems(item)); },
@@ -115,37 +122,61 @@ export function createPanel(root, ctl) {
 
   function menuItems(item) {
     const items = [{ label: 'Centre the view on it', action: () => ctl.focus(item) }];
-    if (item.kind === 'map') {
+    if (item.series) {
+      items.push({ label: item.series.playing ? 'Pause' : 'Play the series', action: () => ctl.togglePlay(item) });
+    } else if (item.kind === 'map') {
       items.push({ label: item.full ? 'Use the binned preview' : 'Load at full resolution', action: () => ctl.setFullRes(item, !item.full) });
-      items.push({ label: 'Show slices', action: () => ctl.showSlices(item) });
     }
+    if (item.kind === 'map') items.push({ label: 'Show slices', action: () => ctl.showSlices(item) });
     items.push({ label: 'Close', action: () => ctl.close(item) });
     return items;
   }
 
   function mapBody(item) {
-    const st = item.stats;
+    // the statistics are read at each use: those of a series change with the volume shown
     const hist = h('canvas', {
       class: 'vw-hist', tabindex: 0, role: 'slider', 'aria-label': `Contour level of #${item.id}: drag, or use the arrow keys`,
-      'aria-valuemin': String(st.min), 'aria-valuemax': String(st.max),
     });
     const abs = h('input', { type: 'number', step: 'any', 'aria-label': 'Contour level',
       onchange: (e) => { const v = Number(e.target.value); if (Number.isFinite(v)) ctl.setLevel(item, v); } });
     const sig = h('input', { type: 'number', step: '0.1', 'aria-label': 'Contour level in σ',
-      onchange: (e) => { const v = Number(e.target.value); if (Number.isFinite(v)) ctl.setLevel(item, fromSigma(st, v)); } });
+      onchange: (e) => { const v = Number(e.target.value); if (Number.isFinite(v)) ctl.setLevel(item, fromSigma(item.stats, v)); } });
     const enclosed = h('div', { class: 'vw-meta' });
+    const scale = [h('span'), h('span'), h('span')];
+    const frameInfo = item.series ? h('span', { class: 'vw-frame' }) : null;
+    const playBtn = item.series ? h('button', { type: 'button', class: 'icon-btn', onclick: () => ctl.togglePlay(item) }) : null;
     const refresh = () => {
+      const st = item.stats;
       if (document.activeElement !== abs) abs.value = fmtLevel(item.level);
       if (document.activeElement !== sig) sig.value = toSigma(st, item.level).toFixed(2);
+      hist.setAttribute('aria-valuemin', String(st.min));
+      hist.setAttribute('aria-valuemax', String(st.max));
       hist.setAttribute('aria-valuenow', String(item.level));
       hist.setAttribute('aria-valuetext', `${fmtLevel(item.level)} (${toSigma(st, item.level).toFixed(2)} σ)`);
+      scale[0].textContent = fmtLevel(st.min);
+      scale[1].textContent = `mean ${fmtLevel(st.mean)} · σ ${fmtLevel(st.sigma)}`;
+      scale[2].textContent = fmtLevel(st.max);
+      const s = item.series;
+      if (frameInfo) {
+        const n = s.frames.length;
+        frameInfo.textContent = `${s.index + 1}/${n} · ${s.frames[s.index].label}${s.loaded < n ? ` · loading ${s.loaded}/${n}` : ''}`;
+        const what = `${s.playing ? 'Pause' : 'Play'} #${item.id} (space)`;
+        if (playBtn.dataset.state !== String(s.playing)) {
+          playBtn.dataset.state = String(s.playing);
+          clear(playBtn, icon(s.playing ? 'pause' : 'play'));
+          playBtn.title = what;
+          playBtn.setAttribute('aria-label', what);
+        }
+      }
       enclosed.textContent = `${(st.fractionAbove(item.level) * 100).toFixed(2)} % of the voxels above the level · `
-        + `${item.volume.grid.cells.space.dimensions.join('×')} voxels${item.full ? '' : ' (preview)'}${item.zone ? ` · zone ${item.zone.radius} Å around #${item.zone.model}` : ''}`;
+        + `${item.volume.grid.cells.space.dimensions.join('×')} voxels${item.full ? '' : ' (preview)'}${item.zone ? ` · zone ${item.zone.radius} Å around #${item.zone.model}` : ''}`
+        + `${s ? ' · same level for every volume of the series' : ''}`;
       if (hist.isConnected) drawHistogram(hist, item);
     };
     levelViews.set(item, refresh);
     const valueAt = (clientX) => {
       const r = hist.getBoundingClientRect();
+      const st = item.stats;
       return st.min + Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * (st.max - st.min);
     };
     hist.addEventListener('pointerdown', (e) => { hist.setPointerCapture(e.pointerId); ctl.setActive(item); ctl.setLevel(item, valueAt(e.clientX)); });
@@ -158,8 +189,9 @@ export function createPanel(root, ctl) {
     requestAnimationFrame(refresh);
 
     const parts = [
+      frameInfo ? row('Volume', frameInfo, playBtn) : null,
       hist,
-      h('div', { class: 'vw-hist-scale' }, h('span', {}, fmtLevel(st.min)), h('span', {}, `mean ${fmtLevel(st.mean)} · σ ${fmtLevel(st.sigma)}`), h('span', {}, fmtLevel(st.max))),
+      h('div', { class: 'vw-hist-scale' }, scale),
       row('Level', abs, sig, h('span', { class: 'unit' }, 'σ')),
       row('Style', seg(MAP_STYLES, item.style, (v) => ctl.setStyle(item, v), 'Map style')),
       row('Opacity', h('input', {
@@ -167,20 +199,23 @@ export function createPanel(root, ctl) {
         'aria-label': 'Opacity of the transparent surface', oninput: (e) => ctl.setOpacity(item, Number(e.target.value)),
       })),
     ];
-    const sources = ctl.locresSources();
+    const sources = ctl.colorSources();
     if (item.otype !== 'mask' && (sources.length || item.colorBy)) {
       const known = sources.some((s) => s.path === item.colorBy?.path);
+      const name = (s) => `${COLOR_KINDS[s.kind || 'locres'][0]} · ${s.label}`;
       parts.push(row('Colour', h('select', {
         'aria-label': 'Map colouring',
         onchange: (e) => ctl.setColorBy(item, e.target.value ? sources.find((s) => s.path === e.target.value) : null),
       }, h('option', { value: '' }, 'Single colour'),
-      sources.map((s) => h('option', { value: s.path, selected: item.colorBy?.path === s.path }, `Local resolution · ${s.label}`)),
-      item.colorBy && !known ? h('option', { value: item.colorBy.path, selected: true }, `Local resolution · ${item.colorBy.label}`) : null)));
+      sources.map((s) => h('option', { value: s.path, selected: item.colorBy?.path === s.path }, name(s))),
+      item.colorBy && !known ? h('option', { value: item.colorBy.path, selected: true }, name(item.colorBy)) : null)));
       if (item.colorBy) {
         const by = item.colorBy;
-        const bound = (value, label) => h('input', { type: 'number', step: 0.1, min: 0, value: value.toFixed(1), 'aria-label': label, style: { width: '64px' } });
-        const lo = bound(by.min, 'Best resolution of the colour scale (Å)');
-        const hi = bound(by.max, 'Worst resolution of the colour scale (Å)');
+        const u = by.unit || 'Å';
+        const what = by.kind === 'variability' ? ['Lowest variability', 'Highest variability'] : ['Best resolution', 'Worst resolution'];
+        const bound = (value, label) => h('input', { type: 'number', step: u === 'σ' ? 0.01 : 0.1, min: 0, value: fmtScale(value, u), 'aria-label': label, style: { width: '64px' } });
+        const lo = bound(by.min, `${what[0]} of the colour scale (${u})`);
+        const hi = bound(by.max, `${what[1]} of the colour scale (${u})`);
         const apply = () => {
           const a = Number(lo.value);
           const b = Number(hi.value);
@@ -188,10 +223,10 @@ export function createPanel(root, ctl) {
         };
         lo.addEventListener('change', apply);
         hi.addEventListener('change', apply);
-        parts.push(row('Scale', lo, h('span', { class: 'unit' }, 'to'), hi, h('span', { class: 'unit' }, 'Å')), legend(by));
+        parts.push(row('Scale', lo, h('span', { class: 'unit' }, 'to'), hi, h('span', { class: 'unit' }, u)), legend(by));
       }
     }
-    const models = ctl.items().filter((i) => i.kind === 'model');
+    const models = item.series ? [] : ctl.items().filter((i) => i.kind === 'model');
     if (models.length) {
       const pick = h('select', { 'aria-label': 'Model for the zone' }, models.map((m) => h('option', {
         value: String(m.id), selected: (item.zone ? item.zone.model : models[0].id) === m.id }, `#${m.id} ${m.label}`)));
@@ -204,7 +239,7 @@ export function createPanel(root, ctl) {
       parts.push(row('Zone', on, pick, radius, h('span', { class: 'unit' }, 'Å')));
     }
     parts.push(enclosed);
-    return parts;
+    return parts.filter(Boolean);
   }
 
   function modelBody(item) {

@@ -147,6 +147,42 @@ WORKFLOWS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "heterogeneity_cryodrgn",
+        "title": "Conformational heterogeneity (cryoDRGN)",
+        "description": ("Particles of the CryoSPARC consensus refinement → cryoDRGN training (latent space, volumes of "
+                        "the clusters, trajectories along the main components) → variability of the cluster volumes "
+                        "(with a model: the chains that move or come and go). Then pick clusters in the latent space "
+                        "explorer to remove junk, isolate a state or follow a transition."),
+        "nodes": [
+            {"id": "import", "type": "import_cryosparc", "title": "Import consensus refinement (particles)",
+             "ask": ["job_dir", "symmetry"]},
+            {"id": "model", "type": "import_model", "title": "Model fitted in the consensus map", "ask": ["path"],
+             "optional": True, "default": False},
+            {"id": "train", "type": "cryodrgn_train", "title": "cryoDRGN training (128 px)",
+             "params": {"box": 128, "zdim": 8, "epochs": 25}, "ask": ["box", "zdim", "epochs", "gpus"],
+             "inputs": {"particles": ["import", "particles"]}},
+            {"id": "clusters", "type": "series_analysis", "title": "Variability of the cluster volumes",
+             "inputs": {"series": ["train", "kmeans"], "model": ["model", "model"]}},
+            {"id": "pc1", "type": "series_analysis", "title": "Motion along PC1",
+             "inputs": {"series": ["train", "pc1"], "model": ["model", "model"]}, "optional": True, "default": False},
+        ],
+    },
+    {
+        "id": "variability_3dva",
+        "title": "3D variability (CryoSPARC) → interpretation",
+        "description": ("Import a CryoSPARC 3D Variability job (particle coordinates along each component, for the "
+                        "explorer and particle selection) and its 3D Variability Display volumes, then analyse the "
+                        "first component: variability map, frame similarity and, with a model, the chains involved."),
+        "nodes": [
+            {"id": "import", "type": "import_cryosparc", "title": "Import 3D Variability job", "ask": ["job_dir"]},
+            {"id": "frames", "type": "import_volume_series", "title": "3D Variability Display volumes", "ask": ["path"]},
+            {"id": "model", "type": "import_model", "title": "Model fitted in the consensus map", "ask": ["path"],
+             "optional": True, "default": False},
+            {"id": "component1", "type": "series_analysis", "title": "Component 1",
+             "inputs": {"series": ["frames", "series"], "model": ["model", "model"]}},
+        ],
+    },
+    {
         "id": "validate_deposit",
         "title": "Validate & prepare deposition",
         "description": "Bring an existing model and maps, run all validation tools and assemble the deposition package.",

@@ -5,6 +5,7 @@ Les mêmes fiches sont affichées dans l'interface (constructeur de job, détail
 
 - [Import](#import)
 - [Traitement de carte](#traitement-de-carte)
+- [Hétérogénéité (variabilité 3D)](#hétérogénéité-variabilité-3d)
 - [Construction de modèle](#construction-de-modèle)
 - [Reconstruction interactive](#reconstruction-interactive)
 - [Affinement](#affinement)
@@ -91,6 +92,30 @@ Importe des demi-cartes, une carte complète, une carte affûtée et un masque v
 
 **Étapes suivantes** : Half-map FSC, Directional resolution (3D FSC), LocScale 2, Import atomic model
 
+### Import particles
+
+`import_particles` — intégré (aucun logiciel externe)
+
+Importe des particules pour l'analyse d'hétérogénéité (cryoDRGN) : un job CryoSPARC ou un fichier .cs (fusionné avec son fichier « passthrough »), ou un fichier .star de RELION. Seules les métadonnées sont lues : les images restent où elles sont.
+
+**Quand l'utiliser**
+
+- Les particules ne viennent pas d'un job déjà importé avec « Import from CryoSPARC ».
+- Particules exportées d'un autre projet, ou d'un autre logiciel (.star).
+
+**À éviter / pièges**
+
+- Particules sans poses (extraction, classification 2D) : cryoDRGN a besoin d'un raffinement consensus.
+
+**Entrées conseillées** : Le dossier du job de raffinement consensus (ses particules portent les poses), un .cs ou un .star.
+
+**Conseils**
+
+- « Import from CryoSPARC » importe déjà les particules du job en même temps que les cartes.
+- Si les chemins des images sont cassés, indiquez le dossier des images (Image folder).
+
+**Étapes suivantes** : cryoDRGN training
+
 ### Import sequence
 
 `import_sequence` — intégré (aucun logiciel externe)
@@ -114,6 +139,31 @@ Déclare la ou les séquences de l'échantillon (FASTA collé, fichier ou access
 - Les ARN/ADN sont reconnus à leur composition (A, C, G, U/T).
 
 **Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Complex prediction (Boltz-2), AlphaFold2 prediction (ColabFold)
+
+### Import volume series
+
+`import_volume_series` — intégré (aucun logiciel externe)
+
+Importe des séries de volumes : 3D Variability Display et 3D Flex Generate de CryoSPARC, cryoDRGN, multi-body de RELION… depuis un dossier, un ZIP ou un motif de fichiers. Une série par composante.
+
+**Quand l'utiliser**
+
+- Vous avez lancé la 3D Variability (3DVA) ou 3D Flex dans CryoSPARC et voulez interpréter les mouvements ici.
+- Comparer des volumes de différents états produits ailleurs.
+
+**À éviter / pièges**
+
+- Volumes de boîtes ou de tailles de pixel différentes dans une même série.
+
+**Entrées conseillées** : Le dossier du job 3D Variability Display (ou le ZIP téléchargé d'une composante).
+
+**Conseils**
+
+- Les fichiers sont regroupés par « component N » dans leur nom, puis triés par numéro de frame.
+- Les coordonnées de chaque particule le long des composantes s'importent avec le job 3D Variability (Import from CryoSPARC) : elles donnent un espace latent.
+- Bouton 3D : la série se joue comme un film dans le visualiseur.
+
+**Étapes suivantes** : Volume series analysis, Extract volume from series
 
 ## Traitement de carte
 
@@ -470,6 +520,158 @@ Opérations simples sur une carte : taille de pixel, recadrage/agrandissement de
 - B-factor négatif = affûtage, positif = flou.
 
 **Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Rigid-body fit (ChimeraX)
+
+## Hétérogénéité (variabilité 3D)
+
+### Extract volume from series
+
+`extract_volume` — intégré (aucun logiciel externe)
+
+Prend un volume d'une série (un cluster cryoDRGN, une frame de 3DVA) comme carte, pour construire ou ajuster un modèle de cet état.
+
+**Quand l'utiliser**
+
+- Ajuster le modèle dans un état particulier (Rigid-body fit, ISOLDE) ou comparer des états.
+
+**À éviter / pièges**
+
+- Affiner finement un modèle dans un volume cryoDRGN basse résolution : raffinez plutôt les particules de cet état dans CryoSPARC.
+
+**Entrées conseillées** : Une série de volumes et le numéro du volume (comme dans le visualiseur).
+
+**Conseils**
+
+- Depuis l'explorateur latent : un cluster sélectionné → « Extract map… » prépare ce job avec le bon numéro.
+- Indiquez la résolution dans les jobs suivants : elle n'est pas connue pour ces volumes.
+
+**Étapes suivantes** : Rigid-body fit (ChimeraX), ISOLDE session, Map-model validation (Q-score, FSC)
+
+### Select particles (latent clusters)
+
+`select_particles` — intégré (aucun logiciel externe)
+
+Garde ou retire les particules de clusters latents choisis (cryoDRGN ou 3D variability) : pour éliminer le « junk » ou isoler un état. Écrit un fichier .cs pour CryoSPARC et des indices pour cryoDRGN.
+
+**Quand l'utiliser**
+
+- Des clusters ont des volumes aberrants (junk, particules cassées) : retirez-les puis réentraînez.
+- Un état intéressant : gardez ses particules et raffinez-les dans CryoSPARC pour une carte à haute résolution.
+
+**À éviter / pièges**
+
+- Sélectionner sur un modèle non convergé : les clusters peuvent changer.
+
+**Entrées conseillées** : Un espace latent avec ses clusters (numéros affichés dans l'explorateur).
+
+**Conseils**
+
+- Le plus simple : dans l'explorateur, cliquez les clusters puis « Keep… » ou « Remove… » (le job est préparé avec leurs numéros).
+- Un nouvel entraînement cryoDRGN sur la sélection réutilise les images déjà réduites (pas de nouveau sous-échantillonnage).
+- Dans CryoSPARC : Import Particle Stack avec le fichier .cs produit, puis Homogeneous / NU refinement.
+
+**Étapes suivantes** : cryoDRGN training
+
+### Volume series analysis
+
+`series_analysis` — intégré (aucun logiciel externe)
+
+Interprète une série de volumes (frames de 3D variability, clusters ou trajectoire cryoDRGN) : carte de variabilité (où la densité change), cartes moyenne et différence, similarité entre frames et, avec un modèle, les chaînes qui bougent ou qui apparaissent et disparaissent.
+
+**Quand l'utiliser**
+
+- Après cryoDRGN ou la 3DVA : savoir quelles régions varient et si c'est un mouvement ou une occupation partielle.
+- Gros complexe : identifier les sous-unités flexibles ou absentes d'une partie des particules.
+
+**À éviter / pièges**
+
+- Séries de volumes non superposés (boîtes ou origines différentes).
+
+**Entrées conseillées** : Une série de volumes ; le modèle (ajusté dans ces volumes) et un masque sont facultatifs.
+
+**Conseils**
+
+- View 3D colore la carte moyenne par la variabilité (bleu = stable, rouge = variable) ; le menu Colour applique la même coloration à n'importe quelle carte ou série superposée.
+- Matrice de corrélation : des blocs = des états distincts ; un dégradé le long de la diagonale = un mouvement continu.
+- Tableau par chaîne : « fades in some frames » = la chaîne perd sa densité dans certains volumes : absente d'une partie des particules, ou déplacée hors de sa place dans le modèle (regardez la série pour trancher).
+
+**Étapes suivantes** : Extract volume from series, Select particles (latent clusters)
+
+### cryoDRGN analysis
+
+`cryodrgn_analyze` — logiciel : `cryodrgn` · GPU
+
+Analyse à nouveau un modèle cryoDRGN entraîné : autre époque, plus de clusters, trajectoires plus longues, main inversée… Espace latent, volumes des clusters et trajectoires le long des composantes principales.
+
+**Quand l'utiliser**
+
+- Échantillonner plus finement l'espace latent (k plus grand) pour voir des états rares.
+- Comparer deux époques pour juger la convergence.
+
+**À éviter / pièges**
+
+- Relancer un entraînement complet pour seulement changer le nombre de volumes.
+
+**Entrées conseillées** : L'espace latent d'un entraînement cryoDRGN.
+
+**Conseils**
+
+- Epoch = 0 reprend l'époque de l'entrée (la dernière de l'entraînement).
+
+**Étapes suivantes** : Volume series analysis, Select particles (latent clusters), cryoDRGN trajectory
+
+### cryoDRGN training
+
+`cryodrgn_train` — logiciel : `cryodrgn` · GPU
+
+Reconstruction hétérogène avec cryoDRGN : un réseau de neurones apprend un espace latent des conformations et compositions présentes dans les particules (poses du raffinement consensus), puis génère des volumes dans tout cet espace. Résultats : explorateur interactif de l'espace latent, volumes de chaque cluster et trajectoires le long des composantes principales.
+
+**Quand l'utiliser**
+
+- La carte consensus a des régions floues qui pourraient bouger ou être partiellement occupées.
+- Chercher des états minoritaires, des sous-unités absentes d'une partie des particules, des mouvements continus.
+- Nettoyer les particules : repérer les clusters de « junk » et les retirer.
+
+**À éviter / pièges**
+
+- Particules sans poses fiables : faites d'abord un bon raffinement consensus (NU-refine).
+- Lire les volumes cryoDRGN comme des cartes haute résolution : ils servent à voir les états, pas à affiner un modèle fin.
+
+**Entrées conseillées** : Les particules d'un raffinement consensus (Import from CryoSPARC les importe avec les cartes).
+
+**Conseils**
+
+- Premier passage à 128 px et 25 époques, z = 8 ; passage final à 256 px après nettoyage des particules.
+- Vérifiez la convergence : les courbes de perte doivent se stabiliser ; refaire à 50 époques ne doit pas changer les états.
+- Les images réduites sont gardées en sortie (particles_prepared) et réutilisées par un nouvel entraînement à la même taille.
+- Plusieurs GPU (--multigpu) surtout utiles à 256 px.
+- Explorateur : cliquez des clusters (sur le nuage ou leurs pastilles) pour jouer leurs volumes en 3D, les garder ou les retirer (Keep… / Remove… préparent le job de sélection), ou suivre la transition (Trajectory…) ; double-clic = ouvrir le volume d'un cluster.
+
+**Étapes suivantes** : Volume series analysis, Select particles (latent clusters), cryoDRGN trajectory, cryoDRGN analysis
+
+### cryoDRGN trajectory
+
+`cryodrgn_trajectory` — logiciel : `cryodrgn` · GPU
+
+Génère les volumes le long d'un chemin de l'espace latent entre des clusters choisis (à travers les particules, ou en ligne droite) : un film de la transition à jouer dans le visualiseur.
+
+**Quand l'utiliser**
+
+- Visualiser le passage d'un état à un autre repéré dans l'explorateur latent.
+- Préparer une figure ou une vidéo de mouvement pour l'article.
+
+**À éviter / pièges**
+
+- Interpréter un chemin en ligne droite qui traverse des régions vides de particules : préférez le chemin à travers les particules.
+
+**Entrées conseillées** : L'espace latent d'un entraînement ou d'une analyse cryoDRGN, et les numéros de clusters à relier.
+
+**Conseils**
+
+- Dans l'explorateur, cliquez les clusters dans l'ordre du chemin puis « Trajectory… » : le job est préparé.
+- Le chemin est tracé sur l'explorateur latent du rapport.
+- Volume series analysis sur la trajectoire montre où la densité change.
+
+**Étapes suivantes** : Volume series analysis, Extract volume from series
 
 ## Construction de modèle
 

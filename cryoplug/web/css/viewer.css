@@ -49,6 +49,25 @@
 .vw-slice canvas { display: block; width: 156px; height: 156px; object-fit: contain; image-rendering: pixelated; background: #000; border-radius: 4px; }
 .vw-slice input[type=range] { display: block; width: 156px; margin: 4px 0 0; accent-color: #86b6ef; }
 
+/* volume series player (over the view, above the status line) */
+.vw-player { position: absolute; left: 12px; bottom: 30px; display: flex; align-items: center; gap: 4px; z-index: 3;
+  max-width: calc(100% - 210px); padding: 4px 8px 4px 6px; border-radius: 10px; color: #e4e4e4;
+  background: rgba(18, 18, 18, .9); border: 1px solid rgba(255, 255, 255, .14); font-size: 12px; }
+.vw-player .vw-pid { font-family: var(--mono); color: #9b9b9b; padding: 0 4px; }
+.vw-pbtn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 7px;
+  background: none; color: #e4e4e4; cursor: pointer; padding: 0; flex-shrink: 0; }
+.vw-pbtn:hover { background: rgba(255, 255, 255, .12); }
+.vw-pbtn.on { background: rgba(134, 182, 239, .22); color: #fff; }
+.vw-pbtn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.vw-pslider { width: 170px; min-width: 70px; flex-shrink: 1; accent-color: #86b6ef; margin: 0 6px; }
+.vw-plabel { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 auto; max-width: 300px; font-variant-numeric: tabular-nums; }
+.vw-pspeed { width: auto; padding: 2px 4px; font-size: 12px; background: rgba(255, 255, 255, .08); color: #e4e4e4;
+  border: 1px solid rgba(255, 255, 255, .18); border-radius: 6px; flex-shrink: 0; }
+.vw-pspeed option { color: #111; }
+.vw-pmode { border: 1px solid rgba(255, 255, 255, .18); background: none; color: #e4e4e4; border-radius: 6px; padding: 2px 7px;
+  font-size: 12px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+.vw-pmode:hover { background: rgba(255, 255, 255, .1); }
+
 /* models panel (ChimeraX-like) -------------------------------------------------- */
 .vw-side { width: 318px; flex-shrink: 0; background: var(--surface-1); border-left: 1px solid var(--border); display: flex;
   flex-direction: column; min-height: 0; }
@@ -83,6 +102,8 @@
 .vw-legend { margin: 6px 0 0 64px; }
 .vw-legend .bar { height: 10px; border-radius: 3px; border: 1px solid var(--border); }
 .vw-legend .ticks { display: flex; justify-content: space-between; color: var(--ink-3); font: 10.5px var(--mono); margin-top: 2px; }
+.vw-legend .ends { display: flex; justify-content: space-between; color: var(--ink-3); font-size: 10.5px; }
+.vw-frame { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* command line (ChimeraX-like) ---------------------------------------------------- */
 .vw-cmd { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; row-gap: 3px; padding: 6px 10px 7px;
@@ -108,4 +129,6 @@
 @media (max-width: 900px) {
   .vw-tool .lbl { display: none; }
   .vw-side { width: 260px; }
+  .vw-player { max-width: calc(100% - 24px); }
+  .vw-pspeed, .vw-pmode { display: none; }
 }

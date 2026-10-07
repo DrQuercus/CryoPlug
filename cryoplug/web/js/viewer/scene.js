@@ -51,7 +51,10 @@ export async function createScene(element) {
   const occlusion = plugin.canvas3d.props.postprocessing.occlusion;
   softOcclusion = occlusion.name === 'on' ? occlusion : null;
   canvasProps('postprocessing', { occlusion: { name: 'off', params: {} } });
-  canvasProps('camera', { helper: { ...plugin.canvas3d.props.camera.helper, axes: { name: 'off', params: {} } } });
+  // No automatic camera resets when the scene changes: Mol* frames the bounding sphere of what is drawn, which for an
+  // isosurface computed on the GPU is the whole box of the map (far too wide around a small molecule). CryoPlug
+  // frames the view itself (on opening, R, view).
+  canvasProps('camera', { helper: { ...plugin.canvas3d.props.camera.helper, axes: { name: 'off', params: {} } }, manualReset: true });
   // Mol* flies the camera with W/A/S/D/R/F and the arrows, listening on the whole window: the viewer's
   // own shortcuts (R reset, S spin, M style, + / −) replace them.
   const bindings = { ...plugin.canvas3d.attribs.trackball.bindings };
@@ -250,11 +253,20 @@ export function wholeResidue(loci) {
 export function setHidden(ref, hidden) {
   const state = plugin.state.data;
   if (!state.cells.has(ref)) return;
+  let resync = false;
   const walk = (r) => {
     state.updateCellState(r, { isHidden: hidden });
+    // An update that rebuilds a representation (an isosurface switching between GPU and CPU, e.g. when it gets
+    // coloured by another map) keeps the hidden flag of its cell but brings the rebuilt parts back visible.
+    const repr = state.cells.get(r)?.obj?.data?.repr;
+    if (repr?.renderObjects?.some((ro) => ro.state.visible === hidden)) {
+      repr.setState({ visible: !hidden });
+      resync = true;
+    }
     state.tree.children.get(r).forEach(walk);
   };
   walk(ref);
+  if (resync) plugin.canvas3d?.syncVisibility();
 }
 
 export async function remove(ref) {
@@ -314,12 +326,103 @@ export function centerOn(loci, { zoom = false } = {}) {
   camera.setState({ target: V.clone(sphere.center), position: V.add(V(), snap.position, shift) }, 300);
 }
 
+// Grid indices (i along x) to Cartesian coordinates, as Mol* computes it.
+function gridToCartesian(grid) {
+  const { Mat4: M, Vec3: V } = lib.math.LinearAlgebra;
+  const t = grid.transform;
+  if (t.kind === 'matrix') return t.matrix;
+  if (t.kind !== 'spacegroup') return M.identity();
+  const dims = grid.cells.space.dimensions;
+  const size = V.sub(V(), t.fractionalBox.max, t.fractionalBox.min);
+  const scale = M.fromScaling(M(), V.create(size[0] / dims[0], size[1] / dims[1], size[2] / dims[2]));
+  return M.mul(M(), M.mul(M(), t.cell.fromFractional, M.fromTranslation(M(), t.fractionalBox.min)), scale);
+}
+
+// Sphere around the voxels above the contour level: isosurfaces computed on the GPU only know their box,
+// which would frame a small molecule in a large box from far away. Cached per volume and level.
+const spheres = new WeakMap();
+function isoSphere(item) {
+  const cached = spheres.get(item.volume);
+  if (cached && cached.level === item.level) return cached.sphere;
+  const sphere = computeIsoSphere(item);
+  spheres.set(item.volume, { level: item.level, sphere });
+  return sphere;
+}
+
+function computeIsoSphere(item) {
+  const V = lib.math.LinearAlgebra.Vec3;
+  const grid = item.volume.grid;
+  const { data, space } = grid.cells;
+  const dims = space.dimensions;
+  const hist = dims.map((d) => new Float64Array(d));
+  const step = Math.max(1, Math.round(Math.cbrt((dims[0] * dims[1] * dims[2]) / 2e6)));
+  let count = 0;
+  for (let k = 0; k < dims[2]; k += step) {
+    for (let j = 0; j < dims[1]; j += step) {
+      for (let i = 0; i < dims[0]; i += step) {
+        if (space.get(data, i, j, k) >= item.level) { hist[0][i] += 1; hist[1][j] += 1; hist[2][k] += 1; count += 1; }
+      }
+    }
+  }
+  if (!count) return null;
+  const bounds = hist.map((hh) => {
+    let lo = 0;
+    let hi = hh.length - 1;
+    while (lo < hi && !hh[lo]) lo++;
+    while (hi > lo && !hh[hi]) hi--;
+    return [Math.max(0, lo - step), Math.min(hh.length - 1, hi + step)];
+  });
+  const T = gridToCartesian(grid);
+  const corners = [];
+  for (const a of bounds[0]) for (const b of bounds[1]) for (const c of bounds[2]) corners.push(V.transformMat4(V(), V.create(a, b, c), T));
+  const center = V.scale(V(), corners.reduce((acc, q) => V.add(acc, acc, q), V()), 1 / corners.length);
+  const radius = Math.max(...corners.map((q) => V.distance(q, center)));
+  return radius > 0 ? { center, radius } : null;
+}
+
+function union(spheres) {
+  const V = lib.math.LinearAlgebra.Vec3;
+  let c = V.clone(spheres[0].center);
+  let r = spheres[0].radius;
+  for (const s of spheres.slice(1)) {
+    const d = V.distance(c, s.center);
+    if (d + s.radius <= r) continue;
+    if (d + r <= s.radius) { c = V.clone(s.center); r = s.radius; continue; }
+    const nr = (d + r + s.radius) / 2;
+    c = V.add(V(), c, V.scale(V(), V.sub(V(), s.center, c), (nr - r) / d));
+    r = nr;
+  }
+  return { center: c, radius: r };
+}
+
+// Frame the isosurfaces of these maps; false when none is above its level.
+export function frameMaps(items, durationMs = 250) {
+  const found = items.filter((i) => i.kind === 'map' && i.visible && i.volume).map(isoSphere).filter(Boolean);
+  if (!found.length) return false;
+  const sphere = union(found);
+  plugin.managers.camera.focusSphere(sphere, { durationMs, extraRadius: 2 + 0.1 * sphere.radius });
+  return true;
+}
+
+// The clipping planes and the fog follow the radius of the camera focus: widen it (without moving the camera)
+// when an item, e.g. another volume of a series or a map opened later, reaches beyond it.
+export function keepInView(item) {
+  let sphere = null;
+  if (item.kind === 'map') sphere = item.volume && isoSphere(item);
+  else if (item.structure) sphere = lib.loci.Loci.getBoundingSphere(lib.structure.Structure.toStructureElementLoci(item.structure));
+  if (!sphere || !(sphere.radius > 0)) return;
+  const camera = plugin.canvas3d.camera;
+  const need = lib.math.LinearAlgebra.Vec3.distance(camera.state.target, sphere.center) + sphere.radius + 2;
+  if (need > camera.state.radius) camera.setState({ radius: need, radiusMax: Math.max(camera.state.radiusMax, need) });
+}
+
 export function focusItem(item) {
   if (item.kind === 'model') {
     const structure = cellData(item.refs.structure);
     if (structure) plugin.managers.camera.focusLoci(lib.structure.Structure.toStructureElementLoci(structure), { durationMs: 300 });
     return;
   }
+  if (frameMaps([{ ...item, visible: true }], 300)) return;
   const repr = plugin.state.data.cells.get(item.refs.repr)?.obj?.data?.repr;
   if (repr) plugin.managers.camera.focusRenderObjects(repr.renderObjects, { durationMs: 300 });
 }

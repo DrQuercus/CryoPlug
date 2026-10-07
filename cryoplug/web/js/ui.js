@@ -47,6 +47,9 @@ export function s(tag, attrs = {}, ...children) {
 const ICONS = {
   plus: 'M12 5v14M5 12h14',
   play: 'M7 5l11 7-11 7z',
+  pause: 'M8 5v14M16 5v14',
+  'skip-back': 'M18 6l-9 6 9 6zM6 6v12',
+  'skip-fwd': 'M6 6l9 6-9 6zM18 6v12',
   stop: 'M6 6h12v12H6z',
   copy: 'M9 9h10v10H9zM5 15V5h10',
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13',

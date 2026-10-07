@@ -8,6 +8,7 @@ export const COMMAND_HELP = [
   ['color [#id] <name | #hex>', 'Single colour for a map or a model'],
   ['color [#id] bychain | byss | byelement | bfactor | rainbow', 'Model colouring'],
   ['color [#id] localres [min max]', 'Colour a map by local resolution (blue best → red worst, in Å)'],
+  ['color [#id] variability [min max]', 'Colour a map by the variability of a volume series (blue stable → red variable, in σ)'],
   ['show | hide [#id]', 'Show or hide items (all of them without #id)'],
   ['view', 'Reset the view'],
   ['view #id | /A:45 | /A', 'Centre on an item, a residue or a chain'],
@@ -21,6 +22,9 @@ export const COMMAND_HELP = [
   ['lighting soft | simple', 'Ambient occlusion on or off'],
   ['slices [#id] [off]', 'Orthogonal 2D slices of a map'],
   ['fullres [#id] [off]', 'Full-resolution map instead of the binned preview'],
+  ['play [#id] [volumes per second]', 'Play a volume series (cryoDRGN clusters, trajectory, 3D variability frames)'],
+  ['stop', 'Stop playing (also: pause; ChimeraX: vseries play #1 · vseries stop)'],
+  ['frame [#id] <n> | next | prev | first | last', 'Show one volume of a series'],
   ['save [name.png] [scale <n>] [transparent]', 'Save an image of the view'],
   ['open', 'Open other maps or models of the project'],
   ['close #id | close all', 'Remove items'],
@@ -86,6 +90,11 @@ export function createCommands(ctl) {
     return list;
   };
   const ids = (list) => list.map((i) => `#${i.id}`).join(' ');
+  const series = (items) => {
+    const list = items.length ? items.filter((i) => i.series) : [ctl.activeSeries()].filter(Boolean);
+    if (!list.length) throw new Error(items.length ? 'These items are not volume series' : 'No volume series displayed (open cluster volumes, a trajectory or 3D variability frames)');
+    return list;
+  };
 
   function setLevels(list, words) {
     const { value, sigma } = parseLevel(words);
@@ -93,13 +102,19 @@ export function createCommands(ctl) {
     return `Level of ${ids(list)} set to ${words.join('')}`;
   }
 
-  function colorByLocres(list, rest) {
+  function colorBySource(list, rest, kind) {
     const ms = list.length ? maps(list) : [ctl.activeMap()].filter(Boolean);
     if (!ms.length) throw new Error('No map displayed');
-    const sources = ctl.locresSources();
-    if (!sources.length) throw new Error('No local resolution map in this project (run a Local resolution job)');
+    const sources = ctl.colorSources().filter((s) => s.kind === kind);
+    if (!sources.length) {
+      throw new Error(kind === 'variability' ? 'No variability map in this project (run a Volume series analysis job)'
+        : 'No local resolution map in this project (run a Local resolution job)');
+    }
     const range = rest.slice(0, 2).map(Number);
-    if (rest.length && !(range.length === 2 && range[1] > range[0])) throw new Error('Scale: color #1 localres 3 6 (best and worst resolution in Å)');
+    if (rest.length && !(range.length === 2 && range[1] > range[0])) {
+      throw new Error(kind === 'variability' ? 'Scale: color #1 variability 0.1 0.6 (lowest and highest variability, in σ)'
+        : 'Scale: color #1 localres 3 6 (best and worst resolution in Å)');
+    }
     for (const m of ms) {
       const source = sources.find((s) => s.colourMap === m.path) || sources[0];
       ctl.setColorBy(m, rest.length ? { ...source, range } : source); // reported once loaded
@@ -179,7 +194,8 @@ export function createCommands(ctl) {
     },
     color: ({ items, rest }) => {
       if (!rest[0]) throw new Error('Which colour?');
-      if (/^(localres|locres|local_resolution)$/i.test(rest[0])) return colorByLocres(items, rest.slice(1));
+      if (/^(localres|locres|local_resolution)$/i.test(rest[0])) return colorBySource(items, rest.slice(1), 'locres');
+      if (/^(variability|var|variance|sd)$/i.test(rest[0])) return colorBySource(items, rest.slice(1), 'variability');
       return colorItems(items, rest[0]);
     },
     rainbow: ({ items }) => colorItems(items, 'rainbow'),
@@ -247,6 +263,31 @@ export function createCommands(ctl) {
       ms.forEach((m) => ctl.setFullRes(m, on)); // reported once the map is reloaded
       return null;
     },
+    play: ({ items, rest }) => {
+      const list = series(items);
+      const fps = rest[0] !== undefined ? Number(rest[0]) : null;
+      if (fps !== null && !(fps > 0 && fps <= 60)) throw new Error('play [#id] [volumes per second, 1–60]');
+      list.forEach((m) => ctl.play(m, fps));
+      return `Playing ${ids(list)} at ${list[0].series.fps} volumes per second`;
+    },
+    stop: ({ items }) => {
+      const list = items.length ? series(items) : ctl.items().filter((i) => i.series?.playing);
+      list.forEach((m) => ctl.pause(m));
+      return list.length ? `Stopped ${ids(list)}` : 'Nothing is playing';
+    },
+    frame: async ({ items, rest }) => {
+      const m = series(items)[0];
+      const s = m.series;
+      const n = s.frames.length;
+      const w = (rest[0] || '').toLowerCase();
+      const target = { next: s.index + 1, prev: s.index - 1, previous: s.index - 1, first: 0, last: n - 1 }[w] ?? Number(w) - 1;
+      if (!Number.isInteger(target) || (!(w in { next: 1, prev: 1, previous: 1 }) && (target < 0 || target >= n))) {
+        throw new Error(`frame [#id] 1–${n}, next, prev, first or last`);
+      }
+      ctl.pause(m);
+      await ctl.goToFrame(m, target);
+      return `#${m.id}: volume ${s.index + 1}/${n} · ${s.frames[s.index].label}`;
+    },
     save: async ({ rest }) => {
       let name = 'cryoplug.png';
       let scale = 2;
@@ -263,6 +304,21 @@ export function createCommands(ctl) {
     },
   };
   handlers.stick = handlers.sticks;
+  handlers.pause = handlers.stop;
+  // ChimeraX syntax: vseries play #1 [direction oscillate] [maxFrameRate 10] · vseries stop #1
+  handlers.vseries = ({ items, rest }) => {
+    const verb = (rest[0] || '').toLowerCase();
+    if (verb === 'stop') return handlers.stop({ items });
+    if (verb !== 'play') throw new Error('vseries play [#id] [direction oscillate] [maxFrameRate n] · vseries stop');
+    const list = series(items);
+    for (let k = 1; k < rest.length; k += 2) {
+      const key = rest[k].toLowerCase();
+      const value = (rest[k + 1] || '').toLowerCase();
+      if (key === 'direction') list.forEach((m) => ctl.setPlayMode(m, value === 'oscillate' ? 'bounce' : 'loop'));
+      else if (key === 'maxframerate' && Number(value) > 0) list.forEach((m) => ctl.setSpeed(m, Math.min(60, Number(value))));
+    }
+    return handlers.play({ items: list, rest: [] });
+  };
   handlers.ribbon = handlers.cartoon;
   handlers.windowsize = () => 'The view follows the window size';
 

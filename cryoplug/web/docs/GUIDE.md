@@ -183,6 +183,65 @@ lancez **Composite map** (`composite_map`, phenix.combine_focused_maps) :
 3. Construisez et affinez dans la carte composite ; déposez-la avec la carte consensus et les cartes locales (et
    leurs demi-cartes). Ne présentez pas la FSC de la carte composite comme une FSC gold-standard.
 
+### 3.7 Hétérogénéité : variabilité 3D et cryoDRGN
+
+Une région floue dans la carte consensus (résolution locale médiocre, densité faible) peut venir d'un **mouvement**
+(un domaine qui bouge) ou d'une **occupation partielle** (une sous-unité absente d'une partie des particules), ou d'un
+mélange d'états. Deux approches, qui se complètent :
+
+| | CryoSPARC 3D Variability (3DVA) | cryoDRGN |
+|---|---|---|
+| Principe | Composantes **linéaires** de variabilité autour de la carte consensus | Réseau de neurones : espace latent **non linéaire**, états discrets et continus |
+| Dans CryoPlug | *Import from CryoSPARC* du job 3DVA (coordonnées des particules) et *Import volume series* du job *3D Variability Display* | *Import from CryoSPARC* du raffinement consensus, puis *cryoDRGN training* (GPU) |
+| Coût | Déjà calculé dans CryoSPARC | Une à quelques heures de GPU selon le nombre de particules et la taille d'image |
+
+Le workflow *Conformational heterogeneity (cryoDRGN)* (ou *3D variability (CryoSPARC) → interpretation*) crée la chaîne
+en un clic.
+
+**cryoDRGN, pas à pas**
+
+1. **Import from CryoSPARC** du dossier du raffinement consensus (NU-refine ou homogeneous) : les cartes **et les
+   particules** (poses, CTF, emplacement des images) sont importées ; les fichiers `particles` et `passthrough` sont
+   fusionnés, les images restent dans le projet CryoSPARC. Pour un fichier `.cs` ou `.star` seul : **Import particles**.
+2. **cryoDRGN training** : premier passage à **128 px**, z = 8, 25 époques. Les images sont réduites une seule fois
+   (sortie *particles_prepared*, réutilisée par les entraînements suivants à la même taille). Le rapport montre les
+   courbes de perte (elles doivent se stabiliser), l'**explorateur de l'espace latent**, les volumes des 20 clusters
+   k-means et les trajectoires le long des deux premières composantes principales.
+3. **Explorateur** : chaque point est une particule (12 000 au plus sont affichées), en coordonnées **UMAP** ou
+   **PCA** (pour la 3DVA : les composantes). Des **îlots** séparés = des états ou des compositions distincts, ou du
+   junk ; une **bande** continue = un mouvement. Cliquez des clusters (sur le nuage ou leurs pastilles numérotées),
+   puis :
+   - **View / Play in 3D** : leurs volumes dans le visualiseur, joués comme un film dans l'ordre des clics ;
+     double-clic sur un cluster = son volume seul, dans sa couleur ;
+   - **Keep… / Remove…** : prépare *Select particles* avec ces numéros (retirer le junk, isoler un état) ;
+   - **Trajectory…** (cryoDRGN) : prépare *cryoDRGN trajectory* à travers ces clusters, dans l'ordre des clics ;
+   - **Extract map…** : prépare *Extract volume from series* pour obtenir la carte d'un état.
+4. **Volume series analysis** sur les volumes des clusters, une trajectoire ou une composante 3DVA, avec le modèle
+   ajusté dans la carte consensus :
+   - la **carte de variabilité** (écart-type entre volumes, en σ de la densité de la molécule) ; *View 3D* l'affiche
+     en couleur sur la carte moyenne (bleu = stable, rouge = variable), et le menu *Colour* l'applique à n'importe
+     quelle carte ou série ouverte ;
+   - la **matrice de corrélation** entre volumes : des **blocs** = des états distincts, un **dégradé** le long de la
+     diagonale = un mouvement continu ;
+   - avec un modèle, la **densité de chaque chaîne dans chaque volume** (1 = aussi dense que le reste du modèle,
+     0 = absente) et les chaînes les plus variables : une chaîne marquée *fades in some frames* est absente d'une
+     partie des particules ou se déplace hors de sa place dans le modèle — la série jouée dans le visualiseur tranche.
+5. **Nettoyer et recommencer** : retirez les clusters de junk (*Remove…*), puis entraînez à nouveau sur la sélection
+   (les images réduites sont réutilisées automatiquement) ; passage final à **256 px**, et 50 époques pour vérifier
+   que les états ne changent plus.
+6. **Revenir à CryoSPARC** pour la carte d'un état : *Import Particle Stack* avec le fichier `.cs` de *Select
+   particles* (le rapport donne son chemin et le dossier des images), puis Homogeneous / NU refinement.
+
+**Lire une série dans le visualiseur 3D.** Le bouton *Play in 3D* d'une sortie *Volume series* charge tous les volumes
+(aperçus de 128 voxels de côté au plus) puis les joue : barre de lecture sur la vue (lecture/pause, volume précédent
+/ suivant, curseur, vitesse, boucle ou aller-retour), touches **Espace**, **,** et **.** ; commandes `play 10`,
+`stop`, `frame 5`, `frame next`, ou à la ChimeraX `vseries play #1 direction oscillate`. Le seuil est le même pour tous
+les volumes de la série, et la coloration par variabilité ou résolution locale s'applique à chacun.
+
+> ⚠️ Les volumes cryoDRGN et les frames de 3DVA sont **générés** (par le réseau, ou par une combinaison linéaire) :
+> ce ne sont pas des reconstructions gold-standard. Ne déposez pas leur résolution et confirmez tout état important
+> par une reconstruction des particules sélectionnées (demi-cartes indépendantes) dans CryoSPARC.
+
 ---
 
 ## 4. Étape 2 — Construire le modèle
@@ -430,6 +489,17 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 6. Local resolution sur les demi-cartes composites (résolution de chaque sous-unité), checkMySequence,
    Map-model validation, wwPDB validation report, Pre-deposition checks, Deposition package
 
+### H. Domaine flexible ou sous-unité partiellement présente
+
+1. Import CryoSPARC du raffinement consensus (cartes et particules) ; Local resolution pour localiser la région floue
+2. Workflow *Conformational heterogeneity (cryoDRGN)* avec le modèle ajusté dans la consensus (128 px, z = 8)
+3. Explorateur : repérer les îlots de junk → *Remove…* → nouvel entraînement sur la sélection (256 px)
+4. Volume series analysis des clusters avec le modèle : chaînes qui bougent ou qui disparaissent ; *Trajectory…* entre
+   deux états pour la figure ou la vidéo
+5. *Keep…* pour chaque état, retour à CryoSPARC (Import Particle Stack → NU refinement) : une carte gold-standard par
+   état, puis la suite du pipeline (construction, affinement, validation) pour chacune
+6. Si la 3DVA est déjà calculée : workflow *3D variability (CryoSPARC) → interpretation* pour comparer
+
 ---
 
 ## 9. Dépannage
@@ -454,6 +524,11 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | Create mask : « Masks need SciPy » | SciPy absent de l'environnement de CryoPlug | `pip install scipy` (installé avec CryoPlug depuis cette version) |
 | wwPDB validation : « wwPDB validation server: … » | Serveur indisponible, pas d'accès internet depuis le serveur, fichier refusé | Vérifier l'accès internet (proxy) du serveur, relancer plus tard ; le message du serveur est dans le log |
 | checkMySequence : « needs HMMER » | `hmmsearch` absent de son environnement | `conda install -c bioconda hmmer` dans l'environnement de checkMySequence |
+| cryoDRGN : « Cannot find file … under datadir » | Le projet CryoSPARC a été déplacé, ou les chemins des images ne sont pas relatifs au dossier du projet | *Import particles* avec *Image folder* = le dossier du projet CryoSPARC qui contient les images |
+| « These particles have no poses » | Particules d'une extraction ou d'une classification 2D | Importez le job de **raffinement** (champs `alignments3D`) |
+| « … uses CryoSPARC's compressed format » | Fichiers `.cs` compressés des versions récentes de CryoSPARC | `pip install cryosparc-tools` dans l'environnement de CryoPlug |
+| Import d'un job 3DVA : « only the 3D variability coordinates are imported » | Le fichier `passthrough` du job manque | L'explorateur fonctionne ; pour entraîner ou réutiliser les particules, importez le raffinement consensus |
+| La série se charge lentement dans le visualiseur | Beaucoup de volumes, carte graphique logicielle | Normal la première fois (chaque volume est chargé une fois) ; la lecture est ensuite fluide |
 | Relancer un job à l'identique hors CryoPlug | — | `commands.sh` dans le dossier du job contient les commandes exactes |
 
 Le **log** (onglet *Log*) montre la commande exécutée, la sortie du programme et l'erreur en rouge.
@@ -487,3 +562,8 @@ Après correction : **Clear** remet le job en préparation, **Clone** crée une 
 | pLDDT / ipTM | Confiance par résidu / confiance de l'interface d'une prédiction AlphaFold/Boltz. |
 | Fo-Fc | Carte de différence entre observation et modèle : pics positifs = densité non modélisée, négatifs = atomes en trop. |
 | OneDep | Système de dépôt commun wwPDB / EMDB. |
+| Espace latent | Coordonnées apprises par cryoDRGN pour chaque particule : des particules proches ont des structures proches. |
+| UMAP | Projection en 2D d'un espace à plusieurs dimensions qui préserve les voisinages (les distances entre îlots ne se lisent pas). |
+| 3DVA | *3D Variability Analysis* de CryoSPARC : composantes linéaires de la variabilité et coordonnée de chaque particule le long de chacune. |
+| Série de volumes | Volumes ordonnés (clusters, trajectoire, frames de 3DVA) superposés, joués comme un film. |
+| Carte de variabilité | Écart-type de la densité entre les volumes d'une série : grand là où la structure change. |

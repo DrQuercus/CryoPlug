@@ -88,6 +88,59 @@ def synthetic(tmp_path_factory) -> dict[str, Path]:
             "mask": cs / "J12_005_volume_mask_fsc_auto.mrc", "fasta": root / "seq.fasta"}
 
 
+@pytest.fixture(scope="session")
+def cs_particles(tmp_path_factory) -> dict[str, Path]:
+    """A small CryoSPARC project: particle stacks, a refinement job (particles + shuffled passthrough), a 3D
+    variability job (particles with components) and a 3D variability display job (volume series)."""
+    root = tmp_path_factory.mktemp("cs") / "CS-het"
+    stacks = root / "J2" / "imported"
+    stacks.mkdir(parents=True)
+    n_per, box = 150, 32
+    for name in ("stack_A.mrcs", "stack_B.mrcs"):
+        MapVolume(data=np.zeros((n_per, box, box), np.float32), voxel=np.array([2.0, 2.0, 2.0])).write(stacks / name)
+    n = 2 * n_per
+    rng = np.random.default_rng(3)
+    uid = rng.permutation(np.arange(10**9, 10**9 + n, dtype=np.uint64))
+    main_dtype = [("uid", "<u8"), ("alignments3D/pose", "<f4", (3,)), ("alignments3D/shift", "<f4", (2,)),
+                  ("blob/path", "S28"), ("blob/idx", "<u4"), ("blob/shape", "<u4", (2,)), ("blob/psize_A", "<f4")]
+    main = np.zeros(n, dtype=main_dtype)
+    main["uid"] = uid
+    main["alignments3D/pose"] = rng.normal(0, 1, (n, 3))
+    main["blob/path"] = [b">J2/imported/stack_A.mrcs" if i < n_per else b"J2/imported/stack_B.mrcs" for i in range(n)]
+    main["blob/idx"] = np.arange(n) % n_per
+    main["blob/shape"] = box
+    main["blob/psize_A"] = 2.0
+    job = root / "J5"
+    job.mkdir()
+    ctf_fields = ("ctf/df1_A", "ctf/df2_A", "ctf/df_angle_rad", "ctf/accel_kv", "ctf/cs_mm", "ctf/amp_contrast", "ctf/phase_shift_rad")
+    through = np.zeros(n, dtype=[("uid", "<u8")] + [(f, "<f4") for f in ctf_fields] + [("location/micrograph_path", "S16")])
+    order = rng.permutation(n)
+    through["uid"] = uid[order]
+    through["ctf/df1_A"] = 10000 + np.arange(n)[order]
+    for path, data in ((job / "J5_005_particles.cs", main), (job / "J5_passthrough_particles.cs", through),
+                       (job / "J5_003_particles.cs", main[:10])):
+        with open(path, "wb") as fh:
+            np.save(fh, data)
+    os.utime(job / "J5_003_particles.cs", (time.time() + 50, time.time() + 50))  # newer file, older iteration
+    va = root / "J9"
+    va.mkdir()
+    comps = np.zeros(n, dtype=main_dtype + [("components_mode_0/value", "<f4"), ("components_mode_1/value", "<f4")])
+    for name in main.dtype.names:
+        comps[name] = main[name]
+    comps["components_mode_0/value"] = np.where(np.arange(n) % 2, 3.0, -3.0) + rng.normal(0, 0.3, n)
+    comps["components_mode_1/value"] = rng.normal(0, 1, n)
+    with open(va / "J9_particles.cs", "wb") as fh:
+        np.save(fh, comps)
+    display = root / "J10"
+    display.mkdir()
+    z, y, x = np.indices((box, box, box))
+    for comp in range(2):
+        for f in range(5):
+            data = np.exp(-((x - 12 - (f if comp == 0 else 0)) ** 2 + (y - 16 - (f if comp else 0)) ** 2 + (z - 16) ** 2) / 10.0)
+            MapVolume(data=data.astype(np.float32), voxel=np.array([2.0] * 3)).write(display / f"J10_component_{comp:03d}_frame_{f:03d}.mrc")
+    return {"root": root, "refine": job, "variability": va, "display": display, "n": n}
+
+
 def _script(path: Path, body: str) -> None:
     path.write_text("#!/bin/bash\n" + body)
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -277,6 +330,11 @@ XML
 esac; fi
 exit 0
 """)
+    # cryoDRGN 4.3 (python fake: same commands and output files, synthetic latent space and volumes)
+    fake = d / "cryodrgn"
+    fake.write_text(f"#!{sys.executable}\n" + (ROOT / "tests" / "fakes" / "cryodrgn.py").read_text())
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    os.environ["CRYOPLUG_ROOT"] = str(ROOT)
     # Mimics LocScale 2.4.1 path handling: relative -o / -op are resolved against the folder of the first
     # input map (not the working directory), and the inputs are copied into the processing folder.
     _script(d / "locscale", """
@@ -306,7 +364,8 @@ def manager(tmp_path, fakebin) -> Manager:
         browse_roots=[str(tmp_path.parent), "/tmp"],
         lanes=[LaneConfig(name="local", type="local", max_jobs=4, gpus=[0, 1])],
         tools={k: ToolConfig(name=k, bin_dir=str(fakebin))
-               for k in ("modelangelo", "phenix", "locscale", "cryoatom", "boltz", "spisonet", "checkmysequence", "onedep")},
+               for k in ("modelangelo", "phenix", "locscale", "cryoatom", "boltz", "spisonet", "checkmysequence", "onedep",
+                         "cryodrgn")},
     )
     m = Manager(cfg)
     m.check_tools()

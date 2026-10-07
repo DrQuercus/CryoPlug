@@ -9,7 +9,14 @@ from pathlib import Path
 from typing import Any
 
 from cryoplug.jobs import register
-from cryoplug.jobs.base import JobContext, JobError, JobType, OutputDef, Param, resolution_param
+from cryoplug.jobs.base import (
+    JobContext,
+    JobError,
+    JobType,
+    OutputDef,
+    Param,
+    resolution_param,
+)
 from cryoplug.jobs.maptools import compute_and_report_fsc
 
 MAP_SUFFIXES = (".mrc", ".map", ".ccp4", ".mrcs")
@@ -100,8 +107,9 @@ class ImportCryoSPARC(JobType):
     title = "Import from CryoSPARC"
     category = "Import"
     description = ("Import the final reconstruction of a CryoSPARC refinement job (half maps, unsharpened and "
-                   "sharpened maps, FSC mask, local resolution) by pointing at its job directory, e.g. "
-                   "/data/CS-myproject/J245. The latest iteration is selected automatically.")
+                   "sharpened maps, FSC mask, local resolution) and its particles (for heterogeneity analysis) by "
+                   "pointing at its job directory, e.g. /data/CS-myproject/J245. The latest iteration is selected "
+                   "automatically.")
     software = ["CryoSPARC"]
     params = [
         Param("job_dir", "path", "", label="CryoSPARC job directory", required=True, path_kind="dir",
@@ -112,6 +120,8 @@ class ImportCryoSPARC(JobType):
         Param("link_mode", "choice", "copy", choices=["copy", "symlink"], label="Copy or link files",
               help="Copy keeps the CryoPlug project self-contained; symlink saves disk space."),
         Param("symmetry", "str", "C1", label="Symmetry", help="Point-group symmetry used in the reconstruction (C1, C2, D7, ...)."),
+        Param("import_particles", "bool", True, label="Import the particles",
+              help="Particle metadata (.cs) for cryoDRGN and 3D variability; the images stay in the CryoSPARC project."),
     ]
     outputs = [
         OutputDef("half_maps", "half_maps", "Half maps"),
@@ -119,9 +129,12 @@ class ImportCryoSPARC(JobType):
         OutputDef("map_sharp", "map", "Sharpened map"),
         OutputDef("mask", "mask", "FSC mask"),
         OutputDef("map_locres", "locres", "Local resolution map"),
+        OutputDef("particles", "particles", "Particles"),
+        OutputDef("latent", "latent", "3D variability coordinates"),
     ]
 
     def run(self, ctx: JobContext) -> None:
+        from cryoplug.particles import find_particle_files
         src = Path(ctx.params["job_dir"]).expanduser()
         if src.is_file():
             src = src.parent
@@ -132,8 +145,9 @@ class ImportCryoSPARC(JobType):
         if info:
             ctx.log("CryoSPARC job: " + ", ".join(f"{k}={v}" for k, v in info.items()))
         ctx.log("Detected files:\n" + "\n".join(f"  {k:14s} {v.name}" for k, v in sorted(found.items())))
-        if not found:
-            raise JobError(f"No map files recognised in {src}")
+        main_cs, passthrough_cs = find_particle_files(src) if ctx.params["import_particles"] else (None, None)
+        if not found and main_cs is None:
+            raise JobError(f"No map or particle file recognised in {src}")
         mode = ctx.params["link_mode"]
         local = {k: _transfer(ctx, v, mode) for k, v in found.items()}
         mask_key = next((k for k in ("mask_fsc_auto", "mask_fsc", "mask_refine", "mask") if k in local), None)
@@ -166,7 +180,73 @@ class ImportCryoSPARC(JobType):
                 lmeta["colour_map"] = ctx.rel(shown)  # the 3D viewer colours this map by local resolution
             ctx.add_output("map_locres", "locres", local["map_locres"], "Local resolution map", meta=lmeta)
         rows = [[k, v.name, str(found[k])] for k, v in sorted(local.items())]
+        if main_cs is not None:
+            imported = import_cs_particles(ctx, main_cs, passthrough_cs, meta)
+            rows += [["particles", "particles.cs", str(p)] for p in (main_cs, passthrough_cs) if p and imported]
+        if not ctx.outputs:
+            raise JobError(f"Nothing could be imported from {src} (see the warnings in the log)")
         ctx.add_table("Imported files", ["Kind", "File", "Source"], rows)
+
+
+def import_cs_particles(ctx: JobContext, main: Path, passthrough: Path | None, meta: dict[str, Any],
+                        datadir: str | Path | None = None) -> bool:
+    """Particles of a CryoSPARC job as one merged .cs file (metadata only: the images stay in place), and the 3D
+    variability coordinates when the particles carry them. Returns False when nothing usable was found."""
+    from cryoplug import particles as pt
+    try:
+        data = pt.merged_particles(main, passthrough)
+    except (OSError, ValueError) as exc:
+        ctx.warn(f"Particles not imported: {exc}")
+        return False
+    info = pt.summary(data)
+    comps = pt.components(data)
+    if not info["has_images"]:
+        if comps is None:
+            ctx.warn(f"{main.name} has no image locations (blob/path): particles not imported")
+            return False
+        # the 3D variability coordinates are still worth exploring; the particles cannot be trained on
+        ctx.warn(f"{main.name} has no image locations (blob/path; the passthrough file of the job is missing?): only the "
+                 "3D variability coordinates are imported, not the particles")
+        write_variability_latent(ctx, comps, pt.write_cs(data, ctx.path("particles.cs")))
+        return True
+    out = pt.write_cs(data, ctx.path("particles.cs"))
+    folder = Path(datadir) if datadir else pt.project_dir_of(main.parent)
+    pmeta = {**{k: v for k, v in meta.items() if k in ("symmetry", "resolution")}, **info,
+             "format": "cs", "datadir": str(folder), "source": str(main)}
+    parts = [f"{info['n_particles']:,} particles"]
+    if info.get("box"):
+        parts.append(f"box {info['box']} px")
+    if info.get("pixel_size"):
+        parts.append(f"{info['pixel_size']} Å/px")
+    ctx.log("Particles: " + ", ".join(parts) + f"; poses: {'yes' if info['has_poses'] else 'no'}, "
+            f"CTF: {'yes' if info['has_ctf'] else 'no'}; images relative to {folder}")
+    if not info["has_poses"]:
+        ctx.warn("These particles have no 3D alignment (alignments3D): cryoDRGN needs the poses of a consensus refinement")
+    ctx.add_output("particles", "particles", out, f"Particles ({info['n_particles']:,})", meta=pmeta)
+    ctx.add_highlight("Particles", f"{info['n_particles']:,}")
+    if comps is not None:
+        write_variability_latent(ctx, comps, out)
+    return True
+
+
+def write_variability_latent(ctx: JobContext, comps, particles_path: Path) -> None:
+    """3D variability reaction coordinates as a latent space (explorer, particle selection)."""
+    import numpy as np
+
+    from cryoplug import particles as pt
+    from cryoplug.jobs.heterogeneity import latent_report
+    k = min(8, len(comps))
+    labels, centres = pt.kmeans(comps, k)
+    centres_ind = pt.nearest_indices(comps, centres)
+    axes = {"Components": comps[:, :2] if comps.shape[1] > 1 else np.concatenate([comps, np.zeros_like(comps)], 1)}
+    path = ctx.path("latent.npz")
+    np.savez(path, z=comps.astype(np.float32), labels=labels, centers_ind=centres_ind,
+             embedding_components=axes["Components"].astype(np.float32))
+    latent_report(ctx, axes, labels, title="3D variability coordinates of the particles",
+                  axis_labels={"Components": ("Component 1", "Component 2")})
+    ctx.add_output("latent", "latent", [path, particles_path], f"3D variability coordinates ({comps.shape[1]} components)",
+                   meta={"method": "3DVA", "zdim": int(comps.shape[1]), "n_particles": int(len(comps)), "k": k,
+                         "particles": ctx.rel(particles_path)})
 
 
 def locres_meta(ctx: JobContext, path: str | Path, mask: str | Path | None) -> dict[str, Any]:
@@ -397,3 +477,89 @@ class ImportSequence(JobType):
                       [[n, classify_sequence(s), len(s)] for n, s in records])
         ctx.add_highlight("Records", len(records))
         ctx.log(f"Kinds: {', '.join(out['meta']['kinds'])}")
+
+
+def star_summary(path: Path) -> dict[str, Any]:
+    """Particle count, box and pixel size of a RELION .star file (optics table of RELION 3.1+ when present)."""
+    info: dict[str, Any] = {}
+    block, labels, rows, in_loop = "", [], 0, False
+    optics: dict[str, str] = {}
+    with open(path, errors="replace") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if line.startswith("data_"):
+                block, labels, in_loop = line[5:], [], False
+                continue
+            if line.startswith("loop_"):
+                labels, in_loop = [], True
+                continue
+            if line.startswith("_"):
+                labels.append(line.split()[0])
+                continue
+            if not line or line.startswith("#") or not in_loop or not labels:
+                continue
+            if block == "optics" and not optics:
+                optics = dict(zip(labels, line.split()))
+            elif block in ("particles", ""):
+                rows += 1
+    info["n_particles"] = rows
+    for key, out, cast in (("_rlnImageSize", "box", int), ("_rlnImagePixelSize", "pixel_size", float)):
+        if key in optics:
+            try:
+                info[out] = cast(float(optics[key]))
+            except ValueError:
+                pass
+    return info
+
+
+@register
+class ImportParticles(JobType):
+    name = "import_particles"
+    title = "Import particles"
+    category = "Import"
+    description = ("Particles for heterogeneity analysis (cryoDRGN): a CryoSPARC job folder or .cs file (merged with its "
+                   "passthrough file), or a RELION .star file. Only the metadata is read: the images stay in place.")
+    software = ["CryoSPARC"]
+    params = [
+        Param("path", "path", "", label="CryoSPARC job folder, .cs or .star file", required=True, path_kind="any",
+              help="For CryoSPARC, the job of the consensus refinement (its particles carry the poses)."),
+        Param("datadir", "path", "", label="Image folder", path_kind="dir",
+              help="Folder the image paths of the metadata are relative to. Empty = the CryoSPARC project folder (.cs), "
+                   "or the folder of the .star file."),
+        Param("passthrough", "path", "", label="Passthrough .cs", path_kind="file", advanced=True,
+              help="Found automatically next to the .cs file (J..._passthrough_particles.cs)."),
+    ]
+    outputs = [OutputDef("particles", "particles", "Particles"), OutputDef("latent", "latent", "3D variability coordinates")]
+
+    def run(self, ctx: JobContext) -> None:
+        from cryoplug.particles import find_particle_files
+        src = Path(ctx.params["path"]).expanduser()
+        datadir = Path(ctx.params["datadir"]).expanduser() if ctx.params["datadir"] else None
+        if src.is_dir():
+            main, through = find_particle_files(src)
+            if main is None:
+                raise JobError(f"No particles .cs file in {src}")
+        elif src.suffix.lower() == ".cs" and src.is_file():
+            main = src
+            through = Path(ctx.params["passthrough"]).expanduser() if ctx.params["passthrough"] else find_particle_files(src.parent)[1]
+            if through and through.resolve() == main.resolve():
+                through = None
+        elif src.suffix.lower() == ".star" and src.is_file():
+            self._star(ctx, src, datadir)
+            return
+        else:
+            raise JobError(f"Give a CryoSPARC job folder, a .cs file or a .star file (not found: {src})")
+        ctx.log(f"Particles: {main}" + (f" + {through.name}" if through else ""))
+        if not import_cs_particles(ctx, main, through, {}, datadir):
+            raise JobError("No usable particles found (see the warnings above)")
+
+    @staticmethod
+    def _star(ctx: JobContext, src: Path, datadir: Path | None) -> None:
+        info = star_summary(src)
+        if not info.get("n_particles"):
+            raise JobError(f"No particle found in {src.name}")
+        dst = _transfer(ctx, src, "copy", "particles.star")
+        meta = {**info, "format": "star", "datadir": str(datadir or src.parent), "source": str(src),
+                "has_images": True, "has_poses": True, "has_ctf": True}
+        ctx.add_output("particles", "particles", dst, f"Particles ({info['n_particles']:,})", meta=meta)
+        ctx.add_highlight("Particles", f"{info['n_particles']:,}")

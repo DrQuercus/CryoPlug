@@ -43,6 +43,7 @@ def _load() -> None:
     from cryoplug.jobs import (  # noqa: F401
         building,
         deposition,
+        heterogeneity,
         imports,
         interactive,
         ligands,
@@ -50,6 +51,7 @@ def _load() -> None:
         maptools,
         masking,
         refinement,
+        series,
         sharpening,
         utility,
         validation,

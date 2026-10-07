@@ -7,7 +7,8 @@ import { btn, clear, guard, h, icon, toast } from './ui.js';
 
 const panel = () => document.getElementById('panel');
 
-export function openBuilder({ type = null, editing = null, prefillFrom = null } = {}) {
+// params: parameter values to start from (e.g. the clusters picked in a latent space explorer).
+export function openBuilder({ type = null, editing = null, prefillFrom = null, params = null } = {}) {
   const b = { type, editing, inputs: {}, params: {}, title: '', lane: '', showAdvanced: false, search: '', prefillFrom };
   if (editing) {
     b.type = editing.type;
@@ -18,7 +19,21 @@ export function openBuilder({ type = null, editing = null, prefillFrom = null } 
   }
   state.builder = b;
   if (b.type && !editing) applyType(b.type);
+  if (params && b.type) setKnownParams(b, params);
   panel().scrollTop = 0;
+  renderBuilder();
+}
+
+function setKnownParams(b, params) {
+  const known = new Set(state.types[b.type].params.map((p) => p.name));
+  for (const [name, value] of Object.entries(params)) if (known.has(name)) b.params[name] = value;
+}
+
+// Parameter values set from elsewhere while the builder already shows that job type.
+export function builderSetParams(params) {
+  const b = state.builder;
+  if (!b?.type || !params) return;
+  setKnownParams(b, params);
   renderBuilder();
 }
 

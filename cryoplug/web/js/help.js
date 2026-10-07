@@ -11,6 +11,7 @@ const SECTIONS = [
 export const CATEGORY_FR = {
   Import: 'Import',
   'Map processing': 'Traitement de carte',
+  Heterogeneity: 'Hétérogénéité (variabilité 3D)',
   'Model building': 'Construction de modèle',
   Interactive: 'Reconstruction interactive',
   Refinement: 'Affinement',

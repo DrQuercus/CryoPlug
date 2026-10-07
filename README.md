@@ -10,6 +10,7 @@ installés sur votre serveur local :
 |---|---|---|
 | Import | CryoSPARC, RELION, fichiers MRC, PDB, AlphaFold DB, UniProt | `Import from CryoSPARC`, `Import maps`, `Import atomic model`, `Import sequence` |
 | Amélioration de carte | **LocScale 2** (model-free / pseudo-modèle / model-based / hybride), **EMmerNet**, **DeepEMhancer**, **EMReady**, **spIsoNet** (correction de l'anisotropie due à l'orientation préférentielle), Phenix `resolve_cryo_em`, `auto_sharpen`, `local_aniso_sharpen`, **résolution locale** (`local_resolution`), **cartes composites** de raffinements locaux (`combine_focused_maps`) | + FSC demi-cartes (masquée, corrigée par randomisation de phase), **résolution directionnelle / 3D FSC**, **création de masques** (densité, chaînes du modèle, densité proche du modèle ; dilatation et bord doux en Å) et opérations de carte (main, B-factor, filtre, masque, boîte) intégrées |
+| Hétérogénéité (variabilité 3D) | **cryoDRGN** (entraînement, analyse, trajectoires), **CryoSPARC 3D Variability** et *3D Variability Display* / 3D Flex (import des coordonnées des particules et des séries de volumes) | **Explorateur de l'espace latent** interactif (UMAP / PCA, clusters → volumes en 3D, sélection de particules, trajectoire), **lecture des séries** dans le visualiseur 3D, **analyse de série** (carte de variabilité, corrélation entre états, chaînes qui bougent ou disparaissent), sélection de particules vers CryoSPARC ou un nouvel entraînement |
 | Construction de modèle | **ModelAngelo** (avec ou sans séquence) et **identification de chaînes inconnues** (`hmm_search`), **CryoAtom2** (protéines, ARN/ADN, complexes, identification par base de séquences), ColabFold/AlphaFold2, **Boltz-2** (complexes protéines/acides nucléiques/ligands), Phenix `process_predicted_model`, `dock_in_map`, ChimeraX `fitmap` | + restreintes de ligands (Phenix eLBOW), fusion et édition de modèles (gemmi) |
 | Reconstruction interactive | **ISOLDE** (ChimeraX), **Coot** | sessions ouvertes en un clic sur l'écran du serveur, ou paquet téléchargeable pour votre poste |
 | Affinement | Phenix `real_space_refine`, **Servalcat** (demi-cartes, cartes Fo-Fc), `phenix.douse` (eaux) | restreintes de ligands branchées directement sur l'affinement |
@@ -40,8 +41,14 @@ installés sur votre serveur local :
 | **Résolution locale par chaîne et par résidu** | **Registre de séquence** (checkMySequence) |
 | ![](docs/images/local_resolution.png) | ![](docs/images/checkmysequence.png) |
 
-*Captures réalisées avec le jeu de données synthétique `cryoplug demo-data` et des programmes de substitution
-(aucun calcul réel de ModelAngelo, CryoAtom2, Phenix… dans ces images).*
+| **Explorateur de l'espace latent** (cryoDRGN) : clusters choisis → *Play in 3D*, *Keep…*, *Remove…*, *Trajectory…* | **Série de volumes** jouée dans le visualiseur (barre de lecture, même seuil pour tous) |
+|---|---|
+| ![](docs/images/latent_explorer.png) | ![](docs/images/viewer_series.png) |
+| **Carte de variabilité** sur la carte moyenne (bleu = stable, rouge = variable) | **Analyse de série** : densité de chaque chaîne dans chaque volume (une hélice disparaît) |
+| ![](docs/images/viewer_variability.png) | ![](docs/images/series_analysis.png) |
+
+*Captures réalisées avec les jeux de données synthétiques de démonstration et des programmes de substitution
+(aucun calcul réel de ModelAngelo, CryoAtom2, Phenix, cryoDRGN… dans ces images).*
 
 > 📘 **Nouveau sur CryoPlug ?** Lisez le [**guide complet**](cryoplug/web/docs/GUIDE.md) (quelle carte pour quoi,
 > choix des méthodes, valeurs de validation, dépôt, recettes, dépannage) et la
@@ -157,6 +164,9 @@ setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate checkmyseq
 [tools.onedep]              # client du serveur de validation wwPDB : pip install onedep_api (accès internet requis)
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate onedep"
 
+[tools.cryodrgn]            # cryoDRGN 3.x/4.x : pip install cryodrgn dans son env (GPU)
+setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate cryodrgn"
+
 [interactive]
 display = ":0"   # écran (ou bureau TurboVNC, ex. ":1") où ouvrir Coot / ISOLDE depuis le navigateur
 ```
@@ -165,9 +175,12 @@ La page **Tools** de l'interface montre l'état de détection, le chemin et la v
 Chaque job a aussi un champ *Extra arguments* (paramètres avancés) pour passer n'importe quelle option
 supplémentaire, et le job **Custom command** permet d'intégrer un logiciel non prévu en quelques secondes.
 
+Les fichiers de particules `.cs` des versions récentes de CryoSPARC (format compressé) se lisent avec
+`cryosparc-tools` : `~/cryoplug-venv/bin/pip install cryosparc-tools` (inutile pour le format NumPy classique).
+
 > Les lignes de commande suivent la documentation et le code source actuels de chaque logiciel
 > (ModelAngelo 1.x, CryoAtom2 v2.1, LocScale 2, spIsoNet 1.0, Boltz-2, DeepEMhancer, EMReady, Servalcat
-> `refine_spa_norefmac`, Phenix 1.21). Si votre version
+> `refine_spa_norefmac`, Phenix 1.21, cryoDRGN 4.x). Si votre version
 > diffère, utilisez *Extra arguments* ou adaptez le job correspondant (§7) ; la commande exacte exécutée
 > est toujours enregistrée dans `commands.sh` et dans le log du job.
 
@@ -241,8 +254,34 @@ Une interface entre CryoSPARC et ChimeraX, dessinée par Mol\* (qui fonctionne h
 - **Coloration par résolution locale** : menu *Colour* d'une carte (ou `color #1 localres 3 6`), échelle bleu
   (meilleure) → rouge (moins bonne) réglable avec sa légende ; le bouton *View 3D* d'un job *Local resolution* (ou
   d'un import CryoSPARC avec carte de résolution locale) ouvre directement la carte coloriée.
-- Les cartes arrivent en **aperçu binné** (au plus 200 voxels de côté) pour la rapidité ; le menu **⋯**
-  d'une carte (ou `fullres #1`) charge le fichier d'origine.
+- **Coloration par variabilité** (sortie d'un job *Volume series analysis*) : même principe, en σ (bleu = stable, rouge =
+  variable) ; `color #1 variability`.
+- **Séries de volumes** (clusters et trajectoires cryoDRGN, frames de 3DVA) : *Play in 3D* charge tous les volumes puis
+  les joue comme un film — barre de lecture sur la vue (lecture/pause, précédent/suivant, curseur, vitesse, boucle ou
+  aller-retour), **Espace**, **,** et **.**, commandes `play 10`, `stop`, `frame 5`, `vseries play #1`. Le seuil est
+  commun à tous les volumes.
+- Les cartes arrivent en **aperçu binné** (au plus 200 voxels de côté, 128 pour les séries) pour la rapidité ; le menu
+  **⋯** d'une carte (ou `fullres #1`) charge le fichier d'origine.
+
+### Hétérogénéité et variabilité 3D (cryoDRGN, CryoSPARC 3DVA)
+
+1. **Import from CryoSPARC** du raffinement consensus importe aussi ses **particules** (poses, CTF, emplacement des
+   images ; les fichiers `particles` et `passthrough` sont fusionnés, les images restent dans le projet CryoSPARC).
+2. **cryoDRGN training** (GPU ; 128 px pour un premier passage) produit l'espace latent, les volumes de 20 clusters
+   et les trajectoires le long des composantes principales. Le rapport contient un **explorateur interactif** : nuage
+   des particules en UMAP / PCA coloré par cluster ; cliquez des clusters pour les jouer en 3D, les garder ou les
+   retirer (*Keep… / Remove…* préparent *Select particles*), suivre la transition (*Trajectory…*) ou en extraire la carte.
+3. **Volume series analysis** interprète une série : carte de variabilité (affichée en couleur sur la carte moyenne),
+   corrélation entre volumes (états distincts ou mouvement continu) et, avec un modèle, la densité de chaque chaîne
+   dans chaque volume.
+4. **Select particles** écrit un `.cs` pour CryoSPARC (*Import Particle Stack*) et les indices pour un nouvel
+   entraînement cryoDRGN (qui réutilise les images déjà réduites).
+5. Déjà calculé dans CryoSPARC : *Import from CryoSPARC* du job **3D Variability** (coordonnées des particules le long
+   des composantes, mêmes explorateur et sélection) et **Import volume series** du job *3D Variability Display*
+   (dossier, ZIP ou motif de fichiers ; une série par composante).
+
+Workflows *Conformational heterogeneity (cryoDRGN)* et *3D variability (CryoSPARC) → interpretation* ; détails et
+interprétation dans le [guide](cryoplug/web/docs/GUIDE.md) (§3.7 et recette H).
 
 ### Sessions interactives ISOLDE / Coot
 
@@ -381,12 +420,13 @@ même navigateur ne peut pas piloter CryoPlug. Sur un poste partagé entre plusi
 
 La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes) est dans
 [docs/JOBS.md](docs/JOBS.md), générée depuis `cryoplug/jobhelp.py` par `cryoplug docs-jobs`.
-`cryoplug jobtypes` liste les 44 types de jobs :
+`cryoplug jobtypes` liste les 52 types de jobs :
 
 | Catégorie | Jobs |
 |---|---|
-| Import | Import from CryoSPARC · Import maps · Import atomic model (fichier / PDB / AlphaFold DB) · Import sequence (FASTA / UniProt, séparation protéine/ARN/ADN) |
+| Import | Import from CryoSPARC (cartes et particules, coordonnées de 3D variability) · Import maps · Import atomic model (fichier / PDB / AlphaFold DB) · Import sequence (FASTA / UniProt, séparation protéine/ARN/ADN) · Import particles (`.cs` CryoSPARC, `.star` RELION) · Import volume series (3DVA, 3D Flex, cryoDRGN…) |
 | Map processing | Half-map FSC · Directional resolution (3D FSC) · Local resolution (Phenix) · Create mask · Composite map (focused maps) · Map operations · LocScale 2 · EMmerNet · DeepEMhancer · EMReady · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
+| Heterogeneity | cryoDRGN training · cryoDRGN analysis · cryoDRGN trajectory · Select particles (latent clusters) · Volume series analysis · Extract volume from series |
 | Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
 | Interactive | ISOLDE session · Coot session |
 | Refinement | Real-space refinement (Phenix) · Refinement (Servalcat) · Add waters (phenix.douse) |

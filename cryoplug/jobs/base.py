@@ -13,13 +13,14 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Iterable
+from typing import Any, Callable, ClassVar, Iterable
 
 from cryoplug import tools as toolmod
 
 CATEGORIES = [
     "Import",
     "Map processing",
+    "Heterogeneity",
     "Model building",
     "Interactive",
     "Refinement",
@@ -32,6 +33,10 @@ DATA_TYPES = {
     "map": "Map",
     "mask": "Mask",
     "locres": "Local resolution map",
+    "variability": "Variability map",
+    "volume_series": "Volume series",
+    "particles": "Particles",
+    "latent": "Latent space",
     "model": "Atomic model",
     "sequence": "Sequence",
     "fsc": "FSC curve",
@@ -397,8 +402,9 @@ class JobContext:
 
     def run(self, args: list[str], tool: str | None = None, cwd: str | Path | None = None,
             env: dict[str, str] | None = None, check: bool = True, log_output: bool = True,
-            stdout_path: str | Path | None = None) -> int:
-        """Run an external command inside the tool environment, streaming output to the job log."""
+            stdout_path: str | Path | None = None, on_line: Callable[[str], None] | None = None) -> int:
+        """Run an external command inside the tool environment, streaming output to the job log.
+        ``on_line`` sees every output line (e.g. to report the progress of a long training)."""
         args = [str(a) for a in args]
         tool_spec = self.tools.get(tool, {}) if tool else {}
         cmd = toolmod.wrap_command(tool_spec, args, tool or "cmd") if tool else args
@@ -424,6 +430,11 @@ class JobContext:
                     self._raw_log(line)
                 if out_fh:
                     out_fh.write(line)
+                if on_line:
+                    try:
+                        on_line(line)
+                    except Exception:  # progress reporting must never stop the program
+                        pass
                 self.state["heartbeat"] = time.time()
             code = proc.wait()
         except JobKilled:
@@ -484,7 +495,7 @@ class JobContext:
                                "without returning a failure code: see the log.")
         full_meta = self.inherited_meta(*inherit)
         full_meta.update(meta or {})
-        if type in ("map", "mask", "half_maps", "locres") and "box" not in (meta or {}):
+        if type in ("map", "mask", "half_maps", "locres", "variability", "volume_series") and "box" not in (meta or {}):
             try:
                 from cryoplug.mrc import map_info
                 info = map_info(file_list[0])
@@ -499,7 +510,7 @@ class JobContext:
             "files": [self.rel(f) for f in file_list],
             "meta": full_meta,
         }
-        thumb = self._thumbnail(name, type, Path(file_list[0]))
+        thumb = self._thumbnail(name, type, Path(file_list[len(file_list) // 2 if type == "volume_series" else 0]))
         if thumb:
             out["thumbnail"] = self.rel(thumb)
         self.outputs = [o for o in self.outputs if o["name"] != name] + [out]
@@ -511,11 +522,11 @@ class JobContext:
         try:
             from cryoplug.imaging import trace_image, write_png
             target = self.path(f"thumb_{name}.png")
-            if type in ("map", "half_maps", "mask"):
+            if type in ("map", "half_maps", "mask", "volume_series"):
                 from cryoplug.mrc import MapVolume, projection_image
                 write_png(target, projection_image(MapVolume.read(path)))
                 return target
-            if type == "locres":
+            if type in ("locres", "variability"):
                 from cryoplug.imaging import resolution_slice
                 from cryoplug.mrc import MapVolume
                 write_png(target, resolution_slice(MapVolume.read(path)))
@@ -566,6 +577,10 @@ class JobContext:
 
     def add_image(self, title: str, path: str | Path) -> None:
         self._section("image", title, path=self.rel(path))
+
+    def add_latent(self, title: str, path: str | Path) -> None:
+        """Interactive latent space explorer reading the JSON file at ``path`` (see jobs.heterogeneity)."""
+        self._section("latent", title, path=self.rel(path))
 
     def save_report(self) -> None:
         tmp = self.report_path.with_suffix(".json.tmp")
