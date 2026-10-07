@@ -13,6 +13,9 @@ export const state = {
   view: localStorage.getItem('cryoplug.view') || 'cards',
   filter: { text: '', status: '', category: '' },
   builder: null, // { type, editing, inputs, params, title, lane }
+  selection: new Set(), // job uids picked with Ctrl/Shift-click for bulk actions
+  selectionAnchor: null,
+  cardOrder: [], // uids in the order shown, for Shift-click ranges
   listeners: new Set(),
 };
 

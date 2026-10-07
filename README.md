@@ -25,8 +25,10 @@ installés sur votre serveur local :
 | ![](docs/images/isolde.png) | ![](docs/images/graph.png) |
 | **Workflows** | **Checklist avant dépôt** |
 | ![](docs/images/workflows.png) | ![](docs/images/checklist.png) |
-| **Visualiseur 3D (Mol\*, hors-ligne)** | **Mode sombre** |
-| ![](docs/images/viewer.png) | ![](docs/images/dark.png) |
+| **Visualiseur 3D** : panneau de modèles, histogramme de seuil, zone autour du modèle, ligne de commande | **Coupes 2D** (et thème sombre) |
+| ![](docs/images/viewer.png) | ![](docs/images/viewer_slices.png) |
+| **Lignée du job ouvert** : ses entrées en violet, les jobs qui l'utilisent en vert | **Mode sombre** |
+| ![](docs/images/lineage.png) | ![](docs/images/dark.png) |
 
 | Validation carte-modèle (Q-score, FSC) | Paquet de dépôt (méthodes, Table 1) | Boltz-2 (complexe + ligands) |
 |---|---|---|
@@ -187,8 +189,45 @@ supplémentaire, et le job **Custom command** permet d'intégrer un logiciel non
    checklist → paquet de dépôt. Les étapes optionnelles (ISOLDE, LocScale…) peuvent être retirées, les
    jobs en aval sont recâblés automatiquement.
 5. La vue **Graph** montre le pipeline ; chaque job a ses onglets *Overview* (métriques, graphes FSC /
-   Q-score, sorties, paramètres, notes), *Log* (en direct) et *Files*.
-6. **View 3D** ouvre les cartes (aperçu sous-échantillonné, ou pleine résolution) et modèles dans Mol*.
+   Q-score, sorties, paramètres, notes), *Log* (en direct) et *Files*. Quand un job est ouvert, ses
+   **entrées** sont entourées en violet sur les cartes et les **jobs qui l'utilisent** en vert.
+6. **View 3D** (dans les sorties d'un job, ou bouton **3D** au survol d'une carte de job) ouvre le
+   visualiseur décrit ci-dessous.
+
+### Sélection multiple et raccourcis (comme CryoSPARC)
+
+- **Ctrl/⌘ + clic** ajoute un job à la sélection, **Maj + clic** une plage, **Ctrl/⌘ + A** tous les jobs
+  affichés ; la barre de sélection propose **Queue**, **Stop**, **Clear** et **Delete** (avec le nombre de
+  jobs concernés par chaque action et une confirmation).
+- **N** nouveau job, **/** filtrer, **G** cartes ⇄ graphe, **Échap** vide la sélection ou ferme le détail,
+  **?** liste des raccourcis.
+
+### Visualiseur 3D
+
+Une interface entre CryoSPARC et ChimeraX, dessinée par Mol\* (qui fonctionne hors-ligne après
+`cryoplug fetch-viewer`) :
+
+- **Panneau Models** à droite : chaque carte ou modèle porte un numéro (`#1`, `#2`…), un œil pour le
+  masquer et une pastille de couleur. Pour une carte : **histogramme** des densités (échelle log) dont on
+  fait glisser le trait pour régler le **seuil**, saisie en valeur absolue ou en **σ** avec le pourcentage
+  de voxels au-dessus, style **Surface / Mesh / Transparent**, et **Zone** : n'afficher la densité qu'à
+  moins de *r* Å du modèle (comme `volume zone` de ChimeraX, calculée sur le serveur). Pour un modèle :
+  **Cartoon**, **Cartoon + chaînes latérales** ou **Sticks**, couleur par chaîne, structure secondaire,
+  élément, B-factor ou arc-en-ciel, et « Go to » `A:45`.
+- **Souris** : clic gauche-glisser tourne, clic droit (ou Ctrl + gauche) déplace, molette zoome,
+  Maj + molette déplace les plans de coupe ; **cliquer sur un atome recentre la vue sur son résidu**
+  (comme Coot) et la barre d'état affiche l'atome survolé (`/A LYS 45 CA · B 32.1`).
+- **Barre d'outils** : réinitialiser la vue, rotation continue, *slab* (tranche autour du centre),
+  projection orthographique, éclairage doux (occlusion ambiante), fond noir / gris / blanc, **coupes 2D**
+  XY/XZ/YZ de la carte active (comme CryoSPARC, voxels au-dessus du seuil teintés), image PNG à 2× la
+  taille de la fenêtre. **Open…** ajoute d'autres cartes, masques, demi-cartes ou modèles du projet.
+- **Ligne de commande** façon ChimeraX (↑/↓ pour l'historique, `help` pour la liste) :
+  `level 3σ`, `style mesh`, `color #2 bychain`, `view /A:45`, `zone 3`, `volume #1 level 0.5 style mesh`,
+  `bg white`, `slab 30`, `lighting soft`, `slices`, `fullres #1`, `save figure.png scale 3`…
+- **Clavier** : **+ / −** seuil de la carte active (0,1 σ, Maj : 0,5 σ), **M** style suivant, **R** vue
+  initiale, **S** rotation, **L** coupes, **:** ligne de commande, **?** aide.
+- Les cartes arrivent en **aperçu binné** (au plus 200 voxels de côté) pour la rapidité ; le menu **⋯**
+  d'une carte (ou `fullres #1`) charge le fichier d'origine.
 
 ### Sessions interactives ISOLDE / Coot
 
@@ -400,5 +439,5 @@ pytest
 Les tests lancent de vrais workers sur des données synthétiques, avec de faux exécutables qui imitent les
 interfaces de ModelAngelo, LocScale et Phenix : import CryoSPARC, FSC, chaîne complète jusqu'au paquet de
 dépôt, CryoAtom2, recherche HMM, Boltz-2, spIsoNet, 3D FSC, eLBOW/douse, session ISOLDE, échec / arrêt de
-jobs, workflows, API HTTP, concurrence API/planificateur et contrôle d'accès (connexion, jeton, mot de passe,
-requêtes d'autres origines).
+jobs, workflows, API HTTP, concurrence API/planificateur, contrôle d'accès (connexion, jeton, mot de passe,
+requêtes d'autres origines) et zone carte-modèle du visualiseur (comparée à un calcul exhaustif).

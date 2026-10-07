@@ -3,9 +3,9 @@ import { api } from './api.js';
 import { closeBuilder, openBuilder, refreshBuilderInputs, renderBuilder } from './builder.js';
 import { closeDetail, detailIsLive, detailMode, detailUid, openDetail, refreshDetail } from './detail.js';
 import { renderHelp, renderProjects, renderQueue, renderTools } from './pages.js';
-import { renderJobs, renderProject } from './project.js';
-import { loadStatic, onJobsChanged, refreshJobs, state } from './state.js';
-import { clear, guard, h, showError, toast } from './ui.js';
+import { clearSelection, renderJobs, renderProject, selectAllShown } from './project.js';
+import { builderHref, loadStatic, navigate, onJobsChanged, refreshJobs, state } from './state.js';
+import { clear, guard, h, modal, showError, toast } from './ui.js';
 
 const content = document.getElementById('content');
 const panel = document.getElementById('panel');
@@ -106,6 +106,7 @@ async function route() {
       return;
     }
     state.jobs = [];
+    state.selection.clear();
     jobsSignature = '';
     await refreshJobs();
     renderProject(content);
@@ -148,8 +149,62 @@ async function route() {
     panel.hidden = true;
     restoreCards();
   }
-  if (!projectChanged) renderJobs(); // selection / builder chips
+  renderJobs(); // selected card, lineage, builder chips
 }
+
+// ------------------------------------------------------------------ keyboard
+// CryoSPARC-like shortcuts on the project page; ignored while typing or when a dialog is open.
+const SHORTCUTS = [
+  ['N', 'New job (opens the job builder)'],
+  ['/', 'Filter the jobs'],
+  ['G', 'Switch between cards and graph'],
+  ['Ctrl/⌘ + A', 'Select all the jobs shown'],
+  ['Ctrl/⌘ + click · Shift + click', 'Add a job / a range of jobs to the selection'],
+  ['Space (on a card)', 'Add the card to the selection'],
+  ['Esc', 'Clear the selection, or close the job details'],
+  ['?', 'This list'],
+];
+
+function shortcutsDialog() {
+  modal({
+    title: 'Keyboard shortcuts',
+    body: h('table', { class: 'data' }, h('tbody', {}, SHORTCUTS.map(([k, d]) => h('tr', {}, h('td', { class: 'mono' }, k), h('td', {}, d))))),
+  });
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented || document.querySelector('.modal-backdrop, .menu')) return;
+  const typing = e.target.closest('input, textarea, select, [contenteditable]');
+  const r = state.route;
+  const onProject = r.page === 'project' && state.project;
+  if (e.key === 'Escape') {
+    if (typing) { e.target.blur(); return; }
+    if (clearSelection()) return;
+    if (onProject && r.inspect) navigate(builderHref());
+    else if (onProject && r.panel === 'detail') navigate(`#/p/${state.project.uid}`);
+    return;
+  }
+  if (typing || e.altKey) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && onProject && !r.inspect) {
+    e.preventDefault();
+    selectAllShown();
+    return;
+  }
+  if (e.ctrlKey || e.metaKey) return;
+  if (e.key === '?') { shortcutsDialog(); return; }
+  if (!onProject) return;
+  if (e.key === 'n' || e.key === 'N') {
+    if (r.panel !== 'new') { openBuilder(); navigate(`#/p/${state.project.uid}/new`); }
+  } else if (e.key === '/') {
+    const search = content.querySelector('.toolbar input[type=search]');
+    if (search) { e.preventDefault(); search.focus(); }
+  } else if (e.key === 'g' || e.key === 'G') {
+    if (r.inspect) return;
+    state.view = state.view === 'graph' ? 'cards' : 'graph';
+    localStorage.setItem('cryoplug.view', state.view);
+    renderProject(content);
+  }
+});
 
 // ------------------------------------------------------------------ polling
 onJobsChanged((jobs) => {

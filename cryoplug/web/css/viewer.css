@@ -1,0 +1,108 @@
+/* 3D viewer: CryoSPARC-like volume viewer with ChimeraX habits (model panel, histogram, command line). */
+.viewer-page { overflow: hidden; }
+.vw { display: grid; grid-template-rows: 44px minmax(0, 1fr) auto; height: 100vh; }
+
+/* top bar -------------------------------------------------------------------- */
+.vw-top { display: flex; align-items: center; gap: 10px; padding: 0 10px 0 12px; background: var(--surface-1);
+  border-bottom: 1px solid var(--border); min-width: 0; }
+.vw-brand { display: flex; align-items: center; gap: 7px; color: var(--ink-1); font-weight: 600; text-decoration: none !important; flex-shrink: 0; }
+.vw-title { color: var(--ink-2); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.vw-tools { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.vw-tool { display: inline-flex; align-items: center; gap: 5px; border: 1px solid transparent; background: none; padding: 4px 8px;
+  border-radius: 6px; cursor: pointer; color: var(--ink-2); font-size: 12.5px; white-space: nowrap; }
+.vw-tool:hover { background: var(--surface-2); color: var(--ink-1); }
+.vw-tool.on { background: var(--accent-wash); color: var(--accent-strong); border-color: var(--accent); }
+.vw-tool svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.vw-sep { width: 1px; height: 20px; background: var(--border); margin: 0 5px; }
+.vw-bgs { display: inline-flex; gap: 4px; padding: 0 4px; }
+.vw-bg { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--axis); cursor: pointer; padding: 0; }
+.vw-bg.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.vw-slab { width: 90px; accent-color: var(--accent); }
+
+/* 3D stage -------------------------------------------------------------------- */
+.vw-main { display: flex; min-height: 0; }
+.vw-stage { position: relative; flex: 1; min-width: 0; background: #000; overflow: hidden; }
+.vw-canvas { position: absolute; inset: 0; }
+.vw-canvas .msp-plugin { position: absolute; inset: 0; }
+/* Mol* draws the scene; its own panels and labels are replaced by the CryoPlug interface. */
+.vw-canvas .msp-highlight-info, .vw-canvas .msp-viewport-controls, .vw-canvas .msp-viewport-top-left-controls,
+.vw-canvas .msp-layout-static > .msp-layout-top, .vw-canvas .msp-selection-viewport-controls { display: none !important; }
+.vw-status { position: absolute; left: 12px; bottom: 9px; max-width: calc(100% - 24px); font: 12px/1.4 var(--mono); color: #ececec;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000; pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vw-stage.light .vw-status { color: #161616; text-shadow: 0 0 3px #fff, 0 0 2px #fff; }
+.vw-loading { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: rgba(22, 22, 22, .88); color: #fff;
+  padding: 6px 13px; border-radius: 16px; display: flex; gap: 8px; align-items: center; font-size: 12.5px; z-index: 5; }
+.vw-spinner { width: 12px; height: 12px; border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff; border-radius: 50%;
+  animation: vw-spin .8s linear infinite; }
+@keyframes vw-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .vw-spinner { animation-duration: 2.4s; } }
+.vw-msg { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  padding: 24px; color: #ddd; text-align: center; z-index: 4; background: #000; }
+.vw-msg code { background: rgba(255, 255, 255, .12); padding: 1px 6px; border-radius: 4px; }
+
+/* orthogonal slices (CryoSPARC-like) */
+.vw-slices { position: absolute; top: 10px; right: 10px; bottom: 30px; display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none; z-index: 3; overflow: hidden; }
+.vw-slice { pointer-events: auto; background: rgba(18, 18, 18, .92); border: 1px solid rgba(255, 255, 255, .14); border-radius: 8px;
+  padding: 6px 6px 4px; color: #d9d9d9; font-size: 11.5px; }
+.vw-slice-head { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.vw-slice canvas { display: block; width: 156px; height: 156px; object-fit: contain; image-rendering: pixelated; background: #000; border-radius: 4px; }
+.vw-slice input[type=range] { display: block; width: 156px; margin: 4px 0 0; accent-color: #86b6ef; }
+
+/* models panel (ChimeraX-like) -------------------------------------------------- */
+.vw-side { width: 318px; flex-shrink: 0; background: var(--surface-1); border-left: 1px solid var(--border); display: flex;
+  flex-direction: column; min-height: 0; }
+.vw-side-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 12px; border-bottom: 1px solid var(--border); }
+.vw-items { overflow: auto; flex: 1; padding: 8px; }
+.vw-empty { color: var(--ink-3); font-size: 12.5px; padding: 18px 8px; text-align: center; }
+.vw-item { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--surface-1); }
+.vw-item.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.vw-item-head { display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 4px; cursor: pointer; user-select: none; }
+.vw-item-head .vid { font-family: var(--mono); color: var(--ink-3); font-size: 12px; }
+.vw-item-head .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 13px; }
+.vw-item-head .kind { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .03em; }
+.vw-item.off .name, .vw-item.off .vid { color: var(--ink-3); font-weight: 400; }
+.vw-item-head .icon-btn { padding: 3px; }
+.vw-item-head .icon-btn svg { width: 16px; height: 16px; }
+.vw-item-body { padding: 2px 10px 10px; border-top: 1px solid var(--hairline); }
+.vw-color { width: 18px; height: 18px; padding: 0; border: 1px solid var(--axis); border-radius: 4px; background: none; cursor: pointer; flex-shrink: 0; }
+.vw-color::-webkit-color-swatch-wrapper { padding: 0; }
+.vw-color::-webkit-color-swatch { border: 0; border-radius: 3px; }
+.vw-color::-moz-color-swatch { border: 0; border-radius: 3px; }
+.vw-hist { display: block; width: 100%; height: 66px; margin-top: 8px; cursor: ew-resize; border-radius: 5px; background: var(--surface-2); touch-action: none; }
+.vw-hist-scale { display: flex; justify-content: space-between; color: var(--ink-3); font: 10.5px var(--mono); margin-top: 2px; }
+.vw-row { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 12.5px; }
+.vw-row > .lbl { color: var(--ink-2); width: 58px; flex-shrink: 0; }
+.vw-row input[type=number] { width: 86px; padding: 3px 6px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px; }
+.vw-row .unit { color: var(--ink-3); font-size: 12px; }
+.vw-row input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.vw-row select { flex: 1; width: auto; padding: 3px 6px; }
+.vw-row .seg button { padding: 3px 9px; font-size: 12px; }
+.vw-row label.chk { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-1); }
+.vw-meta { color: var(--ink-3); font-size: 11.5px; margin-top: 7px; line-height: 1.35; }
+
+/* command line (ChimeraX-like) ---------------------------------------------------- */
+.vw-cmd { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; row-gap: 3px; padding: 6px 10px 7px;
+  background: var(--surface-1); border-top: 1px solid var(--border); }
+.vw-cmd-label { font-size: 12px; color: var(--ink-3); align-self: center; }
+#vw-cmdline { font-family: var(--mono); font-size: 13px; }
+.vw-log { grid-column: 2; font: 12px/1.45 var(--mono); color: var(--ink-2); height: 4.35em; overflow: auto; white-space: pre-wrap; }
+.vw-log .err { color: var(--bad-ink); }
+.vw-log .echo { color: var(--ink-3); }
+
+/* help dialog */
+.vw-help h4 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); }
+.vw-help table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.vw-help td { padding: 3px 8px 3px 0; vertical-align: top; border-bottom: 1px solid var(--hairline); }
+.vw-help td:first-child { font-family: var(--mono); white-space: nowrap; color: var(--ink-1); width: 1%; }
+.vw-open-list { max-height: 60vh; overflow: auto; }
+.vw-open-job { margin-top: 10px; }
+.vw-open-job > b { font-size: 13px; }
+.vw-open-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.vw-open-row:hover { background: var(--accent-wash); }
+.vw-open-row .p { color: var(--ink-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+
+@media (max-width: 900px) {
+  .vw-tool .lbl { display: none; }
+  .vw-side { width: 260px; }
+}

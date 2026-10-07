@@ -185,8 +185,13 @@ function continueWith(job, typeName) {
 }
 
 // ---------------------------------------------------------------- overview
-function viewerUrl(items) {
+export function viewerUrl(items) {
   return `viewer.html#${encodeURIComponent(JSON.stringify({ project: state.project.uid, items }))}`;
+}
+
+// Everything of a job the 3D viewer can show (its maps, or its model with the map it was fitted in).
+export function jobViewItems(job) {
+  return (job.outputs || []).flatMap((o) => outputViewItems(job, o)).filter((it, i, arr) => arr.findIndex((x) => x.path === it.path) === i);
 }
 
 function outputViewItems(job, out) {
@@ -194,9 +199,16 @@ function outputViewItems(job, out) {
   if (out.type === 'model') {
     items.push({ kind: 'model', path: out.path, label: `${job.uid} ${out.label}` });
     const mapIn = job.input_details && (job.input_details.map || job.input_details.half_maps);
-    if (mapIn && mapIn.output_info) items.push({ kind: 'map', path: mapIn.output_info.path, label: `${mapIn.job} ${mapIn.output_info.label}` });
+    if (mapIn && mapIn.output_info) {
+      items.push({ kind: 'map', path: mapIn.output_info.path, label: `${mapIn.job} ${mapIn.output_info.label}` });
+    } else {
+      // job lists carry the input references only: find the map among the parent's outputs
+      const ref = job.inputs && (job.inputs.map || job.inputs.half_maps);
+      const parentOut = ref && (state.jobsByUid[ref.job]?.outputs || []).find((o) => o.name === ref.output);
+      if (parentOut) items.push({ kind: 'map', path: parentOut.path, label: `${ref.job} ${parentOut.label || parentOut.name}` });
+    }
   } else if (['map', 'mask', 'half_maps'].includes(out.type)) {
-    items.push({ kind: 'map', path: out.path, label: `${job.uid} ${out.label}` });
+    items.push({ kind: 'map', path: out.path, label: `${job.uid} ${out.label}`, ...(out.type === 'mask' ? { otype: 'mask' } : {}) });
   }
   return items;
 }
@@ -253,7 +265,7 @@ function renderOverview(body) {
             }, { cls: 'small', ic: 'next', title: `Connect to the builder (${slots.map((sl) => sl.label).join(' / ')})` }) : null,
             items.length ? h('a', { class: 'btn small', href: viewerUrl(items), target: '_blank', rel: 'noopener' }, icon('eye'), 'View 3D') : null)));
     });
-    const viewAll = job.outputs.flatMap((o) => outputViewItems(job, o)).filter((it, i, arr) => arr.findIndex((x) => x.path === it.path) === i);
+    const viewAll = jobViewItems(job);
     body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'Outputs'),
       linking && rows.some((r) => r.classList.contains('linkable'))
         ? h('div', { class: 'muted small', style: { marginBottom: '6px' } }, 'Drag an output onto an input of the builder on the right, or use “Use as input”.') : null,

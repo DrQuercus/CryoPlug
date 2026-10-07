@@ -383,6 +383,36 @@ def preview_factor(shape_xyz: tuple[int, int, int], max_box: int = 256) -> int:
     return max(1, int(math.ceil(max(shape_xyz) / float(max_box))))
 
 
+def zone_mask(vol: MapVolume, xyz: np.ndarray, radius: float) -> np.ndarray:
+    """Boolean (z, y, x) mask of the voxels whose centre lies within ``radius`` A of an atom."""
+    mask = np.zeros(vol.data.shape, dtype=bool)
+    xyz = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
+    if not len(xyz):
+        return mask
+    nz, ny, nx = vol.data.shape
+    reach = np.ceil(radius / vol.voxel).astype(np.int32)
+    offsets = np.stack(np.meshgrid(*(np.arange(-r, r + 2, dtype=np.int32) for r in reach), indexing="ij"), axis=-1).reshape(-1, 3)
+    chunk = max(1, 2_000_000 // len(offsets))
+    idx = vol.to_index(xyz)
+    for start in range(0, len(idx), chunk):
+        frac = idx[start:start + chunk]
+        cand = np.floor(frac).astype(np.int32)[:, None, :] + offsets[None, :, :]  # (atoms, offsets, xyz)
+        near = (((cand - frac[:, None, :]) * vol.voxel) ** 2).sum(axis=-1) <= radius * radius
+        near &= np.all((cand >= 0) & (cand < np.array([nx, ny, nz])), axis=-1)
+        hit = cand[near]
+        mask[hit[:, 2], hit[:, 1], hit[:, 0]] = True
+    return mask
+
+
+def zone_map(vol: MapVolume, xyz: np.ndarray, radius: float) -> MapVolume:
+    """Map restricted to the surroundings of the atoms, like ChimeraX `volume zone`: values farther
+    than ``radius`` from every atom are set just below the map minimum, so no contour level shows them."""
+    lo, hi = float(vol.data.min()), float(vol.data.max())
+    out = vol.data.copy()
+    out[~zone_mask(vol, xyz, radius)] = lo - 0.01 * max(hi - lo, 1e-6)
+    return vol.like(out)
+
+
 def projection_image(vol: MapVolume, size: int = 160) -> np.ndarray:
     """Mean projection along z, contrast-stretched to uint8 (for job card thumbnails)."""
     work = bin_map(vol, preview_factor(vol.shape_xyz, size)) if max(vol.shape_xyz) > size else vol

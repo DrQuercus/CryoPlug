@@ -1,9 +1,9 @@
 // Project page: job cards (CryoSPARC-like), pipeline graph, filters and workflow templates.
 import { api } from './api.js';
 import { openBuilder, paramField } from './builder.js';
-import { detailUid } from './detail.js';
+import { detailUid, jobViewItems, viewerUrl } from './detail.js';
 import { jobHref, navigate, refreshJobs, state, typeTitle } from './state.js';
-import { btn, clear, guard, h, icon, jobDuration, modal, s, statusChip, toast } from './ui.js';
+import { ACTIVE, btn, clear, confirmDialog, guard, h, icon, jobDuration, modal, s, statusChip, toast } from './ui.js';
 
 const STATUSES = ['building', 'queued', 'launched', 'running', 'waiting', 'completed', 'failed', 'killed'];
 
@@ -48,8 +48,128 @@ export function renderJobs() {
     return;
   }
   const jobs = filtered();
-  if (state.view === 'graph') renderGraph(area, jobs);
-  else clear(area, h('div', { class: 'cards' }, [...jobs].sort((a, b) => b.num - a.num).map(jobCard)));
+  const sorted = [...jobs].sort((a, b) => b.num - a.num);
+  state.cardOrder = sorted.map((j) => j.uid);
+  for (const uid of [...state.selection]) if (!state.jobsByUid[uid]) state.selection.delete(uid);
+  const rel = lineage();
+  if (state.view === 'graph') renderGraph(area, jobs, rel);
+  else clear(area, h('div', { class: 'cards' }, sorted.map((j) => jobCard(j, rel))));
+  const bar = selectionBar();
+  if (bar) area.prepend(bar);
+}
+
+// ------------------------------------------------------------- selection
+// Ctrl/Cmd-click toggles a job, Shift-click selects a range, a plain click opens the job (as in CryoSPARC).
+export function pickJob(e, uid) {
+  if (e.ctrlKey || e.metaKey) {
+    if (state.selection.has(uid)) state.selection.delete(uid);
+    else state.selection.add(uid);
+    state.selectionAnchor = uid;
+    renderJobs();
+    return true;
+  }
+  if (e.shiftKey) {
+    const order = state.cardOrder;
+    const a = order.indexOf(state.selectionAnchor ?? detailUid() ?? uid);
+    const b = order.indexOf(uid);
+    if (a >= 0 && b >= 0) order.slice(Math.min(a, b), Math.max(a, b) + 1).forEach((u) => state.selection.add(u));
+    else state.selection.add(uid);
+    renderJobs();
+    return true;
+  }
+  return false;
+}
+
+function openJob(uid) {
+  const had = state.selection.size > 0;
+  state.selection.clear();
+  state.selectionAnchor = uid;
+  navigate(jobHref(uid));
+  if (had) renderJobs();
+}
+
+export function clearSelection() {
+  if (!state.selection.size) return false;
+  state.selection.clear();
+  renderJobs();
+  return true;
+}
+
+export function selectAllShown() {
+  state.cardOrder.forEach((u) => state.selection.add(u));
+  renderJobs();
+}
+
+const CAN = {
+  queue: (j) => j.status === 'building',
+  kill: (j) => ACTIVE.includes(j.status) || j.status === 'waiting',
+  clear: (j) => ['completed', 'failed', 'killed'].includes(j.status),
+  delete: () => true,
+};
+
+function selectionBar() {
+  const jobs = [...state.selection].map((u) => state.jobsByUid[u]).filter(Boolean);
+  if (!jobs.length) return null;
+  const act = (kind, label, ic, cls = '') => {
+    const targets = jobs.filter(CAN[kind]);
+    return btn(`${label} (${targets.length})`, () => bulk(kind, targets), { ic, cls, disabled: !targets.length,
+      title: targets.length ? targets.map((j) => j.uid).join(', ') : 'Does not apply to the selected jobs' });
+  };
+  return h('div', { class: 'selbar', role: 'region', 'aria-label': 'Selected jobs' },
+    h('b', {}, `${jobs.length} selected`),
+    h('span', { class: 'muted small selbar-uids' }, jobs.map((j) => j.uid).join(', ')),
+    h('span', { class: 'grow' }),
+    act('queue', 'Queue', 'play'), act('kill', 'Stop', 'stop'), act('clear', 'Clear', 'undo'), act('delete', 'Delete', 'trash', 'danger'),
+    btn('Deselect', () => clearSelection(), { ic: 'x', title: 'Esc' }));
+}
+
+async function bulk(kind, jobs) {
+  const puid = state.project.uid;
+  const verb = { queue: 'Queue', kill: 'Stop', clear: 'Clear', delete: 'Delete' }[kind];
+  const past = { queue: 'Queued', kill: 'Stopped', clear: 'Cleared', delete: 'Deleted' }[kind];
+  const uids = new Set(jobs.map((j) => j.uid));
+  if (kind !== 'queue') {
+    let detail = '';
+    if (kind === 'clear') detail = '\nTheir outputs and files are deleted; they go back to building.';
+    if (kind === 'delete') {
+      const outside = state.jobs.filter((j) => !uids.has(j.uid) && Object.values(j.inputs || {}).some((r) => uids.has(r.job)));
+      detail = '\nTheir folders are deleted.'
+        + (outside.length ? `\n${outside.map((j) => j.uid).join(', ')} use their outputs: those inputs become invalid.` : '');
+    }
+    if (!(await confirmDialog(`${verb} ${jobs.length} job${jobs.length > 1 ? 's' : ''}`, `${verb} ${[...uids].join(', ')}?${detail}`, verb, true))) return;
+  }
+  // parents first when queueing, children first when deleting
+  const order = [...jobs].sort((a, b) => (kind === 'delete' ? b.num - a.num : a.num - b.num));
+  const failed = [];
+  for (const j of order) {
+    try {
+      if (kind === 'queue') await api.queueJob(puid, j.uid);
+      else if (kind === 'kill') await api.killJob(puid, j.uid);
+      else if (kind === 'clear') await api.clearJob(puid, j.uid);
+      else await api.deleteJob(puid, j.uid, true);
+    } catch (err) {
+      failed.push(`${j.uid}: ${err.message}`);
+    }
+  }
+  const done = order.length - failed.length;
+  if (kind === 'delete') order.forEach((j) => state.selection.delete(j.uid));
+  if (done) toast(`${past} ${done} job${done > 1 ? 's' : ''}`, 'ok');
+  if (failed.length) toast(failed.join('\n'), 'error', 10000);
+  await refreshJobs();
+  renderJobs();
+  if (kind === 'delete' && detailUid() && !state.jobsByUid[detailUid()]) navigate(`#/p/${puid}`);
+}
+
+// Direct parents and children of the job open in the details, highlighted on the cards.
+function lineage() {
+  const uid = detailUid();
+  const job = uid && state.jobsByUid[uid];
+  if (!job) return null;
+  return {
+    uid,
+    parents: new Set(Object.values(job.inputs || {}).map((r) => r.job)),
+    children: new Set(state.jobs.filter((j) => Object.values(j.inputs || {}).some((r) => r.job === uid)).map((j) => j.uid)),
+  };
 }
 
 function typeIcon(type) {
@@ -61,18 +181,33 @@ function typeIcon(type) {
   return icon('file');
 }
 
-function jobCard(job) {
+function jobCard(job, rel) {
   const puid = state.project.uid;
   const thumbOut = (job.outputs || []).find((o) => o.thumbnail);
   const builderOpen = !!state.builder?.type;
+  const parent = rel?.parents.has(job.uid);
+  const child = rel?.children.has(job.uid);
+  const picked = state.selection.has(job.uid);
+  const view3d = job.status === 'completed' ? jobViewItems(job) : [];
   const card = h('div', {
-    class: `card ${job.status} ${detailUid() === job.uid ? 'selected' : ''}`, tabindex: 0, role: 'button', dataset: { uid: job.uid },
-    'aria-label': `${job.uid} ${job.title} ${job.status}`,
-    onclick: (e) => { if (!e.target.closest('.out-chip')) navigate(jobHref(job.uid)); },
-    onkeydown: (e) => { if (e.key === 'Enter') navigate(jobHref(job.uid)); },
+    class: `card ${job.status} ${detailUid() === job.uid ? 'selected' : ''} ${picked ? 'picked' : ''} ${parent ? 'lineage-parent' : ''} ${child ? 'lineage-child' : ''}`,
+    tabindex: 0, role: 'button', dataset: { uid: job.uid }, 'aria-pressed': picked ? 'true' : 'false',
+    'aria-label': `${job.uid} ${job.title} ${job.status}${parent ? `, input of ${rel.uid}` : ''}${child ? `, uses ${rel.uid}` : ''}`,
+    onmousedown: (e) => { if (e.shiftKey) e.preventDefault(); },
+    onclick: (e) => { if (e.target.closest('.out-chip') || pickJob(e, job.uid)) return; openJob(job.uid); },
+    onkeydown: (e) => {
+      if (e.key === 'Enter') openJob(job.uid);
+      else if (e.key === ' ') { e.preventDefault(); pickJob({ ctrlKey: true }, job.uid); }
+    },
   },
   h('div', { class: 'card-head' }, h('span', { class: 'uid' }, job.uid), statusChip(job.status)),
-  h('div', { class: 'card-thumb' }, thumbOut ? h('img', { src: api.fileUrl(puid, thumbOut.thumbnail), alt: '', loading: 'lazy' }) : typeIcon(job.type)),
+  h('div', { class: 'card-thumb' }, thumbOut ? h('img', { src: api.fileUrl(puid, thumbOut.thumbnail), alt: '', loading: 'lazy' }) : typeIcon(job.type),
+    parent ? h('span', { class: 'lineage-tag up' }, `input of ${rel.uid}`) : null,
+    child ? h('span', { class: 'lineage-tag down' }, `uses ${rel.uid}`) : null,
+    view3d.length ? h('a', {
+      class: 'card-3d', href: viewerUrl(view3d), target: '_blank', rel: 'noopener', title: 'Open in the 3D viewer', 'aria-label': `Open ${job.uid} in the 3D viewer`,
+      onclick: (e) => e.stopPropagation(),
+    }, icon('eye'), '3D') : null),
   h('div', { class: 'card-title' }, job.title),
   job.title !== typeTitle(job.type) ? h('div', { class: 'card-type' }, typeTitle(job.type)) : null,
   (job.highlights || []).length ? h('div', { class: 'card-hl' }, job.highlights.slice(0, 3).map((hl) => h('span', {}, `${hl.label} `, h('b', {}, String(hl.value))))) : null,
@@ -95,7 +230,7 @@ function outputChips(job) {
 }
 
 // -------------------------------------------------------------------- graph
-function renderGraph(area, jobs) {
+function renderGraph(area, jobs, rel) {
   const visible = new Set(jobs.map((j) => j.uid));
   const depth = {};
   const byUid = state.jobsByUid;
@@ -135,8 +270,10 @@ function renderGraph(area, jobs) {
   for (const j of jobs) {
     const p = pos[j.uid];
     const title = clip(j.title, 24);
-    const g = s('g', { class: `gnode ${detailUid() === j.uid ? 'selected' : ''}`, transform: `translate(${p.x},${p.y})`, tabindex: 0, role: 'button',
-      style: 'cursor:pointer', onclick: () => navigate(jobHref(j.uid)), onkeydown: (e) => { if (e.key === 'Enter') navigate(jobHref(j.uid)); } },
+    const cls = [detailUid() === j.uid ? 'selected' : '', state.selection.has(j.uid) ? 'picked' : '',
+      rel?.parents.has(j.uid) ? 'lineage-parent' : '', rel?.children.has(j.uid) ? 'lineage-child' : ''].join(' ');
+    const g = s('g', { class: `gnode ${cls}`, transform: `translate(${p.x},${p.y})`, tabindex: 0, role: 'button',
+      style: 'cursor:pointer', onclick: (e) => { if (!pickJob(e, j.uid)) openJob(j.uid); }, onkeydown: (e) => { if (e.key === 'Enter') openJob(j.uid); } },
     s('rect', { class: 'body', width: NW, height: NH, rx: 7 }),
     s('rect', { width: 5, height: NH, rx: 2, fill: `var(${colorVar[j.status] || '--st-idle'})` }),
     s('text', { x: 14, y: 20, 'font-weight': 600 }, `${j.uid}  `, s('tspan', { 'font-weight': 400 }, title)),

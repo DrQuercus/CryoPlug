@@ -66,5 +66,6 @@ export const api = {
 
   fileUrl: (p, path, download = false) => `/api/projects/${p}/file?path=${enc(path)}${download ? '&download=true' : ''}`,
   previewUrl: (p, path) => `/api/projects/${p}/preview?path=${enc(path)}`,
+  zoneUrl: (p, map, model, radius, maxBox) => `/api/projects/${p}/zone?map=${enc(map)}&model=${enc(model)}&radius=${radius}&max_box=${maxBox}`,
   bundleUrl: (p, j) => `/api/projects/${p}/jobs/${j}/interactive/bundle`,
 };

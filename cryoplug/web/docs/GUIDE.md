@@ -64,6 +64,14 @@ Statuts d'un job :
 Pour essayer sans données : `cryoplug demo-data ~/cryoplug_demo`, puis importez
 `~/cryoplug_demo/CS-demo/J42` (jeu synthétique).
 
+### Sélection et raccourcis
+
+Comme dans CryoSPARC : **Ctrl/⌘ + clic** ajoute un job à la sélection, **Maj + clic** une plage,
+**Ctrl/⌘ + A** tous les jobs affichés ; la barre qui apparaît met en file, arrête, réinitialise ou supprime
+les jobs sélectionnés. Quand un job est ouvert, ses entrées sont entourées en violet et les jobs qui
+l'utilisent en vert. Touches : **N** nouveau job, **/** filtrer, **G** cartes ⇄ graphe, **Échap** fermer,
+**?** liste des raccourcis.
+
 ### Ouvrir CryoPlug depuis votre portable
 
 Par défaut, l'interface ne s'ouvre que sur le serveur lui-même (`http://localhost:39500`). Pour l'utiliser
@@ -151,6 +159,21 @@ Ouvrez le job et vérifiez :
 - la carte et le modèle dans le **visualiseur 3D** : hélices droites, chaînes continues, résidus dans la densité.
 
 Lancer ModelAngelo et CryoAtom2 sur la même carte puis comparer les Q-scores est peu coûteux et souvent instructif.
+
+**Dans le visualiseur 3D** (*View 3D*, ou bouton **3D** au survol d'une carte de job), pour juger
+l'ajustement comme dans Coot ou ChimeraX :
+
+1. le modèle s'ouvre avec la carte dans laquelle il a été construit, en maillage (*Mesh*) ;
+2. cochez **Zone** (3 Å) : seule la densité autour du modèle reste, le bruit disparaît (`zone 3`) ;
+3. réglez le seuil en faisant glisser le trait de l'histogramme, ou avec **+ / −** ; le panneau indique le
+   niveau en σ et le pourcentage de voxels au-dessus ;
+4. **cliquez sur un résidu** pour recentrer la vue dessus, ou tapez `view /A:45` (« Go to » `A:45` dans le
+   panneau du modèle) ; **Slab** limite l'affichage à une tranche autour du centre ;
+5. **Slices** affiche des coupes 2D de la carte : pratique pour repérer un masque trop serré, une
+   anisotropie ou une boîte décentrée.
+
+`help` dans la ligne de commande liste les commandes (`level`, `style`, `color`, `view`, `zone`, `volume`,
+`bg`, `slab`, `save`…), **?** les gestes souris et les touches.
 
 ### 4.3 Assembler
 
@@ -358,6 +381,8 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | L'interface ne s'ouvre pas depuis le portable | Serveur en écoute locale (`127.0.0.1`) ou port bloqué par le pare-feu | `host = "0.0.0.0"` dans `[server]` puis redémarrer ; ouvrir le port (`sudo ufw allow 39500/tcp`) ; ou tunnel SSH |
 | « Wrong access token » à la connexion | Jeton mal copié ou renouvelé | `cryoplug url` sur le serveur réaffiche le lien de connexion |
 | Le visualiseur 3D reste vide | Mol* non installé et pas d'accès internet | `cryoplug fetch-viewer` sur le serveur |
+| Le visualiseur affiche « The 3D view could not start » | WebGL désactivé dans le navigateur | Activer l'accélération matérielle du navigateur |
+| Carte pleine de bruit dans le visualiseur | Seuil trop bas ou boîte très grande | Monter le seuil (+, ou histogramme), cocher **Zone** autour du modèle |
 | Relancer un job à l'identique hors CryoPlug | — | `commands.sh` dans le dossier du job contient les commandes exactes |
 
 Le **log** (onglet *Log*) montre la commande exécutée, la sortie du programme et l'erreur en rouge.

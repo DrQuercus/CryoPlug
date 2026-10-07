@@ -173,6 +173,23 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); out
   border-top: 3px solid var(--card-accent, var(--st-idle)); transition: transform .08s; }
 .card:hover { transform: translateY(-1px); border-color: var(--accent); }
 .card.selected { outline: 2px solid var(--accent); }
+.card.picked { outline: 2px solid var(--accent); outline-offset: 2px; background-image: linear-gradient(var(--accent-wash), var(--accent-wash)); }
+.card.lineage-parent { box-shadow: 0 0 0 2px var(--series-7), var(--shadow); }
+.card.lineage-child { box-shadow: 0 0 0 2px var(--good-ink), var(--shadow); }
+.lineage-tag { position: absolute; top: 5px; left: 5px; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 9px;
+  background: var(--surface-1); border: 1px solid currentColor; }
+.lineage-tag.up { color: var(--series-7); }
+.card-3d { position: absolute; right: 5px; bottom: 5px; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600;
+  padding: 2px 7px; border-radius: 9px; background: var(--surface-1); border: 1px solid var(--border); color: var(--ink-2);
+  opacity: 0; transition: opacity .1s; text-decoration: none !important; }
+.card-3d svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; }
+.card:hover .card-3d, .card:focus-within .card-3d, .card-3d:focus { opacity: 1; }
+.card-3d:hover { color: var(--accent-strong); border-color: var(--accent); }
+@media (hover: none) { .card-3d { opacity: 1; } }
+.lineage-tag.down { color: var(--good-ink); }
+.selbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; margin-bottom: 12px; border-radius: var(--radius);
+  background: var(--accent-wash); border: 1px solid var(--accent); }
+.selbar-uids { max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card.completed { --card-accent: var(--st-good); }
 .card.running, .card.launched { --card-accent: var(--st-running); }
 .card.queued { --card-accent: var(--st-warn); }
@@ -182,7 +199,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); out
 .card-head { display: flex; align-items: center; gap: 6px; }
 .card-head .uid { font-family: var(--mono); font-weight: 700; font-size: 13px; }
 .card-head .chip { margin-left: auto; }
-.card-thumb { height: 92px; border-radius: 6px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.card-thumb { position: relative; height: 92px; border-radius: 6px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .card-thumb img { height: 100%; max-width: 100%; object-fit: contain; }
 .card-thumb svg { width: 34px; height: 34px; stroke: var(--ink-3); fill: none; stroke-width: 1.4; }
 .card-title { font-weight: 600; line-height: 1.25; }
@@ -305,6 +322,9 @@ pre.log .cmd { color: #8ec5ff; }
 .gnode rect.body { fill: var(--surface-1); stroke: var(--border); }
 .gnode:hover rect.body { stroke: var(--accent); }
 .gnode.selected rect.body { stroke: var(--accent); stroke-width: 2; }
+.gnode.picked rect.body { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 5 3; }
+.gnode.lineage-parent rect.body { stroke: var(--series-7); stroke-width: 2.5; }
+.gnode.lineage-child rect.body { stroke: var(--good-ink); stroke-width: 2.5; }
 .gnode text { fill: var(--ink-1); font-size: 12px; }
 .gnode text.sub { fill: var(--ink-3); font-size: 11px; }
 .gedge { fill: none; stroke: var(--axis); stroke-width: 1.5; }

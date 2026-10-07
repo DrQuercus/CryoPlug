@@ -5,26 +5,44 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CryoPlug viewer</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <style>
-    :root { color-scheme: light dark; --bg: #fcfcfb; --ink: #0b0b0b; --muted: #52514e; --border: rgba(11,11,11,.12); }
-    @media (prefers-color-scheme: dark) { :root { --bg: #1a1a19; --ink: #fff; --muted: #c3c2b7; --border: rgba(255,255,255,.12); } }
-    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-    header { height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--border); }
-    header .items { color: var(--muted); font-size: 13px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    header label { margin-left: auto; font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; white-space: nowrap; }
-    #app { position: absolute; top: 45px; left: 0; right: 0; bottom: 0; }
-    #msg { padding: 24px; max-width: 720px; }
-    code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; }
-  </style>
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/viewer.css">
 </head>
-<body>
-  <header>
-    <b>CryoPlug viewer</b>
-    <span class="items" id="items"></span>
-    <label><input type="checkbox" id="fullres"> full-resolution maps</label>
-  </header>
-  <div id="msg" hidden></div>
-  <div id="app"></div>
+<body class="viewer-page">
+  <div class="vw">
+    <header class="vw-top">
+      <a class="vw-brand" id="vw-home" href="./" title="Back to the project">
+        <img src="favicon.svg" alt="" width="22" height="22"><span>CryoPlug</span>
+      </a>
+      <span class="vw-title" id="vw-title">3D viewer</span>
+      <div class="vw-tools" id="vw-tools" role="toolbar" aria-label="View"></div>
+    </header>
+    <div class="vw-main">
+      <section class="vw-stage" id="vw-stage">
+        <div id="vw-canvas" class="vw-canvas"></div>
+        <div class="vw-status" id="vw-status" aria-live="off"></div>
+        <div class="vw-loading" id="vw-loading" hidden><span class="vw-spinner" aria-hidden="true"></span><span id="vw-loading-text">Loading…</span></div>
+        <div class="vw-slices" id="vw-slices" hidden></div>
+        <div class="vw-msg" id="vw-msg" hidden></div>
+      </section>
+      <aside class="vw-side" id="vw-side" aria-label="Models">
+        <div class="vw-side-head">
+          <b>Models</b>
+          <span class="grow"></span>
+          <button class="btn small" id="vw-open" type="button" title="Open other maps or models of this project">Open…</button>
+        </div>
+        <div class="vw-items" id="vw-items"></div>
+      </aside>
+    </div>
+    <footer class="vw-cmd">
+      <label for="vw-cmdline" class="vw-cmd-label">Command</label>
+      <input id="vw-cmdline" type="text" autocomplete="off" spellcheck="false"
+             placeholder="e.g.  level 3σ  ·  style mesh  ·  color #2 bychain  ·  view /A:45  ·  zone 3  ·  help">
+      <div class="vw-log" id="vw-log" aria-live="polite"></div>
+    </footer>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toasts" aria-live="polite"></div>
   <script type="module" src="js/viewer.js"></script>
 </body>
 </html>
