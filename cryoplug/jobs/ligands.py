@@ -77,11 +77,15 @@ class PhenixDouse(JobType):
         from cryoplug.modelio import read_structure, structure_summary
         model, m = ctx.require("model"), ctx.require("map")
         res = ctx.resolution(slots=["map", "model"])
-        before = structure_summary(read_structure(model.path))["waters"]
+        try:
+            before = structure_summary(read_structure(model.path))["waters"]
+        except Exception:  # informative only
+            before = None
         start = time.time()
         ctx.run([ctx.program("phenix", "phenix.douse"), model.path, m.path, f"resolution={res}", *ctx.split_extra()],
                 tool="phenix")
         out = pick_new_model(ctx, start, ["*douse*", "*water*"])
         summary = report_model(ctx, out)
         ctx.add_output("model", "model", out, "Model with waters", inherit=["map", "model"])
-        ctx.add_highlight("Waters added", summary["waters"] - before)
+        if before is not None and "waters" in summary:
+            ctx.add_highlight("Waters added", summary["waters"] - before)

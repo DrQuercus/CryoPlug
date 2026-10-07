@@ -18,19 +18,25 @@ from cryoplug.jobs.base import (
 )
 
 MAP_PATTERNS = ["*.ccp4", "*.mrc", "*.map"]
+MAP_SUFFIXES = (".ccp4", ".mrc", ".map")
 
 
 def pick_new_map(ctx: JobContext, since: float, preferred: list[str], exclude: tuple[str, ...] = ()) -> Path:
-    """Locate the map written by an external program in the job directory."""
-    candidates = [p for p in ctx.find_new_files(MAP_PATTERNS, since)
-                  if not p.is_symlink() and not p.name.startswith("thumb_") and not any(x in p.name for x in exclude)]
+    """Locate the map written by an external program in the job directory (or next to its inputs)."""
+    def candidates() -> list[Path]:  # ``exclude`` applies to the path inside the job folder (e.g. processing_files/)
+        return [p for p in ctx.find_new_files(MAP_PATTERNS, since)
+                if not p.is_symlink() and not p.name.startswith("thumb_") and not any(x in ctx.rel(p) for x in exclude)]
+    found = candidates()
+    if not found and ctx.rescue_stray_files(preferred, since, suffixes=MAP_SUFFIXES):
+        found = candidates()
     for name in preferred:
-        for p in candidates:
+        for p in found:
             if p.name == name or p.match(name):
                 return p
-    if candidates:
-        return candidates[0]
-    raise JobError("The program finished but no output map was found")
+    if found:
+        return found[0]
+    raise JobError(f"The program finished but wrote no map in {ctx.job_dir.name}/ (expected {', '.join(preferred)}). "
+                   "It may have stopped on an error without returning a failure code: see the log.")
 
 
 def _halves_or_map(params, connected, need_any=("half_maps", "map")) -> list[str]:
@@ -198,8 +204,10 @@ class LocScale(JobType):
         sym = (ctx.params.get("symmetry") or ctx.inherited_meta("half_maps", "map").get("symmetry") or "C1").strip()
         if sym.upper() != "C1":
             args += ["-sym", sym]
-        out_name = f"locscale_{mode}.mrc"
-        args += ["-o", out_name, "-v", "-op", "processing_files"]
+        # Absolute paths: LocScale resolves relative ones against the folder of the input maps, which is
+        # another job's folder (the map and the processing files would land there).
+        out = ctx.path(f"locscale_{mode}.mrc")
+        args += ["-o", str(out), "-v", "-op", str(ctx.path("processing_files"))]
         if mode in ("model_free", "hybrid"):
             args += ["-gpus", *ctx.physical_gpus(ctx.params.get("gpu_ids", ""))]
         nproc = int(ctx.params["nproc"])
@@ -210,9 +218,8 @@ class LocScale(JobType):
         args += ctx.split_extra()
         start = time.time()
         ctx.run(args, tool="locscale")
-        out = ctx.path(out_name)
         if not out.exists():
-            out = pick_new_map(ctx, start, ["locscale*.mrc"])
+            out = pick_new_map(ctx, start, [out.name, "locscale*.mrc"], exclude=("processing_files",))
         ctx.add_output("map", "map", out, f"LocScale ({mode.replace('_', ' ')})", inherit=["half_maps", "map"])
 
 
@@ -254,16 +261,18 @@ class EMmerNet(JobType):
             args += ["-sym", sym]
         if not ctx.params["monte_carlo"]:
             args.append("-no_mc")
+        # absolute paths, as for LocScale (relative ones are resolved against the input map's folder)
+        out = ctx.path("feature_enhanced.mrc")
         args += ["-bs", str(ctx.params["batch_size"]), "-gpus", *ctx.physical_gpus(ctx.params.get("gpu_ids", "")),
-                 "-o", "feature_enhanced.mrc", "-v", "-op", "processing_files", *ctx.split_extra()]
+                 "-o", str(out), "-v", "-op", str(ctx.path("processing_files")), *ctx.split_extra()]
         start = time.time()
         ctx.run(args, tool="locscale")
-        out = ctx.path("feature_enhanced.mrc")
         if not out.exists():
-            out = pick_new_map(ctx, start, ["feature_enhanced*.mrc"])
+            out = pick_new_map(ctx, start, [out.name, "feature_enhanced*.mrc"], exclude=("_variance", "_baseline"))
         ctx.add_output("map", "map", out, "EMmerNet feature-enhanced map", inherit=["half_maps", "map"])
-        for extra in ctx.find_new_files(["*uncertainty*.mrc", "*pVDDT*.mrc", "*pvddt*.mrc", "*confidence*.mrc"], start):
-            ctx.add_output("confidence", "map", extra, "EMmerNet confidence / uncertainty map", inherit=["half_maps", "map"])
+        # Monte-Carlo runs also write <output>_variance.mrc (per-voxel uncertainty)
+        for extra in ctx.find_new_files(["*_variance.mrc", "*uncertainty*.mrc", "*pVDDT*.mrc", "*pvddt*.mrc", "*confidence*.mrc"], start):
+            ctx.add_output("confidence", "map", extra, "EMmerNet uncertainty (variance) map", inherit=["half_maps", "map"])
             break
 
 
@@ -386,7 +395,7 @@ class SpIsoNet(JobType):
         ctx.progress(0.2, "Training the anisotropy-correction network")
         ctx.run([exe, "reconstruct", h1, h2, "--aniso_file", fsc3d, "--mask", mask.path, "--limit_res", f"{res:.3f}",
                  "--epochs", str(ctx.params["epochs"]), "--alpha", str(ctx.params["alpha"]), "--beta", str(ctx.params["beta"]),
-                 "--output_dir", "isonet_maps", "--gpuID", ",".join(ctx.physical_gpus(ctx.params.get("gpu_ids", ""))),
+                 "--output_dir", str(ctx.path("isonet_maps")), "--gpuID", ",".join(ctx.physical_gpus(ctx.params.get("gpu_ids", ""))),
                  "--acc_batches", str(ctx.params["acc_batches"]), "--ncpus", str(ctx.params["ncpus"]), *ctx.split_extra()],
                 tool="spisonet")
         c1 = first_existing([ctx.path("isonet_maps", "corrected_half_map_1.mrc")])

@@ -29,6 +29,10 @@ def run_worker(job_dir: str | Path) -> int:
     spec = json.loads((job_dir / "job.json").read_text())
     ctx = JobContext(spec, job_dir)
     ctx.outputs, ctx.highlights, ctx.report = [], [], {"sections": []}
+    try:
+        ctx.snapshot()  # what exists before the program runs: recognises its outputs, even if written beside the inputs
+    except Exception as exc:  # pragma: no cover - only helps finding the outputs
+        ctx.warn(f"Could not list the job and input folders: {exc}")
     signal.signal(signal.SIGTERM, _raise_killed)
     signal.signal(signal.SIGINT, _raise_killed)
     ctx.write_state(status="running", pid=os.getpid(), host=ctx.hostname(), started_at=time.time(),

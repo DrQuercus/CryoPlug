@@ -105,12 +105,13 @@ echo "fake ModelAngelo $@"
 cmd="$1"; out=""
 while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; esac; shift; done
 mkdir -p "$out"
+name="$(basename "$out")"  # like ModelAngelo: files are named after the output folder
 if [ "$cmd" = "hmm_search" ]; then
   printf 'target_name,query_name,accession,E-value,score,bias,description\nsp|P0TEST|HELIX_TEST,A,,1e-30,250.0,0.1,Test helix protein\ntr|Q0WEAK|WEAK,B,,0.5,12.0,0.0,Weak hit\n' > "$out/best_hits.csv"
   cp "$out/best_hits.csv" "$out/all_hits.csv"
   exit 0
 fi
-{write_cif} "$out/$out.cif"
+{write_cif} "$out/$name.cif"
 [ "$cmd" = "build_no_seq" ] && mkdir -p "$out/hmm_profiles" && touch "$out/hmm_profiles/A.hmm"
 exit 0
 """)
@@ -120,9 +121,10 @@ echo "fake CryoAtom2 $@"
 out=""; db=""
 while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; -pf) db="$2"; shift;; esac; shift; done
 mkdir -p "$out"
-{write_cif} "$out/$out.cif"
-cp "$out/$out.cif" "$out/${{out}}_raw.cif"
-[ -n "$db" ] && head -2 "$db" > "$out/${{out}}_prot.fasta"
+name="$(basename "$out")"
+{write_cif} "$out/$name.cif"
+cp "$out/$name.cif" "$out/${{name}}_raw.cif"
+[ -n "$db" ] && head -2 "$db" > "$out/${{name}}_prot.fasta"
 exit 0
 """)
     _script(d / "boltz", f"""
@@ -139,9 +141,11 @@ echo '{{"confidence_score": 0.83, "ptm": 0.81, "iptm": 0.77, "complex_plddt": 0.
     _script(d / "spisonet.py", """
 echo "fake spisonet $@"
 if [ "$1" = "fsc3d" ]; then cp "$2" FSC3D.mrc; exit 0; fi
-mkdir -p isonet_maps
-cp "$(readlink -f "$2")" isonet_maps/corrected_half_map_1.mrc
-cp "$(readlink -f "$3")" isonet_maps/corrected_half_map_2.mrc
+h1="$2"; h2="$3"; od=isonet_maps
+while [ $# -gt 0 ]; do case "$1" in --output_dir) od="$2"; shift;; esac; shift; done
+mkdir -p "$od"
+cp "$(readlink -f "$h1")" "$od/corrected_half_map_1.mrc"
+cp "$(readlink -f "$h2")" "$od/corrected_half_map_2.mrc"
 """)
     _script(d / "phenix.douse", f"""
 echo "fake phenix.douse $@"
@@ -183,11 +187,23 @@ Final:
 EOF
 """)
     _script(d / "phenix.version", "echo 'Phenix fake 1.21'\n")
+    # Mimics LocScale 2.4.1 path handling: relative -o / -op are resolved against the folder of the first
+    # input map (not the working directory), and the inputs are copied into the processing folder.
     _script(d / "locscale", """
 echo "fake locscale $@"
-out=""; hm=""
-while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; -hm) hm="$2"; shift; shift;; esac; shift; done
-cp "$hm" "$out"
+mode=locscale
+if [ "$1" = "feature_enhance" ]; then mode=emmernet; shift; fi
+out=""; op=""; hm=""; em=""
+while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; -op) op="$2"; shift;; -hm) hm="$2"; shift; shift;; -em) em="$2"; shift;; esac; shift; done
+src="${hm:-$em}"
+indir="$(cd "$(dirname "$src")" && pwd)"
+case "$op" in /*) ;; *) op="$indir/${op:-processing_files}";; esac
+mkdir -p "$op"
+cp "$src" "$op/$(basename "$src")"
+case "$out" in /*) var="${out%.mrc}_variance.mrc";; *) var="$op/${out%.mrc}_variance.mrc"; out="$indir/$out";; esac
+echo "Saving as MRC file: $out"
+cp "$src" "$out"
+if [ "$mode" = emmernet ]; then cp "$src" "$var"; fi
 """)
     return d
 

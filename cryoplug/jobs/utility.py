@@ -257,9 +257,13 @@ class CustomCommand(JobType):
         for kind, pattern in (("map", ctx.params["output_maps"]), ("model", ctx.params["output_models"])):
             if not pattern:
                 continue
-            for i, f in enumerate(sorted(glob.glob(str(ctx.path(pattern))))):
+            files = sorted(glob.glob(str(ctx.path(pattern))))
+            if not files and ctx.rescue_stray_files([pattern]):  # written next to an input instead?
+                files = sorted(glob.glob(str(ctx.path(pattern))))
+            for i, f in enumerate(files):
                 name = kind if i == 0 else f"{kind}_{i + 1}"
                 ctx.add_output(name, kind, f, Path(f).name, inherit=["map", "half_maps"])
                 n += 1
         if (ctx.params["output_maps"] or ctx.params["output_models"]) and n == 0:
-            raise JobError("No file matched the output patterns")
+            raise JobError(f"No file matched the output patterns in {ctx.job_dir.name}/ (paths are relative to the job "
+                           "folder, where the command runs)")

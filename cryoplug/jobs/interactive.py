@@ -9,12 +9,16 @@ the model to register as output.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from cryoplug.jobs import register
 from cryoplug.jobs.base import JobContext, JobError, JobType, OutputDef, Param, Slot
 
 EXCLUDED_DIRS = ("coot-backup", "coot-download", "processing_files", ".cryoplug_cache")
+# the staged copy of the input model (see stage_inputs). Only that name: Coot suggests "input_model-coot-0.pdb"
+# when saving it, which is the user's rebuilt model.
+STAGED_INPUT = re.compile(r"input_model\.\w+")
 
 
 def model_suffix(path: str) -> str:
@@ -34,7 +38,7 @@ def list_candidate_models(job_dir: Path) -> list[dict]:
             low = fn.lower()
             if not low.endswith((".pdb", ".cif", ".mmcif", ".ent")):
                 continue
-            if fn.startswith("input_"):
+            if STAGED_INPUT.fullmatch(fn):
                 continue
             p = Path(dirpath) / fn
             if p.is_symlink():
@@ -82,7 +86,8 @@ class InteractiveBase(JobType):
         elif candidates:
             path = ctx.job_dir / candidates[0]["path"]
         else:
-            raise JobError("No saved model found in the job directory. Save or upload your model first.")
+            raise JobError(f"No saved model found in the job folder ({ctx.job_dir}). Save your model there, or upload "
+                           "it, then finish the job.")
         if not path.is_file():
             raise JobError(f"File not found: {path}")
         ctx.log(f"Registering user model {path.name}")

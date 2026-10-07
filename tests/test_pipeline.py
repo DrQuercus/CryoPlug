@@ -70,6 +70,13 @@ def test_full_chain_with_fake_tools(manager, synthetic):
     # GPU jobs got a GPU from the lane and the command was run inside the tool environment
     loc_log = log_of(manager, puid, loc["uid"])
     assert "fake locscale" in loc_log and "-gpus" in loc_log
+    # LocScale wrote its map and processing files in its own folder, not next to its inputs (the import job)
+    proj = manager.project_dir(puid)
+    loc_out = manager.job(puid, loc["uid"])["outputs"][0]
+    assert loc_out["path"] == f"{loc['uid']}/locscale_model_free.mrc"
+    assert (proj / loc["uid"] / "processing_files").is_dir()
+    assert not list((proj / imp["uid"]).glob("locscale*")) and not (proj / imp["uid"] / "processing_files").exists()
+    assert "moved to" not in loc_log  # nothing had to be rescued
     ma_log = log_of(manager, puid, build["uid"])
     assert "-pf" in ma_log and "--device 0" in ma_log
     # resolution propagated from the import (auto resolution)

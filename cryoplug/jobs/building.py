@@ -19,26 +19,49 @@ from cryoplug.jobs.base import (
 )
 
 MODEL_PATTERNS = ["*.pdb", "*.cif", "*.mmcif"]
+MODEL_SUFFIXES = (".pdb", ".cif", ".mmcif")
 
 
 def pick_new_model(ctx: JobContext, since: float, preferred: list[str], root: Path | None = None,
                    exclude: tuple[str, ...] = ()) -> Path:
-    candidates = [p for p in ctx.find_new_files(MODEL_PATTERNS, since, root)
-                  if not p.is_symlink() and not any(x in p.name for x in exclude)]
+    """Locate the model written by an external program under ``root`` (default: the job folder), or next to
+    the job's inputs. ``exclude`` applies to the path inside the job folder."""
+    def candidates() -> list[Path]:
+        return [p for p in ctx.find_new_files(MODEL_PATTERNS, since, root)
+                if not p.is_symlink() and not any(x in ctx.rel(p) for x in exclude)]
+    found = candidates()
+    if not found and ctx.rescue_stray_files(preferred, since, suffixes=MODEL_SUFFIXES, dest=root):
+        found = candidates()
     for pattern in preferred:
-        for p in candidates:
+        for p in found:
             if p.match(pattern):
                 return p
-    if candidates:
-        return candidates[0]
-    raise JobError("The program finished but no output model was found")
+    if found:
+        return found[0]
+    where = ctx.rel(root) if root else f"{ctx.job_dir.name}/"
+    raise JobError(f"The program finished but wrote no model in {where} (expected {', '.join(preferred)}). "
+                   "It may have stopped on an error without returning a failure code: see the log.")
 
 
 def report_model(ctx: JobContext, path: Path, title: str = "Model content") -> dict:
+    """Content of a model written by a job (empty if it cannot be read). Informative only: the job keeps its
+    output even when the built-in reader fails on a file the program that wrote it reads fine."""
     from cryoplug.jobs.imports import describe_model
-    summary = describe_model(ctx, path)
+    try:
+        summary = describe_model(ctx, path)
+    except Exception as exc:
+        ctx.warn(f"Model content not summarised ({path.name}): {exc}")
+        return {}
     ctx.add_highlight("Residues", summary["n_residues"])
     return summary
+
+
+def _number(value, default: float | None = None) -> float | None:
+    """A number read from a program's output file, or ``default`` if the value is missing or not a number."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def sequence_files(ctx: JobContext, seq) -> dict[str, str]:
@@ -91,20 +114,21 @@ class ModelAngeloBuild(JobType):
         seq = ctx.input("sequence")
         out_name = "modelangelo"
         exe = ctx.executable("modelangelo")
+        out_dir = str(ctx.path(out_name))  # absolute: never resolved against another folder
         if seq:
-            args = [exe, "build", "-v", m.path, "-o", out_name]
+            args = [exe, "build", "-v", m.path, "-o", out_dir]
             flags = {"protein": "-f" if ctx.params["legacy_fasta_flag"] else "-pf", "rna": "-rf", "dna": "-df"}
             for kind, path in sequence_files(ctx, seq).items():
                 args += [flags[kind], path]
         else:
-            args = [exe, "build_no_seq", "-v", m.path, "-o", out_name]
+            args = [exe, "build_no_seq", "-v", m.path, "-o", out_dir]
         args += ["--device", ",".join(ctx.relative_gpus(ctx.params.get("device", "")))]
         args += ctx.split_extra()
         start = time.time()
         ctx.run(args, tool="modelangelo")
         out = first_existing([ctx.path(out_name, f"{out_name}.cif"), ctx.path(f"{out_name}.cif")])
         if out is None:
-            out = pick_new_model(ctx, start, ["*.cif"], root=ctx.path(out_name), exclude=("raw",))
+            out = pick_new_model(ctx, start, [f"{out_name}.cif", "*.cif"], exclude=("raw", "entropy_scores", "gnn_output"))
         report_model(ctx, out)
         ctx.add_output("model", "model", out, "ModelAngelo model", inherit=["map"])
         raw = first_existing([ctx.path(out_name, f"{out_name}_raw.cif")])
@@ -165,7 +189,7 @@ class CryoAtomBuild(JobType):
     def run(self, ctx: JobContext) -> None:
         m = ctx.require("map")
         out_name = "cryoatom"
-        args = [ctx.executable("cryoatom"), "build", "-v", m.path, "-o", out_name]
+        args = [ctx.executable("cryoatom"), "build", "-v", m.path, "-o", str(ctx.path(out_name))]  # absolute
         seq = ctx.input("sequence")
         if seq:
             flags = {"protein": "-ps", "rna": "-rs", "dna": "-ds"}
@@ -186,9 +210,9 @@ class CryoAtomBuild(JobType):
         args += ctx.split_extra()
         start = time.time()
         ctx.run(args, tool="cryoatom")
-        out = first_existing([ctx.path(out_name, f"{out_name}.cif")])
+        out = first_existing([ctx.path(out_name, f"{out_name}.cif"), ctx.path(f"{out_name}.cif")])
         if out is None:
-            out = pick_new_model(ctx, start, ["*.cif"], root=ctx.path(out_name), exclude=("raw", "model_net"))
+            out = pick_new_model(ctx, start, [f"{out_name}.cif", "*.cif"], exclude=("raw", "model_net", "entropy_scores"))
         report_model(ctx, out)
         ctx.add_output("model", "model", out, "CryoAtom2 model", inherit=["map"])
         raw = first_existing([ctx.path(out_name, f"{out_name}_raw.cif")])
@@ -266,19 +290,24 @@ class ModelAngeloHMMSearch(JobType):
         db = Path(ctx.params["database"])
         if not db.is_file():
             raise JobError(f"Database not found: {db}")
-        ctx.run([ctx.executable("modelangelo"), "hmm_search", "-i", str(model_dir), "-f", str(db), "-o", "hmm_output",
+        out_dir = ctx.path("hmm_output")
+        ctx.run([ctx.executable("modelangelo"), "hmm_search", "-i", str(model_dir), "-f", str(db), "-o", str(out_dir),
                  "-a", ctx.params["alphabet"], "--E", str(ctx.params["evalue"]), *ctx.split_extra()], tool="modelangelo")
-        best_csv = first_existing([ctx.path("hmm_output", "best_hits.csv"), model_dir / "best_hits.csv"])
-        all_csv = first_existing([ctx.path("hmm_output", "all_hits.csv"), model_dir / "all_hits.csv"])
+        if not (out_dir / "best_hits.csv").exists():  # written beside the input profiles instead?
+            ctx.rescue_stray_files(["best_hits.csv", "all_hits.csv"], dest=out_dir)
+        best_csv = first_existing([out_dir / "best_hits.csv"])
+        all_csv = first_existing([out_dir / "all_hits.csv"])
         if best_csv is None:
-            raise JobError("best_hits.csv was not produced (see log)")
+            raise JobError("best_hits.csv was not produced (see the log)")
         with open(best_csv, newline="") as fh:
             hits = list(csv.DictReader(fh))
-        hits.sort(key=lambda r: float(r.get("E-value") or 1e9))
+        def evalue(r: dict) -> float:
+            return _number(r.get("E-value"), 1e9)
+        hits.sort(key=evalue)
         ctx.add_table("Best hits", ["Target", "Chain", "E-value", "Score", "Description"],
-                      [[r.get("target_name", ""), r.get("query_name", ""), f"{float(r.get('E-value') or 0):.2e}",
-                        f"{float(r.get('score') or 0):.1f}", (r.get("description") or "")[:80]] for r in hits[:40]])
-        selected = [r["target_name"] for r in hits if float(r.get("E-value") or 1e9) <= ctx.params["seq_evalue"]]
+                      [[r.get("target_name", ""), r.get("query_name", ""), f"{evalue(r):.2e}",
+                        f"{_number(r.get('score'), 0.0):.1f}", (r.get("description") or "")[:80]] for r in hits[:40]])
+        selected = [r["target_name"] for r in hits if r.get("target_name") and evalue(r) <= ctx.params["seq_evalue"]]
         selected = selected[: ctx.params["max_sequences"]]
         ctx.add_highlight("Hits", len(hits))
         report_files = [p for p in (best_csv, all_csv) if p]
@@ -323,7 +352,7 @@ class ColabFoldPredict(JobType):
         if ctx.params["as_complex"] and len(records) > 1:
             records = [("complex", ":".join(s for _, s in records))]
         fasta = write_fasta([(n.split()[0].replace("|", "_"), s) for n, s in records], ctx.path("colabfold_input.fasta"))
-        args = [ctx.executable("colabfold"), str(fasta), "colabfold_out", "--num-models", str(ctx.params["num_models"]),
+        args = [ctx.executable("colabfold"), str(fasta), str(ctx.path("colabfold_out")), "--num-models", str(ctx.params["num_models"]),
                 "--num-recycle", str(ctx.params["num_recycle"])]
         if ctx.params["templates"]:
             args.append("--templates")
@@ -445,7 +474,7 @@ class BoltzPredict(JobType):
 
     def run(self, ctx: JobContext) -> None:
         yaml_path = self.write_input(ctx)
-        args = [ctx.executable("boltz"), "predict", str(yaml_path), "--out_dir", "boltz_out", "--output_format", "mmcif",
+        args = [ctx.executable("boltz"), "predict", str(yaml_path), "--out_dir", str(ctx.path("boltz_out")), "--output_format", "mmcif",
                 "--diffusion_samples", str(ctx.params["diffusion_samples"]),
                 "--recycling_steps", str(ctx.params["recycling_steps"])]
         if ctx.params["use_msa_server"]:
@@ -462,16 +491,21 @@ class BoltzPredict(JobType):
             ctx.add_output("model" if i == 0 else f"model_{i + 1}", "model", mpath, f"Boltz-2 rank {i + 1}",
                            meta={"predicted": True})
         conf = next(iter(models[0].parent.glob(f"confidence_{models[0].stem}.json")), None)
-        if conf:
-            data = json.loads(conf.read_text())
+        try:
+            data = json.loads(conf.read_text()) if conf else {}
+        except (OSError, ValueError) as exc:
+            ctx.warn(f"Confidence scores not read ({conf.name}): {exc}")
+            data = {}
+        if isinstance(data, dict) and data:
             labels = {"confidence_score": "Confidence score", "complex_plddt": "Complex pLDDT", "ptm": "pTM",
                       "iptm": "ipTM", "complex_iplddt": "Interface pLDDT", "ligand_iptm": "Ligand ipTM"}
-            rows = [{"label": lab, "value": f"{float(data[k]):.3f}"} for k, lab in labels.items() if k in data]
+            values = {k: _number(data.get(k)) for k in labels}
+            rows = [{"label": lab, "value": f"{values[k]:.3f}"} for k, lab in labels.items() if values[k] is not None]
             ctx.add_metrics("Prediction confidence (rank 1)", rows)
-            if "iptm" in data:
-                ctx.add_highlight("ipTM", f"{float(data['iptm']):.2f}")
-            if "complex_plddt" in data:
-                ctx.add_highlight("pLDDT", f"{float(data['complex_plddt']):.2f}")
+            if values["iptm"] is not None:
+                ctx.add_highlight("ipTM", f"{values['iptm']:.2f}")
+            if values["complex_plddt"] is not None:
+                ctx.add_highlight("pLDDT", f"{values['complex_plddt']:.2f}")
 
 
 # ------------------------------------------------------------ Phenix helpers

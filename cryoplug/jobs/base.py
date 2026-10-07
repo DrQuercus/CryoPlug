@@ -11,7 +11,7 @@ import socket
 import subprocess
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Iterable
 
@@ -287,6 +287,9 @@ class JobContext:
                 pass
         self._current_proc: subprocess.Popen | None = None
         self._state_lock = threading.Lock()
+        self._started: float | None = None
+        self._start_files: set[str] | None = None  # job folder content when the job started (see snapshot)
+        self._input_listing: dict[Path, set[str]] | None = None  # content of the input folders at that time
 
     # ------------------------------------------------------------ logging
     def log(self, message: str, level: str = "info") -> None:
@@ -463,8 +466,11 @@ class JobContext:
                    meta: dict[str, Any] | None = None, inherit: Iterable[str] = ()) -> dict[str, Any]:
         file_list = [files] if isinstance(files, (str, Path)) else list(files)
         for f in file_list:
+            if not Path(f).exists():  # written next to an input instead? bring it back
+                self.rescue_stray_files([Path(f).name], dest=Path(f).parent)
             if not Path(f).exists():
-                raise JobError(f"Expected output file is missing: {f}")
+                raise JobError(f"Expected output file is missing: {f}. The program may have stopped on an error "
+                               "without returning a failure code: see the log.")
         full_meta = self.inherited_meta(*inherit)
         full_meta.update(meta or {})
         if type in ("map", "mask", "half_maps") and "box" not in (meta or {}):
@@ -551,7 +557,11 @@ class JobContext:
 
     # ------------------------------------------------------------- helpers
     def find_new_files(self, patterns: Iterable[str], since: float, root: str | Path | None = None) -> list[Path]:
-        """Files under ``root`` (default job dir) matching patterns, modified after ``since``, newest first."""
+        """Files under ``root`` (default job dir) matching patterns, written during the job, newest first.
+
+        A file counts as new when it was modified after ``since``, or when it did not exist when the job
+        started: the second test does not depend on the clocks of the compute node and of the file server,
+        which can disagree on a cluster."""
         root = Path(root) if root else self.job_dir
         found = []
         for dirpath, _dirs, files in os.walk(root):
@@ -559,11 +569,95 @@ class JobContext:
                 p = Path(dirpath) / fn
                 if any(fnmatch.fnmatch(fn, pat) for pat in patterns):
                     try:
-                        if p.stat().st_mtime >= since - 1:
+                        if self._absent_at_start(p) or p.stat().st_mtime >= since - 1:
                             found.append(p)
                     except OSError:
                         continue
         return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
+
+    # ------------------------------------------------------ stray outputs
+    def snapshot(self) -> None:
+        """Remember what exists when the job starts, in the job folder and in the folders of its inputs.
+
+        Some programs write their results next to their input files whatever the working directory
+        (LocScale 2 resolves a relative output path against the folder of the input map): files that
+        appear there during the job are brought back by :meth:`rescue_stray_files`."""
+        self._started = time.time()
+        self._start_files = {str(Path(d, f).relative_to(self.job_dir)) for d, _dirs, files in os.walk(self.job_dir) for f in files}
+        self._input_listing = {}
+        for d in self.input_dirs():
+            try:
+                self._input_listing[d] = set(os.listdir(d))
+            except OSError:
+                continue
+
+    def _absent_at_start(self, path: Path) -> bool:
+        if self._start_files is None:
+            return False
+        try:
+            return str(path.relative_to(self.job_dir)) not in self._start_files
+        except ValueError:
+            return False
+
+    def input_dirs(self) -> list[Path]:
+        """Folders holding this job's input files (as given and once symlinks are resolved), not the job folder."""
+        job = self.job_dir.resolve()
+        dirs: list[Path] = []
+        for inp in self.inputs.values():
+            for f in (inp.files if inp else []):
+                p = Path(f) if Path(f).is_absolute() else self.project_dir / f
+                try:
+                    parents = (p.parent, p.resolve().parent)
+                except (OSError, RuntimeError):  # symlink loop
+                    parents = (p.parent,)
+                for d in parents:
+                    try:
+                        if d.resolve() != job and d not in dirs and d.is_dir():
+                            dirs.append(d)
+                    except (OSError, RuntimeError):
+                        continue
+        return dirs
+
+    def rescue_stray_files(self, patterns: Iterable[str], since: float | None = None, suffixes: tuple[str, ...] = (),
+                           dest: str | Path | None = None) -> list[Path]:
+        """Move into the job folder (or ``dest``) the files matching ``patterns`` that a program wrote next to
+        this job's inputs instead. Only files that appeared, or changed, during the job are moved, and every
+        move is reported in the log."""
+        import shutil
+        patterns = list(patterns)
+        since = since if since is not None else self._started
+        target_dir = Path(dest) if dest else self.job_dir
+        moved: list[Path] = []
+        for d in self.input_dirs():
+            before = (self._input_listing or {}).get(d)
+            try:
+                names = sorted(os.listdir(d))
+            except OSError:
+                continue
+            for name in names:
+                if not any(fnmatch.fnmatch(name, pat) for pat in patterns):
+                    continue
+                if suffixes and not name.lower().endswith(suffixes):
+                    continue
+                src = d / name
+                try:
+                    if src.is_symlink() or not src.is_file():
+                        continue
+                    changed = since is not None and src.stat().st_mtime >= since - 1
+                except OSError:
+                    continue
+                if not ((before is not None and name not in before) or changed):
+                    continue
+                target_dir.mkdir(parents=True, exist_ok=True)
+                target = target_dir / name
+                n = 1
+                while target.exists():
+                    target = target_dir / f"{Path(name).stem}_{n}{Path(name).suffix}"
+                    n += 1
+                shutil.move(str(src), str(target))
+                self.warn(f"{name} was written next to an input ({d}) instead of this job's folder: moved to {target}")
+                moved.append(target)
+        return moved
 
     def link_input(self, src: str | Path, name: str | None = None) -> Path:
         """Symlink (or copy as fallback) an input file into the job directory."""
