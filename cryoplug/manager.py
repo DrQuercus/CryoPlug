@@ -393,6 +393,11 @@ class Manager:
                 "path": str(pdir / out["path"]),
                 "files": [str(pdir / f) for f in out.get("files", [out["path"]])],
                 "meta": out.get("meta", {}),
+                # the other outputs of the same job (e.g. the half maps that go with a map)
+                "siblings": {o["name"]: {"type": o["type"], "label": o.get("label", ""), "source": f"{ref['job']}.{o['name']}",
+                                         "path": str(pdir / o["path"]), "files": [str(pdir / f) for f in o.get("files", [o["path"]])],
+                                         "meta": o.get("meta", {})}
+                             for o in parent["outputs"] if o["name"] != ref["output"]},
             }
         return resolved, waiting, broken
 

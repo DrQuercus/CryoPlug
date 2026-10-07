@@ -9,11 +9,11 @@ installés sur votre serveur local :
 | Étape | Logiciels pilotés | Jobs CryoPlug |
 |---|---|---|
 | Import | CryoSPARC, RELION, fichiers MRC, PDB, AlphaFold DB, UniProt | `Import from CryoSPARC`, `Import maps`, `Import atomic model`, `Import sequence` |
-| Amélioration de carte | **LocScale 2** (model-free / pseudo-modèle / model-based / hybride), **EMmerNet**, **DeepEMhancer**, **EMReady**, **spIsoNet** (correction de l'anisotropie due à l'orientation préférentielle), Phenix `resolve_cryo_em`, `auto_sharpen`, `local_aniso_sharpen` | + FSC demi-cartes (masquée, corrigée par randomisation de phase), **résolution directionnelle / 3D FSC** et opérations de carte (main, B-factor, filtre, masque, boîte) intégrées |
+| Amélioration de carte | **LocScale 2** (model-free / pseudo-modèle / model-based / hybride), **EMmerNet**, **DeepEMhancer**, **EMReady**, **spIsoNet** (correction de l'anisotropie due à l'orientation préférentielle), Phenix `resolve_cryo_em`, `auto_sharpen`, `local_aniso_sharpen`, **résolution locale** (`local_resolution`), **cartes composites** de raffinements locaux (`combine_focused_maps`) | + FSC demi-cartes (masquée, corrigée par randomisation de phase), **résolution directionnelle / 3D FSC**, **création de masques** (densité, chaînes du modèle, densité proche du modèle ; dilatation et bord doux en Å) et opérations de carte (main, B-factor, filtre, masque, boîte) intégrées |
 | Construction de modèle | **ModelAngelo** (avec ou sans séquence) et **identification de chaînes inconnues** (`hmm_search`), **CryoAtom2** (protéines, ARN/ADN, complexes, identification par base de séquences), ColabFold/AlphaFold2, **Boltz-2** (complexes protéines/acides nucléiques/ligands), Phenix `process_predicted_model`, `dock_in_map`, ChimeraX `fitmap` | + restreintes de ligands (Phenix eLBOW), fusion et édition de modèles (gemmi) |
 | Reconstruction interactive | **ISOLDE** (ChimeraX), **Coot** | sessions ouvertes en un clic sur l'écran du serveur, ou paquet téléchargeable pour votre poste |
 | Affinement | Phenix `real_space_refine`, **Servalcat** (demi-cartes, cartes Fo-Fc), `phenix.douse` (eaux) | restreintes de ligands branchées directement sur l'affinement |
-| Validation | MolProbity, EMRinger, Phenix `validation_cryoem` | + **Q-score**, FSC carte-modèle, CC_mask, inclusion d'atomes intégrés (sans logiciel externe) |
+| Validation | MolProbity, EMRinger, Phenix `validation_cryoem`, **checkMySequence** (erreurs de registre de séquence), **rapport officiel wwPDB** (service de validation OneDep) | + **Q-score**, FSC carte-modèle, CC_mask, inclusion d'atomes intégrés (sans logiciel externe) |
 | Dépôt | — | **Checklist pré-dépôt** automatique et **paquet OneDep** : mmCIF, cartes, FSC XML, niveau de contour recommandé, brouillon de *Méthodes* avec citations et de « Table 1 » |
 
 ![Jobs d'un projet](docs/images/jobs.png)
@@ -33,6 +33,12 @@ installés sur votre serveur local :
 | Validation carte-modèle (Q-score, FSC) | Paquet de dépôt (méthodes, Table 1) | Boltz-2 (complexe + ligands) |
 |---|---|---|
 | ![](docs/images/validation.png) | ![](docs/images/package.png) | ![](docs/images/boltz.png) |
+
+| **Résolution locale** dans le visualiseur (bleu = meilleure, échelle réglable) | **Création de masque** : densité proche des chaînes choisies, coupes de contrôle |
+|---|---|
+| ![](docs/images/viewer_locres.png) | ![](docs/images/mask.png) |
+| **Résolution locale par chaîne et par résidu** | **Registre de séquence** (checkMySequence) |
+| ![](docs/images/local_resolution.png) | ![](docs/images/checkmysequence.png) |
 
 *Captures réalisées avec le jeu de données synthétique `cryoplug demo-data` et des programmes de substitution
 (aucun calcul réel de ModelAngelo, CryoAtom2, Phenix… dans ces images).*
@@ -145,6 +151,12 @@ executable = "/opt/coot/bin/coot"
 [tools.colabfold]
 bin_dir = "/opt/localcolabfold/colabfold-conda/bin"
 
+[tools.checkmysequence]     # conda env avec hmmer + checkMySequence (gitlab.com/gchojnowski/checkmysequence)
+setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate checkmysequence"
+
+[tools.onedep]              # client du serveur de validation wwPDB : pip install onedep_api (accès internet requis)
+setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate onedep"
+
 [interactive]
 display = ":0"   # écran (ou bureau TurboVNC, ex. ":1") où ouvrir Coot / ISOLDE depuis le navigateur
 ```
@@ -226,6 +238,9 @@ Une interface entre CryoSPARC et ChimeraX, dessinée par Mol\* (qui fonctionne h
   `bg white`, `slab 30`, `lighting soft`, `slices`, `fullres #1`, `save figure.png scale 3`…
 - **Clavier** : **+ / −** seuil de la carte active (0,1 σ, Maj : 0,5 σ), **M** style suivant, **R** vue
   initiale, **S** rotation, **L** coupes, **:** ligne de commande, **?** aide.
+- **Coloration par résolution locale** : menu *Colour* d'une carte (ou `color #1 localres 3 6`), échelle bleu
+  (meilleure) → rouge (moins bonne) réglable avec sa légende ; le bouton *View 3D* d'un job *Local resolution* (ou
+  d'un import CryoSPARC avec carte de résolution locale) ouvre directement la carte coloriée.
 - Les cartes arrivent en **aperçu binné** (au plus 200 voxels de côté) pour la rapidité ; le menu **⋯**
   d'une carte (ou `fullres #1`) charge le fichier d'origine.
 
@@ -250,7 +265,10 @@ Le job prépare la session (modèle + cartes associées, `clipper associate`, `i
   `mask.mrc`, `fsc.xml` (format EMDB), rapports de validation, `CHECKLIST.md` (valeurs à saisir dans
   OneDep : contour, résolution, taille de pixel, symétrie), `methods_draft.md` (texte + citations générés
   depuis l'historique des jobs) et `table1_draft.md`.
-- Dernière étape recommandée : le serveur de validation officiel wwPDB (https://validate.wwpdb.org).
+- **Sequence register check (checkMySequence)** : décalages de registre, chaînes sans séquence correspondante,
+  différences avec la séquence attendue.
+- **wwPDB validation report** : le rapport officiel (PDF + XML) calculé par le service de validation OneDep du
+  wwPDB, avec les centiles ; le modèle et la carte primaire sont envoyés au serveur du wwPDB.
 
 ## 4. Lanes, GPU et cluster SLURM
 
@@ -363,16 +381,16 @@ même navigateur ne peut pas piloter CryoPlug. Sur un poste partagé entre plusi
 
 La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes) est dans
 [docs/JOBS.md](docs/JOBS.md), générée depuis `cryoplug/jobhelp.py` par `cryoplug docs-jobs`.
-`cryoplug jobtypes` liste les 39 types de jobs :
+`cryoplug jobtypes` liste les 44 types de jobs :
 
 | Catégorie | Jobs |
 |---|---|
 | Import | Import from CryoSPARC · Import maps · Import atomic model (fichier / PDB / AlphaFold DB) · Import sequence (FASTA / UniProt, séparation protéine/ARN/ADN) |
-| Map processing | Half-map FSC · Directional resolution (3D FSC) · Map operations · LocScale 2 · EMmerNet · DeepEMhancer · EMReady · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
+| Map processing | Half-map FSC · Directional resolution (3D FSC) · Local resolution (Phenix) · Create mask · Composite map (focused maps) · Map operations · LocScale 2 · EMmerNet · DeepEMhancer · EMReady · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
 | Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
 | Interactive | ISOLDE session · Coot session |
 | Refinement | Real-space refinement (Phenix) · Refinement (Servalcat) · Add waters (phenix.douse) |
-| Validation | Comprehensive validation (Phenix) · MolProbity · EMRinger · Map-model validation (Q-score, FSC) |
+| Validation | Comprehensive validation (Phenix) · MolProbity · EMRinger · Map-model validation (Q-score, FSC) · Sequence register check (checkMySequence) · wwPDB validation report (OneDep) |
 | Deposition | Pre-deposition checks · Deposition package |
 | Utilities | Model operations · Merge models · Render images (ChimeraX) · Custom command |
 

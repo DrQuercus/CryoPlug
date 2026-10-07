@@ -77,6 +77,15 @@ TOOLS: dict[str, ToolDef] = {
                 "Open-source structure prediction of protein / nucleic-acid / ligand complexes (AlphaFold3-class).",
                 "https://github.com/jwohlwend/boltz",
                 "Passaro S. et al. (2025) Boltz-2, bioRxiv; Wohlwend J. et al. (2024) Boltz-1, bioRxiv."),
+        ToolDef("checkmysequence", "checkMySequence", ["checkmysequence"],
+                "Sequence-assignment validation: register shifts, unidentified chains, sequence mismatches.",
+                "https://gitlab.com/gchojnowski/checkmysequence",
+                "Chojnowski G. (2022) Acta Cryst. D78, 806-816.", version_args=["--version"]),
+        ToolDef("onedep", "wwPDB validation client (OneDep API)", ["onedep_validate_cli"],
+                "Official wwPDB validation report from the OneDep validation web service (pip install onedep_api). "
+                "Needs internet access from the CryoPlug server.",
+                "https://www.wwpdb.org/validation/onedep-validation-web-service-interface",
+                "Gore S. et al. (2017) Structure 25, 1916-1927.", version_args=["--version"]),
         ToolDef("shell", "Shell (custom commands)", ["bash"],
                 "Environment used by the Custom command job.", "", ""),
     ]

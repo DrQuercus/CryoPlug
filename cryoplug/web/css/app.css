@@ -156,7 +156,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); out
 @keyframes pulse { 50% { opacity: .35; } }
 .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2);
   border: 1px solid var(--border); white-space: nowrap; }
-.tag.type-map, .tag.type-half_maps, .tag.type-mask { background: rgba(42, 120, 214, .1); }
+.tag.type-map, .tag.type-half_maps, .tag.type-mask, .tag.type-locres { background: rgba(42, 120, 214, .1); }
 .tag.type-model { background: rgba(235, 104, 52, .12); }
 .tag.type-sequence { background: rgba(27, 175, 122, .12); }
 .tag.type-report, .tag.type-fsc { background: rgba(74, 58, 167, .1); }

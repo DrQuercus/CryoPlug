@@ -187,6 +187,96 @@ Final:
 EOF
 """)
     _script(d / "phenix.version", "echo 'Phenix fake 1.21'\n")
+    # local resolution worsening from 2.5 Å at the centre of the box towards the edges
+    _script(d / "phenix.local_resolution", f"""
+echo "fake phenix.local_resolution $@"
+{sys.executable} - "$1" <<PY
+import sys
+import numpy as np
+sys.path.insert(0, '{ROOT}')
+from cryoplug.mrc import MapVolume
+half = MapVolume.read(sys.argv[1])
+z, y, x = np.indices(half.data.shape)
+c = (np.array(half.data.shape) - 1) / 2
+r = np.sqrt((z - c[0]) ** 2 + (y - c[1]) ** 2 + (x - c[2]) ** 2) * half.pixel_size
+half.like(2.5 + 0.12 * r).write('local_resolution_map.ccp4')
+PY
+echo "Wrote local_resolution_map.ccp4"
+""")
+    # combine_focused_maps: average of the maps (and of the half maps), one contribution map per input
+    _script(d / "phenix.combine_focused_maps", f"""
+echo "fake phenix.combine_focused_maps $@"
+{sys.executable} - "$@" <<PY
+import sys
+import numpy as np
+sys.path.insert(0, '{ROOT}')
+from cryoplug.mrc import MapVolume
+opts = {{}}
+for a in sys.argv[1:]:
+    if '=' in a:
+        k, v = a.split('=', 1)
+        opts.setdefault(k, []).append(v)
+def mean(paths, name):
+    vols = [MapVolume.read(p) for p in paths]
+    vols[0].like(sum(v.data for v in vols) / len(vols)).write(name)
+mean(opts['map_file'], 'combined_map.ccp4')
+for i, p in enumerate(opts['map_file'], 1):
+    MapVolume.read(p).write(f'contribution_map_{{i}}.ccp4')
+if 'half_map_1_file' in opts:
+    mean(opts['half_map_1_file'], 'combined_half_map_A.ccp4')
+    mean(opts['half_map_2_file'], 'combined_half_map_B.ccp4')
+PY
+""")
+    # checkMySequence: one register shift in chain A (JSON written where --jsonout says, PDF plot in the cwd)
+    _script(d / "checkmysequence", """
+echo "fake checkMySequence $@"
+out=""; plot=0; model=""
+while [ $# -gt 0 ]; do case "$1" in --jsonout) out="$2"; shift;; --modelin) model="$2"; shift;; --plot) plot=1;; esac; shift; done
+[ -n "$out" ] || exit 0
+cat > "$out" <<'JSON'
+{"clean_report": false, "indexing_issues": {}, "unidentified_chains": {}, "sequence_mismatches": {}, "tracing_issues": {},
+ "register_shifts": {"protein": [{"chain_id_reference": "A", "resid_start_reference": 5, "resid_end_reference": 18,
+   "resid_start_new": 7, "resid_end_new": 20, "shift": 2, "mlogpv": 1.42, "tracing_issues": false, "si": 100.0,
+   "model_seq": "kqrQISFVKSHFSrq", "new_seq": "kqrqiSFVKSHFSRQ"}]},
+ "raw_results": {"protein": {"A": [{"s": 1, "e": 20, "mlogpv": 0.9, "match": true, "error": false},
+                                   {"s": 3, "e": 22, "mlogpv": 1.42, "match": false, "error": true}]}}}
+JSON
+[ "$plot" = 1 ] && printf '%%PDF-1.4\n' > "$(basename "${model%.*}")_plot.pdf"
+echo " ==> Output wrote to $out"
+""")
+    # wwPDB OneDep validation client: session file, uploads, status, downloads
+    _script(d / "onedep_validate_cli", """
+echo "fake onedep $@"
+sess=""; out=""; otype=""
+while [ $# -gt 0 ]; do case "$1" in
+  --session_file) sess="$2"; shift;;
+  --new_session) echo "fake-session-123" > "$sess";;
+  --input_file) if [ ! -s "$2" ]; then echo "OneDep error: Input file access or processing error"; exit 0; fi; shift;;
+  --status) echo "OneDep status: completed";;
+  --output_file) out="$2"; shift;;
+  --output_type) otype="$2"; shift;;
+esac; shift; done
+[ -s "$sess" ] || { echo "Error reading session file"; exit 1; }
+if [ -n "$out" ]; then case "$otype" in
+  validation-report-full) printf '%%PDF-1.4\n%% fake wwPDB report\n' > "$out";;
+  validation-data) cat > "$out" <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<wwPDB-validation-information>
+  <Entry clashscore="3.21" absolute-percentile-clashscore="92.0" relative-percentile-clashscore="95.1"
+         percent-rama-outliers="0.10" absolute-percentile-percent-rama-outliers="81" relative-percentile-percent-rama-outliers="83"
+         percent-rota-outliers="1.80" absolute-percentile-percent-rota-outliers="15" relative-percentile-percent-rota-outliers="22"
+         atom_inclusion_all_atoms="0.85" EMDB-resolution="3.2"/>
+  <ModelledSubgroup chain="A" resnum="12" resname="LEU" rama="OUTLIER" rota="OUTLIER"><clash atom="CD1" clashmag="0.5"/></ModelledSubgroup>
+  <ModelledSubgroup chain="A" resnum="13" resname="ALA" rama="Favored"/>
+</wwPDB-validation-information>
+XML
+  ;;
+  validation-data-cif) echo "data_validation" > "$out";;
+  validation-report-slider) echo '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="10"><rect width="40" height="10"/></svg>' > "$out";;
+  validation-report-log) echo "validation finished" > "$out";;
+esac; fi
+exit 0
+""")
     # Mimics LocScale 2.4.1 path handling: relative -o / -op are resolved against the folder of the first
     # input map (not the working directory), and the inputs are copied into the processing folder.
     _script(d / "locscale", """
@@ -216,7 +306,7 @@ def manager(tmp_path, fakebin) -> Manager:
         browse_roots=[str(tmp_path.parent), "/tmp"],
         lanes=[LaneConfig(name="local", type="local", max_jobs=4, gpus=[0, 1])],
         tools={k: ToolConfig(name=k, bin_dir=str(fakebin))
-               for k in ("modelangelo", "phenix", "locscale", "cryoatom", "boltz", "spisonet")},
+               for k in ("modelangelo", "phenix", "locscale", "cryoatom", "boltz", "spisonet", "checkmysequence", "onedep")},
     )
     m = Manager(cfg)
     m.check_tools()

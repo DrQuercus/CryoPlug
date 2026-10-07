@@ -31,6 +31,7 @@ DATA_TYPES = {
     "half_maps": "Half maps",
     "map": "Map",
     "mask": "Mask",
+    "locres": "Local resolution map",
     "model": "Atomic model",
     "sequence": "Sequence",
     "fsc": "FSC curve",
@@ -110,11 +111,12 @@ class Slot:
     required: bool = True
     help: str = ""
     prefer: tuple[str, ...] = ()  # output names suggested first when pre-filling (default: sharpened map first)
+    group: str = ""  # numbered slots of a group: the builder shows the next empty one once the previous is filled
 
     def to_dict(self) -> dict[str, Any]:
         prefer = self.prefer or (("map_sharp", "map") if "map" in self.types else ())
         return {"name": self.name, "types": list(self.types), "label": self.label or self.name.replace("_", " ").capitalize(),
-                "required": self.required, "help": self.help, "prefer": list(prefer)}
+                "required": self.required, "help": self.help, "prefer": list(prefer), "group": self.group}
 
 
 @dataclass
@@ -243,6 +245,15 @@ class InputData:
         self.meta: dict[str, Any] = dict(data.get("meta") or {})
         self.source: str = data.get("source", "")
         self.label: str = data.get("label", "")
+        self.siblings: dict[str, dict[str, Any]] = dict(data.get("siblings") or {})
+
+    def sibling(self, *names: str, type: str | None = None) -> "InputData | None":
+        """Another output of the job this input comes from (first of ``names`` found, optionally of a given type)."""
+        for name in names:
+            data = self.siblings.get(name)
+            if data and (type is None or data.get("type") == type):
+                return InputData(data)
+        return None
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"InputData({self.source}, {self.type}, {self.path})"
@@ -473,7 +484,7 @@ class JobContext:
                                "without returning a failure code: see the log.")
         full_meta = self.inherited_meta(*inherit)
         full_meta.update(meta or {})
-        if type in ("map", "mask", "half_maps") and "box" not in (meta or {}):
+        if type in ("map", "mask", "half_maps", "locres") and "box" not in (meta or {}):
             try:
                 from cryoplug.mrc import map_info
                 info = map_info(file_list[0])
@@ -500,9 +511,14 @@ class JobContext:
         try:
             from cryoplug.imaging import trace_image, write_png
             target = self.path(f"thumb_{name}.png")
-            if type in ("map", "half_maps"):
+            if type in ("map", "half_maps", "mask"):
                 from cryoplug.mrc import MapVolume, projection_image
                 write_png(target, projection_image(MapVolume.read(path)))
+                return target
+            if type == "locres":
+                from cryoplug.imaging import resolution_slice
+                from cryoplug.mrc import MapVolume
+                write_png(target, resolution_slice(MapVolume.read(path)))
                 return target
             if type == "model":
                 from cryoplug.modelio import ca_traces, read_structure
@@ -544,8 +560,9 @@ class JobContext:
     def add_table(self, title: str, columns: list[str], rows: list[list[Any]]) -> None:
         self._section("table", title, columns=columns, rows=rows)
 
-    def add_text(self, title: str, text: str) -> None:
-        self._section("text", title, text=text)
+    def add_text(self, title: str, text: str, mono: bool = False) -> None:
+        """Free text; ``mono`` for aligned content (sequence alignments)."""
+        self._section("text", title, text=text, **({"mono": True} if mono else {}))
 
     def add_image(self, title: str, path: str | Path) -> None:
         self._section("image", title, path=self.rel(path))

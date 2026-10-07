@@ -207,7 +207,11 @@ function outputViewItems(job, out) {
       const parentOut = ref && (state.jobsByUid[ref.job]?.outputs || []).find((o) => o.name === ref.output);
       if (parentOut) items.push({ kind: 'map', path: parentOut.path, label: `${ref.job} ${parentOut.label || parentOut.name}` });
     }
-  } else if (['map', 'mask', 'half_maps'].includes(out.type)) {
+  } else if (out.type === 'locres' && out.meta?.colour_map) {
+    // a local resolution map is shown as the colours of the map it describes
+    items.push({ kind: 'map', path: out.meta.colour_map, label: `${job.uid} ${out.meta.colour_map.split('/').pop()}`,
+      colorBy: out.path, colorRange: out.meta.display_range });
+  } else if (['map', 'mask', 'half_maps', 'locres'].includes(out.type)) {
     items.push({ kind: 'map', path: out.path, label: `${job.uid} ${out.label}`, ...(out.type === 'mask' ? { otype: 'mask' } : {}) });
   }
   return items;
@@ -331,7 +335,7 @@ function reportSection(sec, puid) {
       h('tbody', {}, sec.rows.map((r) => h('tr', {}, r.map((cell, i) => h('td', {},
         i === statusCol ? statusMark(String(cell).toLowerCase()) : String(cell)))))))));
   } else if (sec.kind === 'text') {
-    wrap.append(h('h4', {}, sec.title), h('div', { class: 'box', style: { whiteSpace: 'pre-wrap' } }, sec.text));
+    wrap.append(h('h4', {}, sec.title), h('div', { class: sec.mono ? 'box mono' : 'box', style: { whiteSpace: 'pre-wrap', overflowX: 'auto' } }, sec.text));
   } else if (sec.kind === 'image') {
     wrap.append(h('h4', {}, sec.title), h('a', { href: api.fileUrl(puid, sec.path), target: '_blank', rel: 'noopener' },
       h('img', { src: api.fileUrl(puid, sec.path), alt: sec.title, style: { maxWidth: '100%', borderRadius: '8px' } })));

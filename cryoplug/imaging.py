@@ -37,6 +37,34 @@ def write_png(path: str | Path, image: np.ndarray) -> Path:
     return path
 
 
+# Local resolution colour scale, best (blue) to worst (red); the 3D viewer uses the same stops.
+RESOLUTION_STOPS = [(43, 75, 160), (47, 143, 216), (60, 192, 192), (125, 211, 107), (242, 224, 74), (243, 156, 52), (215, 53, 43)]
+
+
+def colour_scale(values: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    """RGB (..., 3) uint8 colours of ``values`` on the local resolution scale between ``lo`` and ``hi``."""
+    stops = np.array(RESOLUTION_STOPS, dtype=np.float64)
+    t = np.clip((np.asarray(values, dtype=np.float64) - lo) / ((hi - lo) or 1.0), 0, 1) * (len(stops) - 1)
+    i = np.minimum(t.astype(int), len(stops) - 2)
+    f = (t - i)[..., None]
+    return (stops[i] * (1 - f) + stops[i + 1] * f).astype(np.uint8)
+
+
+def resolution_slice(vol, size: int = 160) -> np.ndarray:
+    """Central section of a local resolution map on the colour scale (5th-95th percentile), background
+    (values outside 0-100 Å) transparent; RGBA for job card thumbnails."""
+    from cryoplug.mrc import bin_map, preview_factor
+    work = bin_map(vol, preview_factor(vol.shape_xyz, size)) if max(vol.shape_xyz) > size else vol
+    sec = work.data[work.data.shape[0] // 2][::-1]
+    ok = np.isfinite(sec) & (sec > 0) & (sec < 100)
+    img = np.zeros(sec.shape + (4,), dtype=np.uint8)
+    if ok.any():
+        lo, hi = np.percentile(sec[ok], [5, 95])
+        img[..., :3] = colour_scale(np.where(ok, sec, hi), float(lo), float(hi))
+        img[..., 3] = np.where(ok, 255, 0)
+    return img
+
+
 def _draw_line(img: np.ndarray, x0: int, y0: int, x1: int, y1: int, color: tuple[int, ...]) -> None:
     h, w = img.shape[:2]
     n = max(abs(x1 - x0), abs(y1 - y0), 1)

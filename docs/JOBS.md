@@ -166,6 +166,63 @@ Affûtage global optimisé pour maximiser le détail et la connectivité (phenix
 
 **Étapes suivantes** : ModelAngelo build, Rigid-body fit (ChimeraX)
 
+### Composite map (focused maps)
+
+`composite_map` — logiciel : `phenix`
+
+Assemble les cartes des raffinements locaux (focalisés) en une carte composite (phenix.combine_focused_maps) : chaque partie du modèle prend la carte où il s'ajuste le mieux. Les demi-cartes de chaque carte sont combinées de la même façon quand elles existent.
+
+**Quand l'utiliser**
+
+- Gros complexe résolu par plusieurs raffinements locaux dans CryoSPARC (une carte nette par région).
+- Construire et affiner un modèle unique dans une seule carte au lieu de jongler entre les cartes locales.
+- Préparer le dépôt : l'EMDB attend la carte composite avec les cartes locales et la carte consensus.
+
+**À éviter / pièges**
+
+- Rapporter la FSC de la carte composite comme une FSC gold-standard : donnez celles des cartes locales.
+- Cartes dont les boîtes ou les tailles de pixel diffèrent beaucoup : vérifiez-les avant.
+
+**Entrées conseillées** : Le modèle ajusté dans la carte consensus, la carte consensus (référence) et jusqu'à 8 cartes locales (par exemple un import CryoSPARC par raffinement local).
+
+**Conseils**
+
+- Les demi-cartes sont retrouvées automatiquement à côté de chaque carte (même job) : il faut les avoir pour toutes.
+- Les demi-cartes composites permettent ensuite la FSC et la résolution locale de la carte composite.
+- Un emplacement « Focused map » de plus apparaît dès que le précédent est rempli.
+
+**Étapes suivantes** : Local resolution, Real-space refinement (Phenix), ISOLDE session
+
+### Create mask
+
+`create_mask` — intégré (aucun logiciel externe)
+
+Crée un masque à bord doux : à partir de la densité (passe-bas + seuil), des atomes de chaînes choisies, ou de la densité proche de ces atomes. Dilatation et bord doux en Å, comme dans CryoSPARC ; combinaison avec un autre masque (union, soustraction, intersection).
+
+**Quand l'utiliser**
+
+- Masque de raffinement local d'une sous-partie d'un gros complexe (chaînes choisies + densité voisine).
+- Masque FSC, LocScale ou spIsoNet quand celui de CryoSPARC manque ou ne convient pas.
+- Soustraction de signal : masque du complexe moins la région à garder (« subtract »).
+- Masque à fournir à l'EMDB avec la carte déposée.
+
+**À éviter / pièges**
+
+- Masque trop serré (dilatation + bord < 6 Å) pour la FSC : il gonfle la résolution.
+- Seuil automatique sans masse attendue sur une carte très bruitée : vérifiez la valeur et les coupes.
+
+**Entrées conseillées** : Une carte (elle fixe la boîte et le pixel) ; un modèle ajusté pour les masques par chaînes ; un second masque pour les combinaisons.
+
+**Conseils**
+
+- Raffinement local : densité proche du modèle (6–8 Å), dilatation 3–5 Å, bord 8–12 Å.
+- FSC / LocScale : densité filtrée à 15 Å, dilatation 3 Å, bord 6 Å.
+- Donnez la masse attendue (kDa) pour un seuil automatique fiable ; sinon la masse des atomes choisis est utilisée.
+- Les coupes du rapport montrent le masque (orange) sur la carte : vérifiez qu'il ne coupe pas de densité.
+- Le chemin du fichier est donné pour l'importer dans CryoSPARC (Import 3D Volumes, type mask).
+
+**Étapes suivantes** : Half-map FSC, LocScale 2, Anisotropy correction (spIsoNet), Local resolution
+
 ### DeepEMhancer
 
 `deepemhancer` — logiciel : `deepemhancer` · GPU
@@ -359,6 +416,35 @@ Affûtage local et anisotrope avec mise à l'échelle dépendant de la résoluti
 - Avec un modèle, le résultat suit mieux la résolution locale réelle.
 
 **Étapes suivantes** : ModelAngelo build, Real-space refinement (Phenix)
+
+### Local resolution
+
+`local_resolution` — logiciel : `phenix`
+
+Carte de résolution locale à partir des deux demi-cartes (phenix.local_resolution) : distribution dans la molécule et, avec un modèle, résolution de chaque chaîne et de chaque résidu. Le visualiseur 3D colorie une carte avec.
+
+**Quand l'utiliser**
+
+- Gros complexe : savoir quelles sous-unités sont bien résolues et lesquelles demandent un raffinement local.
+- Avant de construire ou d'interpréter des chaînes latérales dans une région périphérique.
+- Figure de résolution locale pour l'article et l'EMDB.
+- Après une carte composite (avec ses demi-cartes composites).
+
+**À éviter / pièges**
+
+- Demi-cartes non indépendantes (après spIsoNet, LocScale ou un débruitage commun) : la résolution serait surestimée.
+- Demi-cartes masquées ou filtrées : donnez les demi-cartes brutes.
+
+**Entrées conseillées** : Demi-cartes non filtrées ; la carte à colorier (affûtée), le masque FSC et le modèle sont facultatifs.
+
+**Conseils**
+
+- Le tableau par chaîne classe les sous-unités de la mieux à la moins bien résolue.
+- model_local_resolution.cif porte la résolution locale dans la colonne B-factor (coloriage dans ChimeraX, Coot, PyMOL).
+- Dans le visualiseur : menu Colour de la carte → Local resolution ; l'échelle va du 5e au 95e centile.
+- Une carte de résolution locale importée de CryoSPARC s'utilise de la même façon.
+
+**Étapes suivantes** : Create mask, LocScale 2, Map-model validation (Q-score, FSC)
 
 ### Map operations
 
@@ -802,7 +888,7 @@ Métriques carte–modèle intégrées : Q-score par atome et par résidu compar
 - Q-score moyen proche de la valeur attendue à cette résolution : bon accord ; résidus avec Q < 0,3 : à revoir.
 - La FSC carte–modèle à 0,5 doit être proche de la résolution FSC demi-cartes à 0,143.
 
-**Étapes suivantes** : ISOLDE session, Pre-deposition checks
+**Étapes suivantes** : ISOLDE session, Sequence register check (checkMySequence), Pre-deposition checks
 
 ### MolProbity geometry
 
@@ -826,6 +912,59 @@ Géométrie seule : clashs, Ramachandran, rotamères, déviations Cβ, CaBLAM (M
 
 **Étapes suivantes** : Coot session, ISOLDE session
 
+### Sequence register check (checkMySequence)
+
+`checkmysequence` — logiciel : `checkmysequence`
+
+Vérifie l'attribution de séquence du modèle dans la carte (checkMySequence) : décalages de registre, chaînes qui ne correspondent à aucune séquence, différences avec la séquence attendue, ruptures de chaîne sans trou de numérotation.
+
+**Quand l'utiliser**
+
+- Avant tout dépôt : un registre décalé passe inaperçu dans MolProbity et dans les scores carte–modèle.
+- Après une construction automatique (ModelAngelo, CryoAtom2) ou une reconstruction manuelle d'une région floue.
+- Gros complexe : vérifier que chaque chaîne porte la bonne séquence (sous-unités paralogues).
+
+**À éviter / pièges**
+
+- Cartes à plus de 4–4,5 Å : les chaînes latérales ne sont plus assez visibles, les résultats deviennent peu fiables.
+
+**Entrées conseillées** : Le modèle, la carte dans laquelle il a été construit et toutes les séquences de l'échantillon (FASTA).
+
+**Conseils**
+
+- Un décalage signalé indique de combien de résidus déplacer la séquence : corrigez dans Coot ou ISOLDE puis relancez.
+- « Tracing issues » : des fragments voisins proposent des décalages différents, le tracé de la chaîne est douteux.
+- Une chaîne « non identifiée » manque souvent du FASTA, ou a été construite hors de la densité.
+- Il faut HMMER (hmmsearch) dans l'environnement de checkMySequence.
+
+**Étapes suivantes** : ISOLDE session, Coot session, wwPDB validation report (OneDep)
+
+### wwPDB validation report (OneDep)
+
+`wwpdb_validation` — logiciel : `onedep`
+
+Rapport de validation officiel du wwPDB (PDF et XML), calculé par le service de validation OneDep : le même document que reçoivent les journaux et les relecteurs.
+
+**Quand l'utiliser**
+
+- Modèle final, juste avant le dépôt : on découvre les problèmes avant les annotateurs.
+- Pour joindre le rapport à la soumission d'un article.
+
+**À éviter / pièges**
+
+- Données confidentielles que votre équipe ne veut pas envoyer : le modèle et la carte sont transmis au serveur du wwPDB.
+- Modèle encore en cours d'affinement : utilisez d'abord les validations locales (plus rapides).
+
+**Entrées conseillées** : Le modèle final et la carte primaire (celle qui sera déposée).
+
+**Conseils**
+
+- Nécessite le client du wwPDB (pip install onedep_api) et un accès internet depuis le serveur CryoPlug.
+- Les centiles comparent votre modèle à toutes les entrées de la PDB et à celles de résolution voisine : plus haut, c'est mieux.
+- Une grosse entrée EM peut demander une heure ou plus de calcul côté wwPDB : réglez « Maximum wait » au besoin.
+
+**Étapes suivantes** : Deposition package
+
 ## Dépôt
 
 ### Deposition package
@@ -847,7 +986,7 @@ Assemble tout le nécessaire au dépôt wwPDB/EMDB : mmCIF, cartes, FSC XML, rap
 **Conseils**
 
 - Relisez methods_draft.md et table1_draft.md : les cases de collecte de données restent à remplir.
-- Passez ensuite le serveur de validation officiel wwPDB (validate.wwpdb.org).
+- Lancez aussi le job « wwPDB validation report » : le rapport officiel, celui que verront les relecteurs.
 
 ### Pre-deposition checks
 
@@ -865,7 +1004,7 @@ Checklist automatique avant OneDep : cohérence cartes/demi-cartes/masque, modè
 
 - Corrigez les FAIL ; chaque WARN doit être compris et, si besoin, justifié auprès des annotateurs.
 
-**Étapes suivantes** : Deposition package
+**Étapes suivantes** : Deposition package, wwPDB validation report (OneDep)
 
 ## Utilitaires
 

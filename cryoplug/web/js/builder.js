@@ -182,7 +182,15 @@ function renderInputs(flash = []) {
   if (!inputsBox) return;
   const flashed = new Set([].concat(flash || []));
   const t = state.types[b.type];
-  const rows = t.inputs.map((slot) => {
+  // grouped slots (e.g. focused maps 1..8): show the filled ones and the first empty one only
+  const emptyShown = new Set();
+  const visible = t.inputs.filter((slot) => {
+    if (!slot.group || b.inputs[slot.name]) return true;
+    if (emptyShown.has(slot.group)) return false;
+    emptyShown.add(slot.group);
+    return true;
+  });
+  const rows = visible.map((slot) => {
     const cands = compatibleOutputs(slot, b.editing?.uid);
     const cur = b.inputs[slot.name];
     const curKey = cur ? `${cur.job}|${cur.output}` : '';
@@ -190,6 +198,7 @@ function renderInputs(flash = []) {
       if (!e.target.value) delete b.inputs[slot.name];
       else { const [job, output] = e.target.value.split('|'); b.inputs[slot.name] = { job, output }; }
       box.classList.toggle('filled', !!e.target.value);
+      if (slot.group) renderInputs(); // reveal (or hide) the next slot of the group
     } }, h('option', { value: '' }, cands.length ? '— not connected —' : '— no compatible output yet —'),
     cands.map((c) => h('option', { value: `${c.job.uid}|${c.output.name}`, selected: `${c.job.uid}|${c.output.name}` === curKey }, slotLabel(c))));
     if (cur && !cands.some((c) => `${c.job.uid}|${c.output.name}` === curKey)) {

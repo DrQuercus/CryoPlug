@@ -17,6 +17,7 @@ const HINT = 'Left-drag rotate · right-drag move · wheel zoom · click an atom
 const V = {
   project: null, items: [], nextId: 1, active: null, mapColors: 0, full: false,
   background: 0x000000, spin: false, slab: null, ortho: false, soft: false,
+  locres: [], // local resolution maps of the project: [{ path, label, range, colourMap }]
 };
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -61,7 +62,10 @@ const activeMap = () => (V.active?.kind === 'map' ? V.active : V.items.find((i) 
 const activeModel = () => (V.active?.kind === 'model' ? V.active : V.items.find((i) => i.kind === 'model'));
 
 function syncHash() {
-  const items = V.items.map((i) => ({ kind: i.kind, path: i.path, label: i.label, ...(i.otype && i.otype !== 'map' ? { otype: i.otype } : {}) }));
+  const items = V.items.map((i) => ({
+    kind: i.kind, path: i.path, label: i.label, ...(i.otype && i.otype !== 'map' ? { otype: i.otype } : {}),
+    ...(i.colorBy ? { colorBy: i.colorBy.path, colorRange: [i.colorBy.min, i.colorBy.max] } : {}),
+  }));
   history.replaceState(null, '', `${location.pathname}${location.search}#${encodeURIComponent(JSON.stringify({ project: V.project, items }))}`);
   const labels = V.items.map((i) => i.label);
   $('vw-title').textContent = labels.length ? `${V.project} · ${labels.join('  ·  ')}` : V.project;
@@ -93,10 +97,53 @@ async function addMap(spec, withModel) {
     item.id = V.nextId++;
     V.items.push(item);
     await scene.showMap(item);
-    return item;
   } finally {
     loaded();
   }
+  if (spec.colorBy) {
+    const source = V.locres.find((s) => s.path === spec.colorBy) || { path: spec.colorBy, label: spec.colorBy.split('/').pop() };
+    try {
+      await applyColorBy(item, { ...source, range: spec.colorRange || source.range });
+    } catch (err) {
+      fail(err, 'Colouring by local resolution: ');
+    }
+  }
+  return item;
+}
+
+// Local resolution maps of the project (outputs of type locres, or CryoSPARC map_locres of older projects).
+function collectLocres(jobs) {
+  const found = [];
+  for (const job of [...jobs].sort((a, b) => b.num - a.num)) {
+    for (const o of job.outputs || []) {
+      if (o.type === 'locres' || o.name === 'map_locres') {
+        found.push({ path: o.path, label: `${job.uid} ${o.label || o.name}`, range: o.meta?.display_range, colourMap: o.meta?.colour_map });
+      }
+    }
+  }
+  V.locres = found;
+  return found;
+}
+
+// Colour a map by a local resolution map ({ path, label, range }), or back to a single colour (null).
+async function applyColorBy(item, source) {
+  const old = item.colorBy;
+  if (source) {
+    loading(`Loading ${source.label}…`);
+    try {
+      const r = await scene.loadVolume(api.previewUrl(V.project, source.path), source.label);
+      const [min, max] = source.range && source.range[1] > source.range[0] ? source.range : scene.colorRange(r.volume);
+      item.colorBy = { path: source.path, label: source.label, refs: { data: r.dataRef, volume: r.volumeRef }, min, max };
+    } finally {
+      loaded();
+    }
+  } else {
+    item.colorBy = null;
+  }
+  await scene.showMap(item);
+  if (old) await scene.remove(old.refs.data);
+  panel.renderItem(item);
+  syncHash();
 }
 
 async function addModel(spec, withMap) {
@@ -173,6 +220,7 @@ async function closeItem(item) {
   if (V.active === item) V.active = V.items[0] || null;
   if (slices.item === item) hideSlices();
   await scene.remove(item.refs.data);
+  if (item.colorBy) await scene.remove(item.colorBy.refs.data);
   for (const m of V.items) {
     if (m.kind === 'map' && m.zone?.model === item.id) {
       m.zone = null;
@@ -219,6 +267,10 @@ const ctl = {
       item.colorMode = 'uniform';
       panel.syncColorMode(item);
     }
+    if (item.kind === 'map' && item.colorBy) { // a single colour replaces the local resolution colouring
+      ctl.setColorBy(item, null);
+      return;
+    }
     scene.schedule(item, fail);
     if (item.kind === 'map') { panel.refreshLevel(item); slices.refresh(item); }
   },
@@ -255,6 +307,24 @@ const ctl = {
     item.colorMode = mode;
     scene.schedule(item, fail);
     panel.renderItem(item);
+  },
+  locresSources: () => V.locres,
+  setColorBy(item, source) {
+    if (source && item.colorBy?.path === source.path) { // same map: only the scale may change
+      if (source.range) ctl.setColorRange(item, source.range[0], source.range[1]);
+      return;
+    }
+    applyColorBy(item, source)
+      .then(() => log(source ? `#${item.id} coloured by ${source.label} (${item.colorBy.min.toFixed(1)}–${item.colorBy.max.toFixed(1)} Å)` : `#${item.id}: single colour`))
+      .catch((err) => fail(err, 'Colouring: '));
+  },
+  setColorRange(item, min, max) {
+    if (!item.colorBy || !(max > min)) return;
+    item.colorBy.min = min;
+    item.colorBy.max = max;
+    scene.schedule(item, fail);
+    panel.renderItem(item);
+    syncHash();
   },
   setWaters(item, on) {
     item.waters = on;
@@ -355,10 +425,11 @@ function buildToolbar() {
 async function openDialog() {
   let jobs;
   try { jobs = await api.jobs(V.project); } catch (err) { fail(err); return; }
+  collectLocres(jobs);
   const open = new Set(V.items.map((i) => i.path));
   const rows = [];
   for (const job of [...jobs].sort((a, b) => b.num - a.num)) {
-    const outs = (job.outputs || []).filter((o) => ['map', 'mask', 'half_maps', 'model'].includes(o.type));
+    const outs = (job.outputs || []).filter((o) => ['map', 'mask', 'half_maps', 'model', 'locres'].includes(o.type));
     if (!outs.length) continue;
     const entries = outs.flatMap((o) => (o.type === 'half_maps' ? (o.files || [o.path]).map((f, k) => ({ o, path: f, label: `${job.uid} ${o.label || o.name} ${'AB'[k] || k + 1}` }))
       : [{ o, path: o.path, label: `${job.uid} ${o.label || o.name}` }]));
@@ -366,6 +437,7 @@ async function openDialog() {
       class: 'vw-open-row', tabindex: 0, role: 'button',
       onclick: () => pick(e), onkeydown: (ev) => { if (ev.key === 'Enter') pick(e); },
     }, icon(e.o.type === 'model' ? 'model' : 'map'), h('span', {}, e.label), h('span', { class: 'p' }, e.path),
+    isLocres(e.o) ? h('span', { class: 'tag' }, activeMap() ? 'colours the active map' : 'colours its map') : null,
     open.has(e.path) ? h('span', { class: 'tag' }, 'open') : null))));
   }
   const m = modal({
@@ -374,9 +446,20 @@ async function openDialog() {
   });
   function pick(e) {
     m.close();
+    if (isLocres(e.o)) {
+      const source = V.locres.find((s) => s.path === e.path);
+      const map = activeMap();
+      if (map) { ctl.setColorBy(map, source); return; }
+      if (source?.colourMap) {
+        openItems([{ kind: 'map', path: source.colourMap, label: source.colourMap.split('/').pop(), colorBy: source.path, colorRange: source.range }]);
+        return;
+      }
+    }
     openItems([{ kind: e.o.type === 'model' ? 'model' : 'map', path: e.path, label: e.label, otype: e.o.type === 'mask' ? 'mask' : undefined }]);
   }
 }
+
+const isLocres = (o) => o.type === 'locres' || o.name === 'map_locres';
 
 function helpDialog() {
   const table = (rows) => h('table', {}, h('tbody', {}, rows.map(([a, b]) => h('tr', {}, h('td', {}, a), h('td', {}, b)))));
@@ -545,6 +628,7 @@ async function main() {
     resizeTimer = setTimeout(() => panel.render(), 200); // histograms are drawn at the panel's width
   });
   log('Type help for the commands, ? for mouse and keys.', 'echo');
+  try { collectLocres(await api.jobs(V.project)); } catch { /* colouring sources are optional */ }
   panel.render();
   await openItems(spec.items || []);
   if (!V.items.length) panel.render();

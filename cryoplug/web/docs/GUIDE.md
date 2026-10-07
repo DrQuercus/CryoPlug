@@ -136,6 +136,53 @@ Une main inversée donne des hélices gauches et des constructions automatiques 
 Corrigez avec **Map operations → Flip handedness** sur la carte utilisée pour la construction
 (et retournez de la même façon les autres cartes si vous changez la carte déposée).
 
+### 3.4 Résolution locale
+
+- **Local resolution** (`local_resolution`, Phenix) calcule la résolution de chaque région à partir des deux
+  demi-cartes brutes et indépendantes. Le rapport donne la distribution dans la molécule (dans le masque, autour du
+  modèle ou dans la densité) et, avec un modèle, la **résolution de chaque chaîne** (tableau trié) et de chaque
+  résidu (fichier CSV, et `model_local_resolution.cif` avec la résolution dans la colonne B-factor pour ChimeraX,
+  Coot ou PyMOL).
+- Dans le visualiseur 3D : menu **Colour** de la carte → *Local resolution* (bleu = meilleure, rouge = moins
+  bonne ; échelle réglable, par défaut du 5e au 95e centile), ou `color #1 localres 3 6`. Le bouton *View 3D* du
+  job ouvre directement la carte coloriée. Une carte de résolution locale importée de CryoSPARC s'utilise de la
+  même façon.
+- Elle sert à choisir les régions à raffiner localement, à décider où construire les chaînes latérales, et à faire
+  la figure de résolution locale de l'article.
+
+### 3.5 Masques
+
+**Create mask** (`create_mask`, intégré) fabrique des masques à bord doux sur la grille d'une carte :
+
+| Source | Usage typique | Réglages de départ |
+|---|---|---|
+| Densité de la carte (passe-bas + seuil) | Masque FSC, LocScale, spIsoNet, dépôt | Passe-bas 15 Å, dilatation 3 Å, bord 6 Å |
+| Atomes du modèle (chaînes ou résidus choisis) | Masque serré autour d'un modèle | Rayon 3 Å, dilatation 2–3 Å, bord 6 Å |
+| Densité proche du modèle | **Raffinement local** d'une sous-partie : suit la densité, y compris non modélisée | Distance 6–8 Å, dilatation 3–5 Å, bord 8–12 Å |
+
+- **Seuil automatique** : le niveau qui contient le volume de la masse attendue (champ *Expected mass*, sinon la
+  masse des atomes choisis), à défaut la méthode d'Otsu. Le rapport montre l'histogramme, le seuil en σ, le volume
+  et la masse équivalente, et trois coupes avec le masque en orange.
+- **Sélection** : `A, B, C:10-250` ; *Leave out* retire des chaînes ou des segments ; *Remove blobs lighter than*
+  élimine les petits îlots de bruit.
+- **Combine with mask** : union, soustraction (masque du complexe moins la région à garder, pour une soustraction
+  de signal) ou intersection.
+- Le rapport donne le chemin du fichier pour l'importer dans CryoSPARC (*Import 3D Volumes*, type *mask*) : même
+  boîte et même taille de pixel que la carte d'origine.
+
+### 3.6 Gros complexes : cartes composites
+
+Un gros complexe est souvent résolu par une carte consensus et plusieurs **raffinements locaux** dans CryoSPARC.
+Importez chacun (un *Import from CryoSPARC* par raffinement), ajustez le modèle dans la carte consensus, puis
+lancez **Composite map** (`composite_map`, phenix.combine_focused_maps) :
+
+1. *Reference map* = la carte consensus ; *Focused map 1, 2…* = les cartes locales (un nouvel emplacement apparaît
+   dès que le précédent est rempli, jusqu'à 8).
+2. Les demi-cartes de chaque import sont retrouvées automatiquement et combinées de la même façon : on obtient des
+   **demi-cartes composites**, pour la FSC et la résolution locale de la carte composite.
+3. Construisez et affinez dans la carte composite ; déposez-la avec la carte consensus et les cartes locales (et
+   leurs demi-cartes). Ne présentez pas la FSC de la carte composite comme une FSC gold-standard.
+
 ---
 
 ## 4. Étape 2 — Construire le modèle
@@ -238,6 +285,12 @@ On peut utiliser les deux : Phenix pendant la construction, Servalcat pour l'aff
 - **Map-model validation (Q-score, FSC)** : toujours (intégré, rapide). Repère les résidus mal soutenus.
 - **Comprehensive validation (Phenix)** : géométrie MolProbity + accord carte–modèle, comme le rapport wwPDB.
 - **MolProbity** seul entre deux sessions de correction ; **EMRinger** pour les chaînes latérales (< 4,5 Å).
+- **Sequence register check (checkMySequence)** : avant tout dépôt. Détecte les décalages de registre (séquence
+  glissée de quelques résidus le long de la chaîne), invisibles pour MolProbity et peu visibles dans les scores
+  carte–modèle, ainsi que les chaînes qui ne correspondent à aucune séquence fournie.
+- **wwPDB validation report (OneDep)** : le rapport officiel (PDF + XML) calculé par le serveur du wwPDB à partir du
+  modèle et de la carte primaire, avec les centiles par rapport à toutes les entrées de la PDB. À lancer sur le
+  modèle final ; le modèle et la carte sont envoyés au wwPDB.
 
 ### 6.2 Valeurs de référence
 
@@ -276,6 +329,7 @@ sont à revoir (ou situés dans des régions de basse résolution locale).
 | Q-score bas dans une région seulement | Résolution locale faible ou erreur locale | Comparer avec la carte LocScale ; corriger ou retirer les atomes non soutenus |
 | FSC carte–modèle meilleure que la FSC demi-cartes | Ajustement du bruit | Affinement moins agressif, cible demi-cartes (Servalcat) |
 | Beaucoup de résidus UNK | Séquence absente ou mal attribuée | Identifier les chaînes, reconstruire avec la séquence |
+| checkMySequence signale un décalage | Registre décalé de quelques résidus | Corriger dans Coot ou ISOLDE comme indiqué, relancer la vérification |
 
 ---
 
@@ -295,7 +349,7 @@ de validation, `CHECKLIST.md`, `methods_draft.md` et `table1_draft.md`.
 
 ### 7.3 OneDep pas à pas
 
-1. Passez d'abord le **serveur de validation wwPDB** (validate.wwpdb.org) avec le modèle et les cartes.
+1. Lancez d'abord le job **wwPDB validation report** (ou le serveur validate.wwpdb.org) avec le modèle et la carte primaire.
 2. Dans OneDep (deposit.wwpdb.org) : déposez le modèle (mmCIF), la carte primaire, les deux demi-cartes,
    le masque et la courbe FSC.
 3. Saisissez les valeurs du fichier `CHECKLIST.md` : niveau de contour recommandé, résolution, taille de pixel, symétrie.
@@ -365,6 +419,17 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 3. Construction et affinement sur la carte corrigée, en restant critique dans la direction mal résolue
 4. Dépôt : cartes d'origine en carte primaire et demi-cartes ; carte spIsoNet en carte additionnelle, mentionnée dans les méthodes
 
+### G. Gros complexe résolu par raffinements locaux
+
+1. Import CryoSPARC de la carte consensus et de chaque raffinement local
+2. Local resolution sur la carte consensus : repérer les régions faibles ; si besoin, Create mask (densité proche
+   des chaînes de la région) pour de nouveaux raffinements locaux dans CryoSPARC
+3. Modèle ajusté dans la consensus (prédictions, Rigid-body fit ou Dock in map, Merge models)
+4. Composite map (consensus + cartes locales, demi-cartes combinées)
+5. Real-space refinement dans la carte composite → ISOLDE → affinement final
+6. Local resolution sur les demi-cartes composites (résolution de chaque sous-unité), checkMySequence,
+   Map-model validation, wwPDB validation report, Pre-deposition checks, Deposition package
+
 ---
 
 ## 9. Dépannage
@@ -386,6 +451,9 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | « The program finished but wrote no map / model in J… » | Le programme s'est arrêté sur une erreur sans signaler d'échec | Cherchez sa dernière erreur dans le log, corrigez, puis **Clear** et relancez |
 | Avertissement « … was written next to an input … moved to … » dans le log | Le programme a écrit son résultat dans le dossier d'un autre job (celui de ses entrées) | Rien à faire : CryoPlug a ramené le fichier dans le dossier du job, l'autre job reste intact |
 | Coot / ISOLDE : « No saved model found in the job folder » | Modèle enregistré dans un autre dossier | Enregistrez-le dans le dossier du job (chemin donné par le message) ou envoyez-le (*Upload*), puis *Finish* |
+| Create mask : « Masks need SciPy » | SciPy absent de l'environnement de CryoPlug | `pip install scipy` (installé avec CryoPlug depuis cette version) |
+| wwPDB validation : « wwPDB validation server: … » | Serveur indisponible, pas d'accès internet depuis le serveur, fichier refusé | Vérifier l'accès internet (proxy) du serveur, relancer plus tard ; le message du serveur est dans le log |
+| checkMySequence : « needs HMMER » | `hmmsearch` absent de son environnement | `conda install -c bioconda hmmer` dans l'environnement de checkMySequence |
 | Relancer un job à l'identique hors CryoPlug | — | `commands.sh` dans le dossier du job contient les commandes exactes |
 
 Le **log** (onglet *Log*) montre la commande exécutée, la sortie du programme et l'erreur en rouge.

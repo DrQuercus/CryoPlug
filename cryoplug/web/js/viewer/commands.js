@@ -7,6 +7,7 @@ export const COMMAND_HELP = [
   ['transparency [#id] <0–100>', 'Transparency of a map surface'],
   ['color [#id] <name | #hex>', 'Single colour for a map or a model'],
   ['color [#id] bychain | byss | byelement | bfactor | rainbow', 'Model colouring'],
+  ['color [#id] localres [min max]', 'Colour a map by local resolution (blue best → red worst, in Å)'],
   ['show | hide [#id]', 'Show or hide items (all of them without #id)'],
   ['view', 'Reset the view'],
   ['view #id | /A:45 | /A', 'Centre on an item, a residue or a chain'],
@@ -92,6 +93,20 @@ export function createCommands(ctl) {
     return `Level of ${ids(list)} set to ${words.join('')}`;
   }
 
+  function colorByLocres(list, rest) {
+    const ms = list.length ? maps(list) : [ctl.activeMap()].filter(Boolean);
+    if (!ms.length) throw new Error('No map displayed');
+    const sources = ctl.locresSources();
+    if (!sources.length) throw new Error('No local resolution map in this project (run a Local resolution job)');
+    const range = rest.slice(0, 2).map(Number);
+    if (rest.length && !(range.length === 2 && range[1] > range[0])) throw new Error('Scale: color #1 localres 3 6 (best and worst resolution in Å)');
+    for (const m of ms) {
+      const source = sources.find((s) => s.colourMap === m.path) || sources[0];
+      ctl.setColorBy(m, rest.length ? { ...source, range } : source); // reported once loaded
+    }
+    return null;
+  }
+
   function colorItems(list, word) {
     const mode = MODEL_COLOR_WORDS[word.toLowerCase()];
     if (mode) {
@@ -162,7 +177,11 @@ export function createCommands(ctl) {
       ms.forEach((m) => ctl.setTransparency(m, t));
       return `Transparency of ${ids(ms)}: ${t} %`;
     },
-    color: ({ items, rest }) => { if (!rest[0]) throw new Error('Which colour?'); return colorItems(items, rest[0]); },
+    color: ({ items, rest }) => {
+      if (!rest[0]) throw new Error('Which colour?');
+      if (/^(localres|locres|local_resolution)$/i.test(rest[0])) return colorByLocres(items, rest.slice(1));
+      return colorItems(items, rest[0]);
+    },
     rainbow: ({ items }) => colorItems(items, 'rainbow'),
     cartoon: ({ items }) => { const ms = models(items); ms.forEach((m) => ctl.setDisplay(m, 'cartoon')); return `Cartoon for ${ids(ms)}`; },
     sticks: ({ items }) => { const ms = models(items); ms.forEach((m) => ctl.setDisplay(m, 'sticks')); return `Sticks for ${ids(ms)}`; },

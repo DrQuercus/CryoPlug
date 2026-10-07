@@ -1,6 +1,7 @@
 // Models panel (ChimeraX-like): one card per map or model with visibility, colour and display settings.
 // Maps get ChimeraX's Volume Viewer histogram: drag the line to set the contour level (absolute or σ).
 import { clear, h, icon, popupMenu } from '../ui.js';
+import { RESOLUTION_COLORS } from './scene.js';
 import { fmtLevel, fromSigma, toSigma } from './stats.js';
 
 export const hex = (c) => `#${(c >>> 0).toString(16).padStart(6, '0').slice(-6)}`;
@@ -20,6 +21,15 @@ function seg(options, current, onPick, label) {
 
 function row(label, ...children) {
   return h('div', { class: 'vw-row' }, label ? h('span', { class: 'lbl' }, label) : null, ...children);
+}
+
+// Colour bar of the local resolution scale with its end values.
+function legend(by) {
+  const stops = RESOLUTION_COLORS.map((c, i) => `${hex(c)} ${Math.round((100 * i) / (RESOLUTION_COLORS.length - 1))}%`).join(', ');
+  const mid = (by.min + by.max) / 2;
+  return h('div', { class: 'vw-legend', role: 'img', 'aria-label': `Colour scale from ${by.min.toFixed(1)} Å (blue) to ${by.max.toFixed(1)} Å (red)` },
+    h('div', { class: 'bar', style: { background: `linear-gradient(to right, ${stops})` } }),
+    h('div', { class: 'ticks' }, h('span', {}, `${by.min.toFixed(1)} Å`), h('span', {}, `${mid.toFixed(1)}`), h('span', {}, `${by.max.toFixed(1)} Å`)));
 }
 
 export function drawHistogram(canvas, item) {
@@ -157,6 +167,30 @@ export function createPanel(root, ctl) {
         'aria-label': 'Opacity of the transparent surface', oninput: (e) => ctl.setOpacity(item, Number(e.target.value)),
       })),
     ];
+    const sources = ctl.locresSources();
+    if (item.otype !== 'mask' && (sources.length || item.colorBy)) {
+      const known = sources.some((s) => s.path === item.colorBy?.path);
+      parts.push(row('Colour', h('select', {
+        'aria-label': 'Map colouring',
+        onchange: (e) => ctl.setColorBy(item, e.target.value ? sources.find((s) => s.path === e.target.value) : null),
+      }, h('option', { value: '' }, 'Single colour'),
+      sources.map((s) => h('option', { value: s.path, selected: item.colorBy?.path === s.path }, `Local resolution · ${s.label}`)),
+      item.colorBy && !known ? h('option', { value: item.colorBy.path, selected: true }, `Local resolution · ${item.colorBy.label}`) : null)));
+      if (item.colorBy) {
+        const by = item.colorBy;
+        const bound = (value, label) => h('input', { type: 'number', step: 0.1, min: 0, value: value.toFixed(1), 'aria-label': label, style: { width: '64px' } });
+        const lo = bound(by.min, 'Best resolution of the colour scale (Å)');
+        const hi = bound(by.max, 'Worst resolution of the colour scale (Å)');
+        const apply = () => {
+          const a = Number(lo.value);
+          const b = Number(hi.value);
+          if (Number.isFinite(a) && Number.isFinite(b) && b > a) ctl.setColorRange(item, a, b);
+        };
+        lo.addEventListener('change', apply);
+        hi.addEventListener('change', apply);
+        parts.push(row('Scale', lo, h('span', { class: 'unit' }, 'to'), hi, h('span', { class: 'unit' }, 'Å')), legend(by));
+      }
+    }
     const models = ctl.items().filter((i) => i.kind === 'model');
     if (models.length) {
       const pick = h('select', { 'aria-label': 'Model for the zone' }, models.map((m) => h('option', {

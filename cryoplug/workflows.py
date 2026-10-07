@@ -16,7 +16,7 @@ def _final_steps(model_src: list, map_src: list, seq: list | None) -> list[dict[
     check_inputs = {"model": model_src, "map": map_src, "half_maps": ["import", "half_maps"], "mask": ["import", "mask"]}
     if seq:
         check_inputs["sequence"] = seq
-    return [
+    steps = [
         {"id": "validate", "type": "phenix_validation_cryoem", "inputs": {"model": model_src, "map": map_src},
          "optional": True},
         {"id": "qscore", "type": "mapmodel_validation", "inputs": {"model": model_src, "map": map_src, "fsc": ["import", "fsc"]}},
@@ -24,7 +24,14 @@ def _final_steps(model_src: list, map_src: list, seq: list | None) -> list[dict[
         {"id": "package", "type": "deposition_package",
          "inputs": {"model": model_src, "map": map_src, "half_maps": ["import", "half_maps"], "mask": ["import", "mask"],
                     "fsc": ["import", "fsc"], "checklist": ["check", "report"], **({"sequence": seq} if seq else {})}},
+        # off by default: they need checkMySequence / the wwPDB client, and the second sends the files to the wwPDB
+        {"id": "wwpdb", "type": "wwpdb_validation", "title": "Official wwPDB validation report",
+         "inputs": {"model": model_src, "map": map_src}, "optional": True, "default": False},
     ]
+    if seq:
+        steps.insert(2, {"id": "seqcheck", "type": "checkmysequence", "title": "Sequence register check",
+                         "inputs": {"model": model_src, "map": map_src, "sequence": seq}, "optional": True, "default": False})
+    return steps
 
 
 IMPORT_NODE = {"id": "import", "type": "import_cryosparc", "title": "Import CryoSPARC refinement",

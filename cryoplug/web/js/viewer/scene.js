@@ -32,6 +32,9 @@ const DISPLAY_PLAN = {
   both: [['polymer', 'cartoon'], ['sidechain', 'ball-and-stick'], ['ligand', 'ball-and-stick'], ['branched', 'ball-and-stick'], ['ion', 'ball-and-stick']],
 };
 
+// Local resolution colour scale, best (blue) to worst (red): the same stops as the job thumbnails (imaging.py).
+export const RESOLUTION_COLORS = [0x2b4ba0, 0x2f8fd8, 0x3cc0c0, 0x7dd36b, 0xf2e04a, 0xf39c34, 0xd7352b];
+
 let plugin = null;
 let lib = null;
 let softOcclusion = null;
@@ -73,10 +76,28 @@ export async function loadVolume(url, label) {
   }
 }
 
+// Single colour, or the values of another map (local resolution) sampled at the surface.
+function mapColorTheme(volume, s) {
+  const registry = plugin.representation.volume.themes.colorThemeRegistry;
+  const by = s.colorBy;
+  if (by && hasCell(by.refs.volume)) {
+    const theme = registry.get('external-volume');
+    return {
+      name: 'external-volume',
+      params: {
+        ...defaultsOf(theme.getParams({ volume })),
+        volume: { ref: by.refs.volume },
+        coloring: { name: 'absolute-value', params: { domain: { name: 'custom', params: [by.min, by.max] }, list: { kind: 'interpolate', colors: RESOLUTION_COLORS } } },
+        defaultColor: s.color,
+      },
+    };
+  }
+  return { name: 'uniform', params: { ...defaultsOf(registry.get('uniform').getParams({ volume })), value: s.color } };
+}
+
 function isosurfaceParams(volume, s) {
   const { registry, themes } = plugin.representation.volume;
   const repr = registry.get('isosurface');
-  const color = themes.colorThemeRegistry.get('uniform');
   const size = themes.sizeThemeRegistry.get(repr.defaultSizeTheme.name);
   return {
     type: {
@@ -87,11 +108,29 @@ function isosurfaceParams(volume, s) {
         visuals: [s.style === 'mesh' ? 'wireframe' : 'solid'],
         alpha: s.style === 'transparent' ? s.opacity : 1,
         sizeFactor: 1.5,
+        tryUseGpu: !s.colorBy, // colouring by another map samples the vertices on the CPU
       },
     },
-    colorTheme: { name: 'uniform', params: { ...defaultsOf(color.getParams({ volume })), value: s.color } },
+    colorTheme: mapColorTheme(volume, s),
     sizeTheme: { name: size.name, params: { ...defaultsOf(size.getParams({ volume })), ...repr.defaultSizeTheme.props } },
   };
+}
+
+// Statistics of a map used for colouring: 5th-95th percentile of its values between 0 and 100 (Å).
+export function colorRange(volume) {
+  const data = volume.grid.cells.data;
+  const step = Math.max(1, Math.floor(data.length / 400000));
+  const values = [];
+  for (let i = 0; i < data.length; i += step) {
+    const v = data[i];
+    if (v > 0 && v < 100) values.push(v);
+  }
+  if (!values.length) return [0, 1];
+  values.sort((a, b) => a - b);
+  const at = (q) => values[Math.min(values.length - 1, Math.floor(q * values.length))];
+  const lo = Math.round(at(0.05) * 10) / 10;
+  const hi = Math.round(at(0.95) * 10) / 10;
+  return [lo, hi > lo ? hi : lo + 0.1];
 }
 
 // Create or update the isosurface of a map item ({ volume, level, style, opacity, color, refs }).

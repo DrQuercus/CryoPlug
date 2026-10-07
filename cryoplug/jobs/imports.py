@@ -118,7 +118,7 @@ class ImportCryoSPARC(JobType):
         OutputDef("map", "map", "Unsharpened map"),
         OutputDef("map_sharp", "map", "Sharpened map"),
         OutputDef("mask", "mask", "FSC mask"),
-        OutputDef("map_locres", "map", "Local resolution map"),
+        OutputDef("map_locres", "locres", "Local resolution map"),
     ]
 
     def run(self, ctx: JobContext) -> None:
@@ -160,9 +160,31 @@ class ImportCryoSPARC(JobType):
         if mask_key:
             ctx.add_output("mask", "mask", local[mask_key], "FSC mask", meta=meta)
         if "map_locres" in local:
-            ctx.add_output("map_locres", "map", local["map_locres"], "Local resolution map", meta=meta)
+            lmeta = {**meta, **locres_meta(ctx, local["map_locres"], local.get(mask_key) if mask_key else None)}
+            shown = local.get("map_sharp") or local.get("map")
+            if shown:
+                lmeta["colour_map"] = ctx.rel(shown)  # the 3D viewer colours this map by local resolution
+            ctx.add_output("map_locres", "locres", local["map_locres"], "Local resolution map", meta=lmeta)
         rows = [[k, v.name, str(found[k])] for k, v in sorted(local.items())]
         ctx.add_table("Imported files", ["Kind", "File", "Source"], rows)
+
+
+def locres_meta(ctx: JobContext, path: str | Path, mask: str | Path | None) -> dict[str, Any]:
+    """Median and colour range of a local resolution map, inside the mask when there is one."""
+    from cryoplug import locres as lr
+    from cryoplug.mrc import MapVolume
+    try:
+        vol = MapVolume.read(path)
+        m = MapVolume.read(mask) if mask else None
+        region, _how = lr.region(vol, m)
+        stats = lr.summary(vol.data[region] if region is not None else vol.data)
+    except Exception as exc:  # informative only
+        ctx.warn(f"Local resolution map not analysed: {exc}")
+        return {}
+    if not stats.get("n"):
+        return {}
+    ctx.add_highlight("Local res.", f"{stats['median']:.2f} Å")
+    return {"median": round(stats["median"], 3), "display_range": lr.display_range(stats)}
 
 
 @register
