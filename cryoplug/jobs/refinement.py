@@ -18,6 +18,7 @@ class PhenixRealSpaceRefine(JobType):
     tool = "phenix"
     software = ["Phenix real_space_refine"]
     cpus = 4
+    cpu_param = "nproc"
     description = ("phenix.real_space_refine: global minimisation with secondary-structure, Ramachandran and rotamer "
                    "restraints, morphing, simulated annealing and ADP refinement against the map.")
     inputs = [Slot("model", ("model",), "Model"), Slot("map", ("map",), "Map"),

@@ -2,8 +2,9 @@
 import { api } from './api.js';
 import { closeBuilder, openBuilder, refreshBuilderInputs, renderBuilder } from './builder.js';
 import { closeDetail, detailIsLive, detailMode, detailUid, openDetail, refreshDetail } from './detail.js';
-import { renderHelp, renderProjects, renderQueue, renderTools } from './pages.js';
+import { renderHelp, renderProjects, renderTools } from './pages.js';
 import { clearSelection, renderJobs, renderProject, selectAllShown } from './project.js';
+import { renderResources, stopResources } from './resources.js';
 import { renderPasswordChange, renderSettings } from './settings.js';
 import { builderHref, loadStatic, navigate, onJobsChanged, refreshJobs, state } from './state.js';
 import { avatar, clear, guard, h, modal, showError, toast } from './ui.js';
@@ -54,7 +55,8 @@ function parseRoute() {
 }
 
 function setNav(page) {
-  document.querySelectorAll('.nav-link').forEach((a) => a.classList.toggle('active', a.dataset.nav === (page === 'project' ? 'projects' : page)));
+  const nav = { project: 'projects', queue: 'resources' }[page] || page;
+  document.querySelectorAll('.nav-link').forEach((a) => a.classList.toggle('active', a.dataset.nav === nav));
 }
 
 function setCrumbs(route) {
@@ -66,7 +68,7 @@ function setCrumbs(route) {
     if (route.panel === 'new') items.push(h('span', { class: 'sep' }, '›'), h('span', {}, 'New job'));
     if (route.inspect) items.push(h('span', { class: 'sep' }, '›'), h('span', {}, route.inspect));
   } else if (route.page !== 'projects') {
-    const names = { help: 'Aide', queue: 'Queue', tools: 'Tools', settings: 'Settings' };
+    const names = { help: 'Aide', queue: 'Resources', resources: 'Resources', tools: 'Tools', settings: 'Settings' };
     items.push(h('span', { class: 'sep' }, '›'), h('span', {}, names[route.page] || route.page));
   }
   clear(crumbs, items);
@@ -78,6 +80,7 @@ async function route() {
   state.route = r;
   setNav(r.page);
   document.querySelectorAll('.menu').forEach((m) => m.remove());
+  stopResources(); // the live view only refreshes while it is shown
 
   if (r.page !== 'project') {
     state.project = null;
@@ -89,7 +92,8 @@ async function route() {
     setCrumbs(r);
     clear(topRight);
     if (r.page === 'projects') await renderProjects(content);
-    else if (r.page === 'queue') await renderQueue(content);
+    else if (r.page === 'resources') renderResources(content, r.sub);
+    else if (r.page === 'queue') renderResources(content, 'queue'); // older links
     else if (r.page === 'tools') await renderTools(content);
     else if (r.page === 'help') await renderHelp(content, r.sub, r.item);
     else if (r.page === 'settings') await renderSettings(content, r.sub);
@@ -225,8 +229,6 @@ async function poll() {
     if (state.route.page === 'project' && state.project) {
       await refreshJobs();
       if (detailUid() && detailIsLive()) await refreshDetail();
-    } else if (state.route.page === 'queue' && tick % 2 === 0) {
-      await renderQueue(content);
     }
     if (tick % 2 === 0) {
       const q = await api.queue();

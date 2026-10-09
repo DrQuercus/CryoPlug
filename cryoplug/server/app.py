@@ -17,7 +17,10 @@ from fastapi.staticfiles import StaticFiles
 from cryoplug import __version__
 from cryoplug.config import MOLSTAR_VERSION, Config
 from cryoplug.jobs import CATEGORIES, DATA_TYPES, all_job_types, get_job_type
+from cryoplug.config import LaneConfig
+from cryoplug.lanes import ClusterLane
 from cryoplug.manager import Manager, ManagerError, NotFound
+from cryoplug.monitor import Monitor, detect_gpus
 from cryoplug.scheduler import Scheduler
 from cryoplug.server.accounts import author, can_access, can_manage, current_user, install as install_accounts, is_admin, require_admin
 from cryoplug.server.auth import install as install_auth, is_loopback
@@ -41,6 +44,9 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     app = FastAPI(title="CryoPlug", version=__version__, lifespan=lifespan)
     app.state.manager = manager
     app.state.scheduler = scheduler
+    monitor = Monitor(config, manager)
+    manager.monitor = monitor
+    app.state.monitor = monitor
 
     # ------------------------------------------------------------- auth
     users = Users(manager.db, config)
@@ -97,8 +103,9 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
             "user": app.state.describe_user(user),
             "password_min": users.settings()["min_password_length"],
             "listen": {"host": config.host, "port": config.port, "network": not is_loopback(config.host)},
-            "lanes": [{"name": l.name, "type": l.type, "description": l.description, "max_jobs": l.max_jobs, "gpus": l.gpus}
-                      for l in config.lanes],
+            "lanes": [{"name": l.name, "type": l.type, "description": l.description, "max_jobs": l.max_jobs, "gpus": l.gpus,
+                       "partition": l.partition, "partitions": l.partitions or ([l.partition] if l.partition else []),
+                       "time_limit": l.time_limit, "mem": l.mem} for l in config.lanes],
             "categories": CATEGORIES,
             "data_types": DATA_TYPES,
             "molstar": molstar_urls(),
@@ -134,6 +141,11 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
         overview = manager.queue_overview()
         if not is_admin(user):
             # Other people's jobs show what occupies the lanes and GPUs, not their projects.
+            hidden = {(j["project_uid"], j["uid"]) for j in overview["jobs"] if not can_access(user, j)}
+            for lane in overview["lanes"]:
+                lane["gpu_jobs"] = {g: {"project_uid": "", "uid": "", "type": e["type"], "title": _type_title(e["type"]),
+                                        "owner": e["owner"], "hidden": True} if (e["project_uid"], e["uid"]) in hidden else e
+                                    for g, e in lane["gpu_jobs"].items()}
             overview["jobs"] = [j if can_access(user, j) else {
                 "hidden": True, "project_uid": "", "uid": "", "project_title": "", "message": "", "type": j["type"],
                 "title": _type_title(j["type"]), "status": j["status"], "lane": j.get("lane"), "gpus": j.get("gpus") or [],
@@ -146,6 +158,94 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
             return get_job_type(name).title
         except KeyError:
             return name
+
+    # ------------------------------------------------------- live usage
+    @app.get("/api/monitor")
+    def live_usage(request: Request, history: bool = False) -> dict[str, Any]:
+        """CPU, memory, GPUs, storage, network and processes (htop / nvtop), sampled every 2 s while watched."""
+        user = current_user(request)
+        snap = monitor.snapshot(history=history)
+        if is_admin(user):
+            return snap
+        # Other people's processes: their program name only, not their command line or job.
+        projects = {p["uid"]: p for p in manager.db.list_projects(include_archived=True)}
+        mine = lambda puid: bool(puid) and puid in projects and can_access(user, projects[puid])  # noqa: E731
+        snap = dict(snap)
+        procs = dict(snap.get("processes") or {})
+        procs["top"] = [p if mine(p.get("project")) else {**p, "cmd": p["name"], "job": None, "project": None}
+                        for p in procs.get("top", [])]
+        snap["processes"] = procs
+        snap["gpus"] = [{**g, "processes": [e if mine(e.get("project")) else {**e, "job": None, "project": None}
+                                            for e in g.get("processes", [])]} for g in snap.get("gpus", [])]
+        return snap
+
+    @app.get("/api/cluster")
+    def cluster(request: Request) -> list[dict[str, Any]]:
+        """Partitions, nodes and queue of each SLURM lane (sinfo / squeue)."""
+        user = current_user(request)
+        out = []
+        for lane in list(manager.lanes.values()):
+            if isinstance(lane, ClusterLane):
+                info = dict(lane.overview())
+                if not is_admin(user):
+                    info.pop("users", None)
+                out.append({"lane": lane.cfg.name, "description": lane.cfg.description, **info})
+        return out
+
+    # ------------------------------------------------------ lanes (admin)
+    def lanes_payload() -> dict[str, Any]:
+        return {"lanes": [lane.to_dict() for lane in config.lanes], "source": manager.lanes_source,
+                "file_lanes": [lane.name for lane in manager.file_lanes]}
+
+    @app.get("/api/lanes")
+    def get_lanes(request: Request) -> dict[str, Any]:
+        require_admin(request)
+        return lanes_payload()
+
+    @app.put("/api/lanes")
+    def put_lanes(request: Request, body: dict = Body(...)) -> dict[str, Any]:
+        require_admin(request)
+        manager.save_lanes(None if body.get("reset") else body.get("lanes"))
+        return lanes_payload()
+
+    @app.get("/api/hardware")
+    def hardware(request: Request) -> dict[str, Any]:
+        require_admin(request)
+        mem = monitor.snapshot().get("memory") or {}
+        return {"gpus": detect_gpus(monitor.nvidia_smi), "nvidia_smi": monitor.nvidia_smi, "cpus": os.cpu_count(),
+                "memory": mem.get("total"), "hostname": socket.gethostname()}
+
+    def lane_from(body: dict) -> LaneConfig:
+        try:
+            return LaneConfig.from_dict(dict(body.get("lane") or {}))
+        except (ValueError, TypeError) as exc:
+            raise ManagerError(str(exc)) from None
+
+    @app.post("/api/lanes/test")
+    def test_lane(request: Request, body: dict = Body(...)) -> dict[str, Any]:
+        """Is the lane usable from the server? (sinfo for SLURM, nvidia-smi for the local GPUs)."""
+        require_admin(request)
+        cfg = lane_from(body)
+        if cfg.type == "cluster":
+            return ClusterLane(cfg).test()
+        gpus = detect_gpus(monitor.nvidia_smi)
+        missing = [g for g in cfg.gpus if g not in {x["index"] for x in gpus}]
+        lines = [f"GPU {g['index']}: {g['name']} ({(g['memory_total'] or 0) / 1024:.0f} GB)" for g in gpus] or ["No NVIDIA GPU found (nvidia-smi)"]
+        if missing:
+            lines.append(f"Not found on this machine: GPU {', '.join(map(str, missing))}")
+        return {"ok": not missing, "output": "\n".join(lines), "gpus": gpus}
+
+    @app.post("/api/lanes/preview")
+    def preview_lane(request: Request, body: dict = Body(...)) -> dict[str, Any]:
+        """The submission script of a cluster lane, for an example GPU job."""
+        require_admin(request)
+        cfg = lane_from(body)
+        if cfg.type != "cluster":
+            raise ManagerError("Only cluster lanes submit a script")
+        job = {"project_uid": "P1", "uid": "J7", "type": "modelangelo_build", "title": "ModelAngelo build"}
+        script = ClusterLane(cfg).render_script(job, config.projects_root / "CP-example" / "J7",
+                                                {"num_gpus": int(body.get("num_gpus", 1)), "num_cpus": int(body.get("num_cpus", 4))})
+        return {"script": script}
 
     # --------------------------------------------------------- filesystem
     @app.get("/api/fs")
@@ -248,7 +348,8 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     @app.post("/api/projects/{puid}/jobs")
     def create_job(puid: str, request: Request, body: dict = Body(...)) -> dict[str, Any]:
         job = manager.create_job(puid, body.get("type", ""), body.get("params"), body.get("inputs"), body.get("title"),
-                                 body.get("lane"), body.get("notes", ""), created_by=author(current_user(request)), roots=roots(request))
+                                 body.get("lane"), body.get("notes", ""), created_by=author(current_user(request)), roots=roots(request),
+                                 requested=body.get("resources"))
         if body.get("queue"):
             try:
                 job = manager.queue_job(puid, job["uid"], body.get("lane"), roots=roots(request))
@@ -262,8 +363,10 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
 
     @app.patch("/api/projects/{puid}/jobs/{juid}")
     def update_job(puid: str, juid: str, request: Request, body: dict = Body(...)) -> dict[str, Any]:
-        return manager.update_job(puid, juid, roots=roots(request),
-                                  **{k: body.get(k) for k in ("params", "inputs", "title", "notes", "lane") if k in body})
+        fields = {k: body.get(k) for k in ("params", "inputs", "title", "notes", "lane") if k in body}
+        if "resources" in body:
+            fields["requested"] = body.get("resources") or {}
+        return manager.update_job(puid, juid, roots=roots(request), **fields)
 
     @app.post("/api/projects/{puid}/jobs/{juid}/queue")
     def queue_job(puid: str, juid: str, request: Request, body: dict = Body(default={})) -> dict[str, Any]:

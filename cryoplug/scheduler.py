@@ -96,19 +96,41 @@ class Scheduler:
             if len(on_lane) >= lane_cfg.max_jobs:
                 self._message(job, f"Waiting for a free slot on lane '{lane_cfg.name}'")
                 continue
-            need = int((job.get("resources") or {}).get("num_gpus", 0))
+            resources = job.get("resources") or {}
+            need = int(resources.get("num_gpus", 0))
             gpus: list[int] = []
             if lane_cfg.type == "local" and lane_cfg.gpus and need > 0:
-                used = {g for j in on_lane for g in (j.get("gpus") or [])}
-                free = [g for g in lane_cfg.gpus if g not in used]
-                if len(free) < need:
-                    self._message(job, f"Waiting for {need} free GPU(s) on lane '{lane_cfg.name}'")
-                    continue
-                gpus = free[:need]
+                busy = self._busy_gpus(active)
+                wanted = [g for g in resources.get("gpu_ids") or [] if g in lane_cfg.gpus]
+                if wanted:  # GPUs chosen in the job's settings
+                    taken = [g for g in wanted if g in busy]
+                    if taken:
+                        self._message(job, "Waiting for " + ", ".join(f"GPU {g} (used by {busy[g]})" for g in taken))
+                        continue
+                    gpus = wanted
+                else:  # automatic: the free GPUs with the least memory in use (other programs count too)
+                    free = [g for g in lane_cfg.gpus if g not in busy]
+                    if len(free) < need:
+                        detail = ", ".join(f"GPU {g}: {busy[g]}" for g in lane_cfg.gpus if g in busy)
+                        self._message(job, f"Waiting for {need} free GPU{'s' if need > 1 else ''} on lane '{lane_cfg.name}'"
+                                      + (f" ({detail})" if detail else ""))
+                        continue
+                    load = m.gpu_load()
+                    gpus = sorted(free, key=lambda g: (load.get(g, 0.0), g))[:need]
             self._launch(job, inputs, gpus)
             job = m.job(job["project_uid"], job["uid"])
             if job["status"] == "launched":
                 active.append(job)
+
+    def _busy_gpus(self, active: list[dict[str, Any]]) -> dict[int, str]:
+        """GPUs held by running jobs of local lanes (two local lanes may share GPUs) -> "P1/J5"."""
+        busy: dict[int, str] = {}
+        for j in active:
+            lane = self.manager.lanes.get(j.get("lane") or "")
+            if lane is not None and lane.cfg.type == "local":
+                for g in j.get("gpus") or []:
+                    busy[int(g)] = f"{j['project_uid']}/{j['uid']}"
+        return busy
 
     def _message(self, job: dict[str, Any], message: str) -> None:
         if job.get("message") != message:
@@ -125,10 +147,7 @@ class Scheduler:
                 (jdir / name).unlink(missing_ok=True)
             (jdir / "job.json").write_text(json.dumps(spec, indent=1, default=str))
             lane = m.lanes[job["lane"]]
-            if lane.cfg.type == "cluster":
-                info = lane.launch(job, jdir, gpus, spec["resources"])  # type: ignore[call-arg]
-            else:
-                info = lane.launch(job, jdir, gpus)
+            info = lane.launch(job, jdir, gpus, spec["resources"])
         except Exception as exc:
             log.error("Launch of %s/%s failed: %s", puid, juid, exc)
             m.db.update_job(puid, juid, status="failed", error=f"Launch failed: {exc}", ended_at=time.time())

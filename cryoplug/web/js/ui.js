@@ -100,6 +100,14 @@ const ICONS = {
   share: 'M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8.6 13.5l6.8 4M15.4 6.5l-6.8 4',
   gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM12 18.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1',
   logout: 'M14 4h4.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H14M10 16l-4-4 4-4M6 12h10',
+  pulse: 'M3 12h4l2.5-6 4 12 2.5-6H21',
+  cpu: 'M7 7h10v10H7zM10 10h4v4h-4zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4',
+  gpu: 'M3 7h18v10H3zM7 17v3M11 17v3M15 17v3M8 12a2 2 0 1 0 4 0 2 2 0 0 0-4 0M15 10h3M15 14h3',
+  memory: 'M4 8h16v8H4zM8 8v8M12 8v8M16 8v8M6 16v3M18 16v3',
+  disk: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3v12c0 1.7-3.6 3-8 3s-8-1.3-8-3zM4 6c0 1.7 3.6 3 8 3s8-1.3 8-3M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
+  network: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z',
+  list: 'M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01',
+  server: 'M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01',
 };
 
 export function icon(name, cls = '') {
@@ -307,6 +315,15 @@ export function avatar(user, cls = '') {
   let hue = 0;
   for (const c of user.username || '') hue = (hue * 31 + c.charCodeAt(0)) % 360;
   return h('span', { class: `avatar ${cls}`, style: { '--hue': String(hue) }, 'aria-hidden': 'true' }, initials(user));
+}
+
+// A horizontal meter (0-100 %). With severity, the fill turns amber from 80 % and red from 95 %
+// (the value is always written next to it, never shown by colour alone).
+export function meter(pct, { label = '', severity = true, cls = '' } = {}) {
+  const v = Math.max(0, Math.min(100, Number(pct) || 0));
+  const level = severity && v >= 95 ? 'crit' : severity && v >= 80 ? 'warn' : '';
+  return h('span', { class: `meter ${level} ${cls}`.trim(), role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': '100',
+    'aria-valuenow': String(Math.round(v)), 'aria-label': label || null }, h('i', { style: { width: `${v}%` } }));
 }
 
 export function copyText(text) {

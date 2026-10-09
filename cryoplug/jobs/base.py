@@ -166,7 +166,9 @@ class JobType:
     description: ClassVar[str] = ""
     tool: ClassVar[str | None] = None  # key in cryoplug.tools.TOOLS
     gpu: ClassVar[int] = 0
+    gpu_param: ClassVar[str] = ""  # parameter giving the number of GPUs (int) or whether one is used (bool)
     cpus: ClassVar[int] = 1
+    cpu_param: ClassVar[str] = ""  # parameter giving the number of processes: the CPUs asked for follow it
     interactive: ClassVar[bool] = False
     software: ClassVar[list[str]] = []  # names used in the methods draft
     params: ClassVar[list[Param]] = []
@@ -185,7 +187,9 @@ class JobType:
             "description": cls.description,
             "tool": cls.tool,
             "gpu": cls.gpu,
+            "gpu_param": cls.gpu_param,
             "cpus": cls.cpus,
+            "cpu_param": cls.cpu_param,
             "interactive": cls.interactive,
             "admin_only": cls.admin_only,
             "params": [p.to_dict() for p in cls.params],
@@ -237,7 +241,17 @@ class JobType:
     @classmethod
     def resources(cls, params: dict[str, Any]) -> dict[str, int]:
         """Compute resources requested from the lane."""
-        return {"num_gpus": 0 if cls.interactive else cls.gpu, "num_cpus": cls.cpus}
+        gpus = 0 if cls.interactive else cls.gpu
+        if cls.gpu_param and not cls.interactive:
+            value = params.get(cls.gpu_param)
+            if cls.param(cls.gpu_param).type == "bool":
+                gpus = 1 if value else 0
+            else:
+                gpus = max(1, int(float(value or 1)))
+        cpus = cls.cpus
+        if cls.cpu_param:
+            cpus = max(1, int(float(params.get(cls.cpu_param) or cls.cpus)))
+        return {"num_gpus": gpus, "num_cpus": cpus}
 
     # ---------------------------------------------------------- execution
     def run(self, ctx: "JobContext") -> None:

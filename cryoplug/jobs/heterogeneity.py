@@ -337,6 +337,7 @@ class CryodrgnTrain(JobType):
     tool = "cryodrgn"
     software = ["cryoDRGN"]
     gpu = 1
+    gpu_param = "gpus"
     cpus = 8
     description = ("Heterogeneous reconstruction with cryoDRGN: a neural network learns a latent space of the "
                    "conformations and compositions in the particles (poses from the consensus refinement), then "
@@ -370,12 +371,6 @@ class CryodrgnTrain(JobType):
                OutputDef("pc1", "volume_series", "Trajectory along PC1"),
                OutputDef("pc2", "volume_series", "Trajectory along PC2"),
                OutputDef("particles_prepared", "particles", "Particles prepared for cryoDRGN")]
-
-    @classmethod
-    def resources(cls, params):
-        res = super().resources(params)
-        res["num_gpus"] = max(1, int(params.get("gpus") or 1))
-        return res
 
     @classmethod
     def validate(cls, params, connected):

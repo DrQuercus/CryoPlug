@@ -33,7 +33,7 @@ la page d'aide (et dans `docs/JOBS.md`).
 | **Projet** | Un dossier `CP-<titre>` sur le serveur. Un projet par jeu de données / structure. |
 | **Job** | Une étape (J1, J2…) qui écrit dans son sous-dossier `J<n>` : paramètres, log, fichiers, rapport. |
 | **Entrées / sorties** | Un job consomme les sorties d'autres jobs : demi-cartes, carte, masque, modèle, séquence, FSC, rapport, restreintes. |
-| **Lane** | Où tourne le job : la machine locale (avec ses GPU) ou une file de cluster (SLURM). |
+| **Lane** | Où tourne le job : la machine locale (avec ses GPU) ou une file de cluster (SLURM). La lane par défaut est présélectionnée ; la section *Compute* du constructeur permet d'en choisir une autre et de choisir les GPU. |
 | **Résolution « auto »** | La résolution mesurée à l'import est propagée : laissez « auto » dans les jobs suivants. |
 
 Statuts d'un job :
@@ -59,7 +59,7 @@ Statuts d'un job :
    « Use as input »), puis « Jobs » pour revenir aux cartes.
 5. Ou bien **Workflows** : créez toute la chaîne en une fois (par exemple *De novo model → deposition*),
    cochez/décochez les étapes optionnelles, puis « Create & queue all ».
-6. Suivez l'avancement dans les cartes, la vue **Graph** et la page **Queue**.
+6. Suivez l'avancement dans les cartes, la vue **Graph** et la page **Resources** (onglet *Queue*).
 
 Pour essayer sans données : `cryoplug demo-data ~/cryoplug_demo`, puis importez
 `~/cryoplug_demo/CS-demo/J42` (jeu synthétique).
@@ -85,6 +85,7 @@ son nom d'utilisateur et son mot de passe. L'onglet **Settings** réunit tout :
 |---|---|---|
 | **My account** | chacun | Nom, e-mail, changement de mot de passe, navigateurs connectés (« déconnecter les autres »), vos dossiers. |
 | **Users** | administrateurs | Ajouter, modifier, désactiver, supprimer un compte ; lui donner un nouveau mot de passe (généré, affiché une fois, à changer à la connexion) ; son **dossier de projets** et les **dossiers qu'il peut lire**. |
+| **Compute** | administrateurs | La machine et ses GPU ; les **lanes** (cette machine, cluster SLURM) : GPU distribués, partitions, durée, mémoire, options `#SBATCH`, lignes à exécuter avant le job ; *Test* et aperçu du script de soumission. |
 | **Access & security** | administrateurs | Mode de protection, adresse d'écoute, chiffrement, durée des sessions, longueur minimale des mots de passe. |
 
 - Un **utilisateur** voit ses projets et ceux partagés avec lui, crée ses projets dans son dossier et ne
@@ -99,6 +100,23 @@ son nom d'utilisateur et son mot de passe. L'onglet **Settings** réunit tout :
   `cryoplug user passwd <nom>`.
 - Les jobs tournent sous le compte Unix qui a lancé CryoPlug (comme le compte `cryosparc`) : pour une
   séparation stricte des données, utilisez aussi les permissions Unix.
+
+### GPU, lanes et suivi des ressources
+
+Comme dans CryoSPARC, un job part sans rien régler sur la lane par défaut ; la section **Compute** du
+constructeur permet de décider autrement :
+
+- **Lane** : la machine locale ou une lane SLURM (la liste indique ce que chacune offre).
+- **GPU** : *Automatic* prend, au démarrage du job, le GPU libre dont la mémoire est la moins utilisée ;
+  *Choose GPUs* montre chaque GPU en direct (mémoire, charge, température, job qui l'occupe). Choisir un GPU
+  occupé est permis : le job attend qu'il se libère.
+- **CPU threads**, et pour SLURM la **partition**, la **durée** et la **mémoire** du job (vides : réglages
+  de la lane).
+
+La page **Resources** donne la vue d'ensemble du matériel : **Live usage** (CPU, mémoire, chaque GPU et ses
+processus, disques et espace libre, réseau, processus façon htop, graphes des 5 dernières minutes),
+**Queue** (lanes, GPU occupés, jobs actifs) et **Cluster** (partitions SLURM, nœuds, jobs en attente).
+Les administrateurs règlent les lanes dans **Settings › Compute**.
 
 ### Ouvrir CryoPlug depuis votre portable
 
@@ -537,7 +555,11 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 |---|---|---|
 | Le job échoue immédiatement | Programme introuvable | Page **Tools** : configurez `setup` / `bin_dir` / `executable`, redémarrez, *Re-check* |
 | « Resolution is unknown » | Pas de FSC à l'import | Renseignez le paramètre *Resolution* |
-| Job bloqué en `queued` | Parent pas fini, slot ou GPU occupé, parent en échec | Lisez le message de la carte (« Waiting for J3 », « Blocked: J3 failed ») et la page **Queue** |
+| Job bloqué en `queued` | Parent pas fini, slot ou GPU occupé, parent en échec | Lisez le message de la carte (« Waiting for J3 », « Blocked: J3 failed ») et **Resources › Queue** |
+| « Waiting for GPU 1 (used by P2/J5) » | Le GPU choisi pour ce job est pris par un autre job | Attendre, ou *Dequeue* puis *Edit* : GPU *Automatic* ou un autre GPU |
+| Aucun GPU dans **Resources** | `nvidia-smi` absent du PATH du serveur, ou pilote NVIDIA en panne (message affiché) | Indiquer son chemin : `[monitor] nvidia_smi = "/usr/bin/nvidia-smi"` dans la configuration, puis redémarrer |
+| Lane SLURM : *Test* répond « sinfo: command not found » | Les commandes SLURM ne sont pas accessibles au service CryoPlug | Installer les clients SLURM sur le serveur (ou lancer CryoPlug sur un nœud de connexion du cluster), avec le même PATH que le service |
+| Job SLURM qui reste en attente | Partition pleine, durée ou mémoire demandées trop grandes | Onglet **Cluster** de *Resources* ; demander moins, ou une autre partition dans *Compute* |
 | Erreur mémoire GPU | Carte trop grande ou batch trop gros | Réduire la taille de batch, recadrer la boîte, utiliser un GPU plus gros |
 | ModelAngelo : fragments, hélices gauches | Main inversée | Map operations → Flip handedness |
 | Modèle décalé par rapport à la carte | Carte non cubique donnée à ModelAngelo | Map operations → recadrer en boîte cubique |

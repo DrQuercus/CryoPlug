@@ -8,6 +8,7 @@ example file.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -59,23 +60,111 @@ class ToolConfig:
         )
 
 
+LANE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
+SLURM_WORD_RE = re.compile(r"[A-Za-z0-9._,:+-]*")
+SLURM_TIME_RE = re.compile(r"(\d+-)?\d+(:\d{1,2}){0,2}|UNLIMITED|INFINITE", re.IGNORECASE)
+SLURM_MEM_RE = re.compile(r"\d+(\.\d+)?[KMGT]?B?", re.IGNORECASE)
+
+
 @dataclass
 class LaneConfig:
-    """A compute lane: the local machine or a cluster queue."""
+    """A compute lane: the local machine or a cluster queue (like CryoSPARC lanes).
+
+    Cluster lanes are written for SLURM with simple fields (partition, time, memory, GPU resource...) from which
+    the submission script is generated; a custom ``script_template`` replaces it (other schedulers)."""
 
     name: str = "local"
     type: str = "local"  # "local" or "cluster"
     description: str = ""
     max_jobs: int = 2  # concurrent jobs on this lane
     gpus: list[int] = field(default_factory=list)  # GPU ids managed on a local lane ([] = unmanaged)
+    # cluster (SLURM) lanes
+    partition: str = ""  # default partition (--partition)
+    partitions: list[str] = field(default_factory=list)  # partitions users may pick per job ([] = the default only)
+    account: str = ""  # --account
+    qos: str = ""  # --qos
+    time_limit: str = "48:00:00"  # default --time per job
+    mem: str = ""  # default --mem per job ("" = cluster default)
+    gres: str = "gpu"  # GPU resource: --gres=<gres>:<n> ("gpu", "gpu:a100"...)
+    extra_sbatch: str = ""  # more #SBATCH lines (e.g. --constraint=a100)
+    setup: str = ""  # shell lines run before the worker (module load, conda activate...)
     submit_cmd: str = "sbatch {script}"
     status_cmd: str = "squeue -h -j {cluster_job_id} -o %T"
     kill_cmd: str = "scancel {cluster_job_id}"
-    script_template: str = DEFAULT_SLURM_TEMPLATE
+    script_template: str = ""  # "" = generated from the fields above
     python: str = ""  # python interpreter used to start the worker (default: the server's)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @property
+    def custom_script(self) -> bool:
+        return bool(self.script_template.strip()) and self.script_template.strip() != DEFAULT_SLURM_TEMPLATE.strip()
+
+    def sbatch_lines(self) -> list[str]:
+        """The extra #SBATCH lines, normalised (a bare option gets the #SBATCH prefix)."""
+        lines = []
+        for line in self.extra_sbatch.splitlines():
+            line = line.strip()
+            if line:
+                lines.append(line if line.startswith("#SBATCH") else f"#SBATCH {line}")
+        return lines
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "LaneConfig":
+        """A lane from a TOML table or the Settings page; raises ValueError with a readable message."""
+        lane = cls()
+        known = {f for f in cls.__dataclass_fields__}
+        unknown = set(data) - known
+        if unknown:
+            raise ValueError(f"Lane: unknown setting(s) {', '.join(sorted(unknown))}")
+        for key in ("name", "type", "description", "partition", "account", "qos", "time_limit", "mem", "gres", "extra_sbatch",
+                    "setup", "submit_cmd", "status_cmd", "kill_cmd", "script_template", "python"):
+            if key in data and data[key] is not None:
+                setattr(lane, key, str(data[key]).strip() if key not in ("extra_sbatch", "setup", "script_template") else str(data[key]))
+        name = lane.name
+        if not LANE_NAME_RE.fullmatch(name):
+            raise ValueError(f"Lane name '{name}': letters, digits, '.', '_' or '-' (40 characters at most)")
+        if lane.type not in ("local", "cluster"):
+            raise ValueError(f"Lane '{name}': type must be 'local' or 'cluster'")
+        if "max_jobs" in data:
+            try:
+                lane.max_jobs = int(data["max_jobs"])
+            except (TypeError, ValueError):
+                raise ValueError(f"Lane '{name}': max_jobs must be a whole number") from None
+            if not 1 <= lane.max_jobs <= 10000:
+                raise ValueError(f"Lane '{name}': max_jobs must be between 1 and 10000")
+        if "gpus" in data:
+            raw = data["gpus"]
+            if isinstance(raw, str):
+                raw = [g for g in re.split(r"[\s,]+", raw) if g]
+            try:
+                gpus = [int(g) for g in raw or []]
+            except (TypeError, ValueError):
+                raise ValueError(f"Lane '{name}': GPU ids are whole numbers (0, 1, ...)") from None
+            if any(not 0 <= g <= 63 for g in gpus):
+                raise ValueError(f"Lane '{name}': GPU ids go from 0 to 63")
+            lane.gpus = sorted(set(gpus))
+        if "partitions" in data:
+            raw = data["partitions"]
+            if isinstance(raw, str):
+                raw = re.split(r"[\s,]+", raw)
+            lane.partitions = list(dict.fromkeys(str(p).strip() for p in raw or [] if str(p).strip()))
+        for key in ("partition", "account", "qos", "gres", *(["partitions"] if lane.partitions else [])):
+            values = lane.partitions if key == "partitions" else [getattr(lane, key)]
+            for value in values:
+                if not SLURM_WORD_RE.fullmatch(value):
+                    raise ValueError(f"Lane '{name}': invalid {key} '{value}'")
+        if lane.time_limit and not SLURM_TIME_RE.fullmatch(lane.time_limit):
+            raise ValueError(f"Lane '{name}': time limit as SLURM writes it (48:00:00, 2-00:00:00...)")
+        if lane.mem and not SLURM_MEM_RE.fullmatch(lane.mem):
+            raise ValueError(f"Lane '{name}': memory as 64G, 128000M...")
+        for line in lane.extra_sbatch.splitlines():
+            line = line.strip()
+            if line and not (line.startswith("#SBATCH") or line.startswith("-")):
+                raise ValueError(f"Lane '{name}': extra #SBATCH lines are options (--constraint=a100); "
+                                 f"put shell commands in Setup ({line})")
+        return lane
 
 
 @dataclass
@@ -94,6 +183,7 @@ class Config:
     molstar_css: str = ""
     lanes: list[LaneConfig] = field(default_factory=lambda: [LaneConfig()])
     tools: dict[str, ToolConfig] = field(default_factory=dict)
+    nvidia_smi: str = ""  # [monitor] nvidia_smi: path of nvidia-smi if not on PATH
     config_path: Path | None = None
 
     @property
@@ -153,21 +243,12 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     cfg.molstar_js = str(viewer.get("molstar_js", ""))
     cfg.molstar_css = str(viewer.get("molstar_css", ""))
 
-    lanes = []
-    for raw in data.get("lanes", []):
-        lane = LaneConfig()
-        for key in ("name", "type", "description", "submit_cmd", "status_cmd", "kill_cmd", "script_template", "python"):
-            if key in raw:
-                setattr(lane, key, str(raw[key]))
-        if "max_jobs" in raw:
-            lane.max_jobs = max(1, int(raw["max_jobs"]))
-        if "gpus" in raw:
-            lane.gpus = [int(g) for g in raw["gpus"]]
-        if lane.type not in ("local", "cluster"):
-            raise ValueError(f"Lane '{lane.name}': type must be 'local' or 'cluster'")
-        lanes.append(lane)
+    lanes = [LaneConfig.from_dict(dict(raw)) for raw in data.get("lanes", [])]
     if lanes:
         cfg.lanes = lanes
+
+    monitor = data.get("monitor", {})
+    cfg.nvidia_smi = str(monitor.get("nvidia_smi", ""))
 
     cfg.tools = {name: ToolConfig.from_dict(name, raw) for name, raw in data.get("tools", {}).items()}
     return cfg
@@ -222,13 +303,29 @@ max_jobs = 2
 # GPUs handed out to GPU jobs (CUDA_VISIBLE_DEVICES). Empty list = unmanaged.
 gpus = [0]
 
+# Lanes (and their GPUs) can also be edited in Settings > Compute: they are then
+# saved in CryoPlug's database and take precedence over the [[lanes]] below.
+#
 # Example SLURM lane. The project directories must be on a shared filesystem.
+# The submission script is generated from these fields (users may pick another
+# partition, time limit or memory per job among those allowed).
 # [[lanes]]
 # name = "slurm-gpu"
 # type = "cluster"
+# description = "GPU partition of the cluster"
 # max_jobs = 20
-# Placeholders: {{script}} {{cluster_job_id}} {{project_uid}} {{job_uid}} {{job_type}} {{job_dir}}
-#               {{num_gpus}} {{num_cpus}} {{worker_cmd}}. Other braces (e.g. ${{SLURM_JOB_ID}}) are kept.
+# partition = "gpu"
+# partitions = ["gpu", "gpu-long"]
+# account = ""
+# qos = ""
+# time_limit = "48:00:00"
+# mem = "64G"
+# gres = "gpu"            # --gres=gpu:<n>; "gpu:a100" for a GPU model
+# extra_sbatch = "--constraint=a100"
+# setup = "module load cuda/12.2"
+# Fully custom script instead (other schedulers). Placeholders: {{script}} {{cluster_job_id}}
+# {{project_uid}} {{job_uid}} {{job_type}} {{job_dir}} {{num_gpus}} {{num_cpus}} {{partition}} {{time}}
+# {{mem}} {{account}} {{qos}} {{gres}} {{setup}} {{worker_cmd}}. Other braces (e.g. ${{SLURM_JOB_ID}}) are kept.
 # submit_cmd = "sbatch {{script}}"
 # status_cmd = "squeue -h -j {{cluster_job_id}} -o %T"
 # kill_cmd = "scancel {{cluster_job_id}}"
@@ -237,9 +334,12 @@ gpus = [0]
 # #SBATCH --output={{job_dir}}/cluster_stdout.log
 # #SBATCH --cpus-per-task={{num_cpus}}
 # #SBATCH --gres=gpu:{{num_gpus}}
-# #SBATCH --partition=gpu
+# #SBATCH --partition={{partition}}
 # {{worker_cmd}}
 # '''
+
+# [monitor]
+# nvidia_smi = "/usr/bin/nvidia-smi"   # if nvidia-smi is not on the PATH of the server
 
 # ---------------------------------------------------------------------------
 # External programs. For each tool:

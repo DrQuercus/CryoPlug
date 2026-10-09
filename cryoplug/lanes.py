@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -31,10 +32,16 @@ class LocalLane:
         self.python = cfg.python or sys.executable
         self._procs: dict[int, subprocess.Popen] = {}
 
-    def launch(self, job: dict[str, Any], job_dir: Path, gpus: list[int]) -> dict[str, Any]:
+    def launch(self, job: dict[str, Any], job_dir: Path, gpus: list[int], resources: dict[str, Any] | None = None) -> dict[str, Any]:
         env = os.environ.copy()
+        # GPU numbers as nvidia-smi shows them (CUDA's default order puts the fastest GPU first)
+        env.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
         if gpus:
             env["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in gpus)
+        if (job.get("requested") or {}).get("num_cpus"):  # CPUs chosen for the job: libraries use that many threads
+            threads = str((resources or {}).get("num_cpus") or job["requested"]["num_cpus"])
+            for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+                env[name] = threads
         env["CRYOPLUG_JOB"] = f"{job['project_uid']}/{job['uid']}"
         with open(job_dir / "worker.log", "ab") as log:
             proc = subprocess.Popen(worker_command(self.python, job_dir), cwd=str(job_dir), env=env, stdout=log,
@@ -80,15 +87,48 @@ class LocalLane:
         timer.start()
 
 
+def generated_script(cfg: LaneConfig, values: dict[str, Any]) -> str:
+    """The SLURM script written from the lane's fields (the per-job choices are already in ``values``)."""
+    lines = ["#!/bin/bash",
+             "#SBATCH --job-name=cryoplug_{project_uid}_{job_uid}",
+             "#SBATCH --output={job_dir}/cluster_stdout.log",
+             "#SBATCH --error={job_dir}/cluster_stdout.log",
+             "#SBATCH --cpus-per-task={num_cpus}"]
+    if values["partition"]:
+        lines.append("#SBATCH --partition={partition}")
+    if values["account"]:
+        lines.append("#SBATCH --account={account}")
+    if values["qos"]:
+        lines.append("#SBATCH --qos={qos}")
+    if values["time"]:
+        lines.append("#SBATCH --time={time}")
+    if values["mem"]:
+        lines.append("#SBATCH --mem={mem}")
+    if int(values["num_gpus"]) > 0 and values["gres"]:
+        lines.append("#SBATCH --gres={gres}:{num_gpus}")
+    lines += cfg.sbatch_lines()
+    lines.append("")
+    if cfg.setup.strip():
+        lines.append(cfg.setup.rstrip())
+    lines.append("{worker_cmd}")
+    return fill_template("\n".join(lines) + "\n", values)
+
+
 class ClusterLane:
     def __init__(self, cfg: LaneConfig):
         self.cfg = cfg
         self.python = cfg.python or sys.executable
+        self._overview: tuple[float, dict[str, Any]] | None = None
 
     def _shell(self, command: str, timeout: float = 60) -> subprocess.CompletedProcess:
         return subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=timeout)
 
+    @property
+    def is_slurm(self) -> bool:
+        return self.cfg.submit_cmd.strip().startswith("sbatch")
+
     def render_script(self, job: dict[str, Any], job_dir: Path, resources: dict[str, Any]) -> str:
+        cfg = self.cfg
         values = {
             "project_uid": job["project_uid"],
             "job_uid": job["uid"],
@@ -97,9 +137,98 @@ class ClusterLane:
             "job_dir": str(job_dir),
             "num_gpus": int(resources.get("num_gpus", 0)),
             "num_cpus": int(resources.get("num_cpus", 1)),
+            "partition": resources.get("partition") or cfg.partition,
+            "time": resources.get("time") or cfg.time_limit,
+            "mem": resources.get("mem") or cfg.mem,
+            "account": cfg.account,
+            "qos": cfg.qos,
+            "gres": cfg.gres,
+            "setup": cfg.setup,
             "worker_cmd": shlex.join(worker_command(self.python, job_dir)),
         }
-        return fill_template(self.cfg.script_template, values)
+        if cfg.custom_script:
+            return fill_template(cfg.script_template, values)
+        return generated_script(cfg, values)
+
+    def partition_flag(self) -> str:
+        parts = self.cfg.partitions or ([self.cfg.partition] if self.cfg.partition else [])
+        return f" -p {shlex.quote(','.join(parts))}" if parts else ""
+
+    def overview(self, max_age: float = 20.0) -> dict[str, Any]:
+        """Partitions, nodes and queue of a SLURM lane (sinfo / squeue), cached for ``max_age`` seconds."""
+        if self._overview and time.monotonic() - self._overview[0] < max_age:
+            return self._overview[1]
+        result = self._read_overview()
+        self._overview = (time.monotonic(), result)
+        return result
+
+    def _read_overview(self) -> dict[str, Any]:
+        if not self.is_slurm:
+            return {"available": False, "message": "The overview is available for SLURM lanes (sbatch)."}
+        try:
+            info = self._shell(f"sinfo -h -o '%P|%a|%l|%D|%T|%C|%G|%m'{self.partition_flag()}", timeout=15)
+            queue = self._shell(f"squeue -h -o '%T|%u|%P'{self.partition_flag()}", timeout=15)
+        except subprocess.TimeoutExpired:
+            return {"available": False, "message": "sinfo / squeue did not answer within 15 s."}
+        if info.returncode != 0:
+            return {"available": False, "message": (info.stderr or info.stdout or "sinfo failed").strip()[-400:]}
+        partitions: dict[str, dict[str, Any]] = {}
+        for line in info.stdout.splitlines():
+            fields = line.strip().split("|")
+            if len(fields) < 8:
+                continue
+            name, avail, limit, nodes, node_state, cpus, gres, mem = fields[:8]
+            default = name.endswith("*")
+            name = name.rstrip("*")
+            part = partitions.setdefault(name, {"name": name, "default": default, "available": avail, "time_limit": limit,
+                                                "nodes": {}, "cpus": {"allocated": 0, "idle": 0, "other": 0, "total": 0},
+                                                "gres": [], "memory_mb": mem})
+            try:
+                part["nodes"][node_state] = part["nodes"].get(node_state, 0) + int(nodes)
+            except ValueError:
+                pass
+            try:
+                a, i, o, t = (int(x) for x in cpus.split("/"))
+                for key, value in zip(("allocated", "idle", "other", "total"), (a, i, o, t), strict=True):
+                    part["cpus"][key] += value
+            except ValueError:
+                pass
+            if gres and gres != "(null)" and gres not in part["gres"]:
+                part["gres"].append(gres)
+        jobs = {"running": 0, "pending": 0, "other": 0}
+        users: dict[str, int] = {}
+        if queue.returncode == 0:
+            for line in queue.stdout.splitlines():
+                fields = line.strip().split("|")
+                if len(fields) < 2:
+                    continue
+                state = fields[0].upper()
+                jobs["running" if state == "RUNNING" else "pending" if state == "PENDING" else "other"] += 1
+                users[fields[1]] = users.get(fields[1], 0) + 1
+        return {"available": True, "partitions": list(partitions.values()), "jobs": jobs,
+                "users": sorted(users.items(), key=lambda kv: -kv[1])[:8]}
+
+    def test(self) -> dict[str, Any]:
+        """Is the scheduler reachable from the server? Lists the partitions it knows."""
+        if not self.is_slurm:
+            try:
+                out = self._shell(self.cfg.submit_cmd.split()[0] + " --version 2>&1 || true", timeout=15)
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "output": "No answer within 15 s"}
+            return {"ok": True, "output": out.stdout.strip()[-400:], "partitions": []}
+        try:
+            version = self._shell("sinfo --version", timeout=15)
+            parts = self._shell("sinfo -h -o '%P'", timeout=15)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "output": "sinfo did not answer within 15 s"}
+        if version.returncode != 0:
+            return {"ok": False, "output": (version.stderr or version.stdout or "sinfo not found").strip()[-400:]}
+        names = list(dict.fromkeys(p.strip().rstrip("*") for p in parts.stdout.splitlines() if p.strip()))  # one line per node state
+        missing = [p for p in (self.cfg.partitions or [self.cfg.partition]) if p and p not in names]
+        out = version.stdout.strip() + (f"\nPartitions: {', '.join(names)}" if names else "")
+        if missing:
+            out += f"\nUnknown partition(s): {', '.join(missing)}"
+        return {"ok": not missing, "output": out, "partitions": names}
 
     def launch(self, job: dict[str, Any], job_dir: Path, gpus: list[int], resources: dict[str, Any] | None = None) -> dict[str, Any]:
         script = job_dir / "cluster_submit.sh"

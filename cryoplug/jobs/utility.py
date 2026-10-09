@@ -204,6 +204,7 @@ class CustomCommand(JobType):
     category = "Utilities"
     tool = "shell"
     admin_only = True  # any bash script, run under the server's account
+    gpu_param = "use_gpu"
     software = []
     description = ("Run any program on CryoPlug data (bash script template). Placeholders: {map} {map2} {half_map_a} "
                    "{half_map_b} {model} {mask} {sequence} {job_dir} {resolution} {pixel_size} {gpus}. Files matching "
@@ -222,12 +223,6 @@ class CustomCommand(JobType):
         Param("use_gpu", "bool", False, label="Needs a GPU", advanced=True),
     ]
     outputs = [OutputDef("map", "map"), OutputDef("model", "model")]
-
-    @classmethod
-    def resources(cls, params):
-        res = super().resources(params)
-        res["num_gpus"] = 1 if params.get("use_gpu") else 0
-        return res
 
     def run(self, ctx: JobContext) -> None:
         values: dict[str, str] = {"job_dir": str(ctx.job_dir), "gpus": ",".join(ctx.physical_gpus())}

@@ -1,5 +1,6 @@
 // Job builder (right panel): pick a job type, connect inputs (select or drag & drop outputs), set parameters, queue.
 import { api } from './api.js';
+import { computeSection, initCompute, requestedBody } from './compute.js';
 import { browseFiles } from './filebrowser.js';
 import { CATEGORY_FR, helpDetails, helpModal } from './help.js';
 import { compatibleOutputs, navigate, refreshJobs, restricted, state, typeTitle } from './state.js';
@@ -17,6 +18,7 @@ export function openBuilder({ type = null, editing = null, prefillFrom = null, p
     b.title = editing.title === typeTitle(editing.type) ? '' : editing.title;
     b.lane = editing.lane || '';
   }
+  initCompute(b, editing);
   state.builder = b;
   if (b.type && !editing) applyType(b.type);
   if (params && b.type) setKnownParams(b, params);
@@ -161,6 +163,7 @@ export function renderBuilder() {
 
   const basic = t.params.filter((x) => !x.advanced);
   const adv = t.params.filter((x) => x.advanced);
+  const compute = computeSection(b, t);
   if (t.params.length) {
     const sec = h('div', { class: 'section' }, h('h4', {}, 'Parameters'), basic.map((prm) => paramField(prm, b.params)));
     if (adv.length) {
@@ -170,15 +173,13 @@ export function renderBuilder() {
         e.target.textContent = b.showAdvanced ? '▾ Hide advanced parameters' : `▸ Advanced parameters (${adv.length})`;
       } }, b.showAdvanced ? '▾ Hide advanced parameters' : `▸ Advanced parameters (${adv.length})`), advBox);
     }
+    // parameters setting the GPU count or the processes change what Compute shows
+    const needs = new Set([t.gpu_param, t.cpu_param].filter(Boolean).map((n) => `p-${n}`));
+    if (needs.size) sec.addEventListener('input', (e) => { if (needs.has(e.target.id)) compute.render(); });
+    if (needs.size) sec.addEventListener('change', (e) => { if (needs.has(e.target.id)) compute.render(); });
     body.appendChild(sec);
   }
-
-  const lanes = state.info.lanes;
-  const laneSel = h('select', { onchange: (e) => { b.lane = e.target.value; } },
-    lanes.map((l) => h('option', { value: l.name, selected: (b.lane || lanes[0].name) === l.name }, `${l.name} (${l.type})`)));
-  body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'Resources'),
-    h('div', { class: 'row' }, h('div', { class: 'field grow' }, h('label', {}, 'Lane'), laneSel)),
-    h('div', { class: 'muted small' }, `${t.gpu ? `${t.gpu} GPU · ` : ''}${t.cpus} CPU${t.cpus > 1 ? 's' : ''}${t.interactive ? ' · interactive (waits for you after preparation)' : ''}`)));
+  body.appendChild(compute.el);
 
   const foot = h('div', { class: 'sticky-foot' },
     h('span', { class: 'grow' }),
@@ -327,7 +328,9 @@ function renderTypePicker(p) {
 async function submit(queue) {
   const b = state.builder;
   const puid = state.project.uid;
-  const body = { title: b.title || null, params: b.params, inputs: b.inputs, lane: b.lane || state.info.lanes[0].name };
+  let resources;
+  try { resources = requestedBody(b, state.types[b.type]); } catch (err) { toast(err.message, 'error', 6000); return; }
+  const body = { title: b.title || null, params: b.params, inputs: b.inputs, lane: b.lane || state.info.lanes[0].name, resources };
   let job;
   try {
     job = b.editing ? await guard(api.updateJob(puid, b.editing.uid, body)) : await guard(api.createJob(puid, { ...body, type: b.type }));

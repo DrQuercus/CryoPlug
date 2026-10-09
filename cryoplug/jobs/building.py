@@ -554,6 +554,7 @@ class PhenixDockInMap(JobType):
     tool = "phenix"
     software = ["Phenix dock_in_map"]
     cpus = 4
+    cpu_param = "nproc"
     description = "Global search for the position of a model (or domains) in the map (phenix.dock_in_map)."
     inputs = [Slot("model", ("model",), "Model"), Slot("map", ("map",), "Map")]
     params = [resolution_param(), Param("nproc", "int", 4, label="Processors", min=1), extra_args_param()]

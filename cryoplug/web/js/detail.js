@@ -3,6 +3,7 @@
 // (as in CryoSPARC), where its outputs can be dragged onto the builder's inputs.
 import { api } from './api.js';
 import { builderConnect, builderPrefill, builderSetParams, builderSlotsFor, openBuilder } from './builder.js';
+import { computeRows } from './compute.js';
 import { helpSheet } from './help.js';
 import { latentExplorer } from './latent.js';
 import { heatmap, lineChart } from './plots.js';
@@ -150,6 +151,7 @@ function renderHeaderOnly() {
       page ? null : h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => navigate(closeHref()) }, icon('close'))),
     h('div', { class: 'panel-sub muted small' }, h('span', {}, typeTitle(job.type)), h('span', {}, when),
       jobDuration(job) ? h('span', { title: 'Run time' }, icon('clock'), jobDuration(job)) : null, job.lane ? h('span', {}, `lane ${job.lane}`) : null,
+      (job.gpus || []).length ? h('span', { title: 'GPUs given to the job' }, icon('gpu'), `GPU ${job.gpus.join(', ')}`) : null,
       job.created_by && state.info.auth === 'users' ? h('span', { title: 'Created by' }, icon('user'), job.created_by) : null),
     h('div', { class: 'actions-bar' }, actions),
     h('div', { class: 'tabs', role: 'tablist' }, ['overview', 'log', 'files'].map((t) => h('button', {
@@ -396,6 +398,9 @@ function renderOverview(body) {
       }))));
   }
 
+  body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'Compute'), h('div', { class: 'box kv' },
+    computeRows(job).flatMap(([k, v]) => [h('span', {}, k), h('span', {}, v)]))));
+
   if (t && t.help) {
     const canContinue = job.status === 'completed';
     body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'À propos de ce job'),
@@ -409,11 +414,14 @@ function renderOverview(body) {
   notes.value = job.notes || '';
   body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'Notes'), notes));
 
+  // each key and value in its own element: adjacent text nodes would merge into a single grid cell
+  const details = [['Job type', job.type], ['Created', fmtTime(job.created_at)], ['Started', fmtTime(job.started_at) || '—'],
+    ['Ended', fmtTime(job.ended_at) || '—'], ['GPUs', (job.gpus || []).join(', ') || '—'],
+    ['Process', job.pid ? String(job.pid) : (job.cluster_job_id ? `cluster job ${job.cluster_job_id}` : '—')],
+    ['Directory', h('span', { class: 'row' }, h('span', { class: 'mono', style: { wordBreak: 'break-all' } }, job.job_dir),
+      h('button', { class: 'icon-btn', 'aria-label': 'Copy path', onclick: () => copyText(job.job_dir) }, icon('copy')))]];
   body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'Details'), h('div', { class: 'box kv small' },
-    'Job type', job.type, 'Created', fmtTime(job.created_at), 'Started', fmtTime(job.started_at) || '—', 'Ended', fmtTime(job.ended_at) || '—',
-    'GPUs', (job.gpus || []).join(', ') || '—', 'Process', job.pid ? String(job.pid) : (job.cluster_job_id ? `cluster job ${job.cluster_job_id}` : '—'),
-    'Directory', h('span', { class: 'row' }, h('span', { class: 'mono', style: { wordBreak: 'break-all' } }, job.job_dir),
-      h('button', { class: 'icon-btn', 'aria-label': 'Copy path', onclick: () => copyText(job.job_dir) }, icon('copy'))))));
+    details.flatMap(([k, v]) => [h('span', {}, k), h('span', {}, v)]))));
 }
 
 function reportSection(sec, puid, job) {

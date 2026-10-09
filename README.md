@@ -3,8 +3,9 @@
 **Suite de post-traitement cryo-EM dans le navigateur, de la meilleure carte CryoSPARC jusqu'au dépôt PDB/EMDB.**
 
 CryoPlug prend le relais une fois la reconstruction terminée dans CryoSPARC. Il pilote, depuis une
-interface web inspirée de CryoSPARC (projets, cartes de jobs, file d'attente, lanes, **comptes
-utilisateurs**), tous les logiciels installés sur votre serveur local :
+interface web inspirée de CryoSPARC (projets, cartes de jobs, file d'attente, lanes, **choix des GPU**,
+**suivi du matériel en direct**, **comptes utilisateurs**), tous les logiciels installés sur votre serveur
+local :
 
 | Étape | Logiciels pilotés | Jobs CryoPlug |
 |---|---|---|
@@ -51,6 +52,12 @@ utilisateurs**), tous les logiciels installés sur votre serveur local :
 |---|---|
 | ![](docs/images/accounts_users.png) | ![](docs/images/accounts_add_user.png) |
 
+| **Ressources en direct** (comme htop / nvtop) : CPU, mémoire, chaque GPU et ses processus, réseau, disques | **Choix des GPU** dans le constructeur : automatique, ou choisis sur leur occupation en direct |
+|---|---|
+| ![](docs/images/resources_live.png) | ![](docs/images/builder_gpus.png) |
+| **Settings › Compute** : la machine et ses GPU, les lanes locales et SLURM | **Partitions SLURM** (onglet *Cluster* de la page Resources) |
+| ![](docs/images/settings_compute.png) | ![](docs/images/resources_cluster.png) |
+
 *Captures réalisées avec les jeux de données synthétiques de démonstration et des programmes de substitution
 (aucun calcul réel de ModelAngelo, CryoAtom2, Phenix, cryoDRGN… dans ces images).*
 
@@ -71,7 +78,7 @@ utilisateurs**), tous les logiciels installés sur votre serveur local :
 1. [Installation sur le serveur](#1-installation-sur-le-serveur)
 2. [Configurer les logiciels](#2-configurer-les-logiciels)
 3. [Utilisation](#3-utilisation)
-4. [Lanes, GPU et cluster SLURM](#4-lanes-gpu-et-cluster-slurm)
+4. [Ressources : lanes, GPU, cluster SLURM et suivi en direct](#4-ressources--lanes-gpu-cluster-slurm-et-suivi-en-direct)
 5. [Comptes utilisateurs, accès réseau et sécurité](#5-comptes-utilisateurs-accès-réseau-et-sécurité)
 6. [Référence des jobs](#6-référence-des-jobs)
 7. [Architecture et ajout d'un nouveau logiciel](#7-architecture-et-ajout-dun-nouveau-logiciel)
@@ -320,29 +327,85 @@ Le job prépare la session (modèle + cartes associées, `clipper associate`, `i
 - **wwPDB validation report** : le rapport officiel (PDF + XML) calculé par le service de validation OneDep du
   wwPDB, avec les centiles ; le modèle et la carte primaire sont envoyés au serveur du wwPDB.
 
-## 4. Lanes, GPU et cluster SLURM
+## 4. Ressources : lanes, GPU, cluster SLURM et suivi en direct
+
+Comme dans CryoSPARC, chaque job part sur une **lane** : la machine elle-même, dont les GPU sont distribués
+aux jobs (un job par GPU, via `CUDA_VISIBLE_DEVICES`), ou un cluster SLURM. La première lane est celle par
+défaut ; rien n'est à choisir pour lancer un job, mais tout peut l'être.
+
+### Settings › Compute (administrateurs)
+
+- **Matériel du serveur** : processeurs, mémoire et GPU détectés par `nvidia-smi`.
+- **Lanes** : *Add a lane* (cette machine ou cluster SLURM), *Edit*, *Make default*, *Duplicate*, *Delete*.
+  - Lane locale : les GPU qu'elle distribue (cases à cocher parmi les GPU détectés) et le nombre de jobs
+    simultanés. Aucun GPU coché : la lane ne distribue pas de GPU (les programmes les voient tous).
+  - Lane SLURM : partition par défaut et partitions proposées aux utilisateurs, compte (`--account`), QOS,
+    durée et mémoire par job, ressource GPU (`--gres=gpu:<n>`, ou `gpu:a100`…), options `#SBATCH`
+    supplémentaires, lignes exécutées sur le nœud avant le job (`module load cuda/12.2`, conda…). Le script
+    de soumission est écrit à partir de ces champs ; *Advanced* permet de changer les commandes
+    (`sbatch`, `squeue`, `scancel`) ou de fournir son propre script (autres ordonnanceurs).
+  - **Test** vérifie la lane depuis le serveur (`sinfo` et la liste des partitions, ou `nvidia-smi` pour les
+    GPU) ; **Preview script** montre le script soumis pour un job à 1 GPU.
+- Les lanes enregistrées ici remplacent les `[[lanes]]` de `config.toml` (*Use config.toml again* pour y
+  revenir) et s'appliquent aux jobs lancés ensuite, sans redémarrer. Une lane qui a des jobs en file ou en
+  cours ne peut être ni supprimée ni renommée ; un job préparé pour une lane supprimée part sur la lane par
+  défaut.
+
+### Section *Compute* du constructeur de job
+
+- **Lane** : la lane par défaut est présélectionnée ; la liste indique ce que chacune offre.
+- **GPU** : *Automatic* (au démarrage du job, CryoPlug prend le GPU libre dont la mémoire est la moins
+  utilisée, programmes extérieurs compris) ou *Choose GPUs* : chaque GPU de la lane avec sa mémoire, sa
+  charge, sa température et le job CryoPlug qui l'occupe. Un GPU occupé peut être choisi : le job attend
+  qu'il se libère (« Waiting for GPU 1 (used by P2/J5) »). Le nombre de GPU suit le job (paramètre *GPUs*
+  de cryoDRGN, *Needs a GPU* d'une commande personnalisée…).
+- **CPU threads** : par défaut ceux du job (ou de son paramètre *Processors*) ; sur la machine, fixe
+  `OMP_NUM_THREADS` ; sous SLURM, `--cpus-per-task`.
+- **SLURM** : partition, durée et mémoire pour ce job (vides : réglages de la lane).
+- Le panneau du job rappelle ces choix (section *Compute*) et les GPU attribués.
+
+### Page *Resources*
+
+- **Live usage**, comme htop et nvtop : CPU (total, chaque cœur, charge), mémoire (utilisée, cache, swap),
+  chaque GPU (utilisation, mémoire, température, puissance, ventilateur, processus et job CryoPlug qui les a
+  lancés), stockage (espace libre de chaque disque, celui des projets signalé ; un montage réseau qui ne
+  répond plus est indiqué sans bloquer la page), débits réseau et disque, processus (tri par CPU, mémoire,
+  mémoire GPU ; filtre *CryoPlug jobs only*). Graphes des 5 dernières minutes avec valeurs au survol ;
+  mesures toutes les 2 s, seulement pendant que quelqu'un regarde la page.
+- **Queue** : chaque lane (jobs en cours / en file, GPU occupés et par quel job) et la liste des jobs actifs.
+- **Cluster** (s'il y a une lane SLURM) : partitions (nœuds par état, CPU utilisés, GPU, mémoire par nœud,
+  limite de temps), jobs en cours et en attente.
+- Avec des comptes, tout le monde voit l'occupation de la machine, mais pas les commandes ni les jobs des
+  autres utilisateurs ; les lanes et le matériel ne se règlent que par les administrateurs.
+
+### Dans le fichier de configuration
+
+Les lanes peuvent aussi être écrites dans `config.toml` (elles servent tant que rien n'est enregistré dans
+*Settings › Compute*) :
 
 ```toml
 [[lanes]]
 name = "local"
 type = "local"
 max_jobs = 2
-gpus = [0, 1]        # GPU distribués aux jobs (CUDA_VISIBLE_DEVICES) ; [] = non géré
+gpus = [0, 1]                     # GPU distribués aux jobs ; [] = non géré
 
 [[lanes]]
 name = "slurm-gpu"
 type = "cluster"
 max_jobs = 20
-submit_cmd = "sbatch {script}"
-status_cmd = "squeue -h -j {cluster_job_id} -o %T"
-kill_cmd = "scancel {cluster_job_id}"
-script_template = '''#!/bin/bash
-#SBATCH --job-name=cryoplug_{project_uid}_{job_uid}
-#SBATCH --output={job_dir}/cluster_stdout.log
-#SBATCH --cpus-per-task={num_cpus}
-#SBATCH --gres=gpu:{num_gpus}
-{worker_cmd}
-'''
+partition = "gpu"                 # --partition par défaut
+partitions = ["gpu", "gpu-long"]  # proposées dans le constructeur de job
+account = "lab"                   # --account
+time_limit = "24:00:00"           # --time par défaut
+mem = "64G"                       # --mem par défaut ("" = celle du cluster)
+gres = "gpu"                      # les jobs GPU demandent --gres=gpu:<n>
+extra_sbatch = "--constraint=a100"
+setup = "module load cuda/12.2"   # exécuté sur le nœud avant le worker
+# script_template = '''...'''     # script personnalisé : remplace le script écrit à partir des champs
+
+[monitor]
+nvidia_smi = "/usr/bin/nvidia-smi"  # si nvidia-smi n'est pas dans le PATH du serveur
 ```
 
 Les workers communiquent uniquement par fichiers dans le dossier du job (`job.json`, `state.json`,
@@ -532,8 +595,9 @@ cryoplug/
   server/accounts.py  API des comptes (Settings) et règles d'accès aux projets
   users.py         comptes : mots de passe (scrypt), sessions, limitation des tentatives, dossiers
   manager.py       projets, jobs, entrées/sorties, sessions interactives, workflows
-  scheduler.py     lance les jobs prêts (dépendances, slots, GPU), suit les workers
-  lanes.py         exécution locale ou soumission cluster
+  scheduler.py     lance les jobs prêts (dépendances, slots, GPU choisis ou les moins chargés), suit les workers
+  lanes.py         exécution locale ou soumission cluster (script SLURM écrit à partir des réglages de la lane)
+  monitor.py       utilisation en direct : CPU, mémoire, GPU (nvidia-smi), disques, réseau, processus
   worker.py        exécute un job dans son propre processus
   jobs/            un module par famille de jobs (imports, sharpening, building, ...)
   mrc.py           I/O MRC, FSC, filtres, cartes modèles
@@ -555,7 +619,7 @@ class MyTool(JobType):
     title = "My tool"
     category = "Map processing"
     tool = "mytool"              # clé [tools.mytool] dans la config (déclarer aussi dans tools.TOOLS)
-    gpu = 1
+    gpu = 1                      # GPU par job (gpu_param = "gpus" : nombre donné par un paramètre)
     inputs = [Slot("half_maps", ("half_maps",), "Half maps")]
     params = [Param("strength", "float", 1.0), extra_args_param()]
     outputs = [OutputDef("map", "map", "Enhanced map")]
@@ -582,4 +646,6 @@ Les tests lancent de vrais workers sur des données synthétiques, avec de faux 
 interfaces de ModelAngelo, LocScale et Phenix : import CryoSPARC, FSC, chaîne complète jusqu'au paquet de
 dépôt, CryoAtom2, recherche HMM, Boltz-2, spIsoNet, 3D FSC, eLBOW/douse, session ISOLDE, échec / arrêt de
 jobs, workflows, API HTTP, concurrence API/planificateur, contrôle d'accès (connexion, jeton, mot de passe,
-requêtes d'autres origines) et zone carte-modèle du visualiseur (comparée à un calcul exhaustif).
+requêtes d'autres origines), zone carte-modèle du visualiseur (comparée à un calcul exhaustif) et ressources
+(lanes modifiées en direct, GPU choisis ou automatiques, script SLURM, moniteur avec un faux `nvidia-smi`,
+vue des partitions avec de faux `sinfo` / `squeue`, ce que voit chaque utilisateur).

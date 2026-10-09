@@ -1,9 +1,10 @@
 // Settings, as in CryoSPARC's admin panel: "My account" for everyone; the user accounts (with their
-// password, role and folders) and the access settings for administrators.
+// password, role and folders), the compute lanes (GPUs, SLURM) and the access settings for administrators.
 import { api } from './api.js';
+import { fmtGiB } from './compute.js';
 import { browseFiles } from './filebrowser.js';
 import { navigate, state } from './state.js';
-import { ago, avatar, btn, clear, copyText, fmtTime, guard, h, icon, modal, popupMenu, shortPath, toast } from './ui.js';
+import { ago, avatar, btn, clear, confirmDialog, copyText, fmtSize, fmtTime, guard, h, icon, modal, popupMenu, shortPath, toast } from './ui.js';
 
 const ROLE = { admin: 'Administrator', user: 'User' };
 
@@ -86,7 +87,7 @@ export async function renderSettings(content, sub) {
   const me = state.info.user || { builtin: true, role: 'admin' };
   const tabs = [];
   if (!me.builtin) tabs.push(['account', 'My account', 'user']);
-  if (me.role === 'admin') tabs.push(['users', 'Users', 'users'], ['access', 'Access & security', 'lock']);
+  if (me.role === 'admin') tabs.push(['users', 'Users', 'users'], ['compute', 'Compute', 'cpu'], ['access', 'Access & security', 'lock']);
   const tab = tabs.some(([k]) => k === sub) ? sub : tabs[0][0];
   const body = h('div', { class: 'settings-body' });
   clear(content, h('div', { class: 'settings-page' },
@@ -96,6 +97,7 @@ export async function renderSettings(content, sub) {
     body));
   if (tab === 'account') await renderAccount(body, me);
   else if (tab === 'users') await (me.builtin ? renderFirstAdmin(body) : renderUsers(body, me));
+  else if (tab === 'compute') await renderCompute(body);
   else await renderAccess(body);
 }
 
@@ -371,6 +373,208 @@ function renderFirstAdmin(body) {
       field('Password', pw1, `At least ${state.info.password_min || 8} characters.`), field('Password again', pw2),
       field('Projects folder', projectsDir, 'Where your new projects go. Empty: the default shown.'),
       h('div', { class: 'row end' }, h('button', { class: 'btn primary', type: 'submit' }, icon('shield'), 'Create the administrator account')))))));
+}
+
+// ------------------------------------------------------------------ compute lanes (administrators)
+// Lanes as in CryoSPARC: this machine (with the GPUs it hands out, one job per GPU) or SLURM partitions.
+// Jobs go to the first lane unless another one is picked in the job builder.
+const LANE_DEFAULTS = { name: '', type: 'local', description: '', max_jobs: 2, gpus: [], partition: '', partitions: [], account: '', qos: '',
+  time_limit: '48:00:00', mem: '', gres: 'gpu', extra_sbatch: '', setup: '', submit_cmd: 'sbatch {script}',
+  status_cmd: 'squeue -h -j {cluster_job_id} -o %T', kill_cmd: 'scancel {cluster_job_id}', script_template: '', python: '' };
+const isSlurm = (l) => (l.submit_cmd || '').trim().startsWith('sbatch');
+
+async function renderCompute(body) {
+  let data;
+  try { data = await api.lanes(); } catch (e) { clear(body, h('div', { class: 'alert error' }, e.message)); return; }
+  const hw = await api.hardware().catch(() => null);
+  const ctx = { lanes: data.lanes, hw, reload: () => renderCompute(body) };
+  ctx.save = async (lanes, message) => {
+    try { await guard(api.putLanes(lanes), message); } catch { return false; }
+    state.info = await api.info(); // the job builder and the queue see the new lanes
+    ctx.reload();
+    return true;
+  };
+  const gpus = hw?.gpus || [];
+  const hardware = h('div', { class: 'box settings-box hw' },
+    h('div', { class: 'hw-head' }, icon('server'), h('b', {}, hw?.hostname || state.info.hostname),
+      h('span', { class: 'muted' }, [hw?.cpus ? `${hw.cpus} CPU threads` : null, hw?.memory ? `${fmtSize(hw.memory)} of memory` : null].filter(Boolean).join(' · '))),
+    gpus.length ? h('div', { class: 'hw-gpus' }, gpus.map((g) => h('div', { class: 'hw-gpu' }, icon('gpu'), h('b', {}, `GPU ${g.index}`),
+      h('span', {}, g.name), h('span', { class: 'muted' }, fmtGiB(g.memory_total)))))
+      : h('div', { class: 'muted small' }, hw?.nvidia_smi ? 'nvidia-smi found no GPU.' : 'No NVIDIA GPU detected: nvidia-smi is not installed '
+        + '(its path can be given as [monitor] nvidia_smi in config.toml).'),
+    h('div', { class: 'small' }, h('a', { href: '#/resources' }, 'Live usage on the Resources page ›')));
+  const fromFile = data.source === 'config';
+  const addMenu = (e) => popupMenu(e.currentTarget, [
+    { label: 'This machine (local GPUs)', ic: 'monitor', action: () => laneDialog(null, ctx, { type: 'local' }) },
+    { label: 'SLURM cluster', ic: 'server', action: () => laneDialog(null, ctx, { type: 'cluster' }) },
+  ]);
+  clear(body, h('div', { class: 'compute-settings' },
+    section('Hardware of this server', hardware),
+    section('Lanes',
+      h('div', { class: 'toolbar' }, h('button', { class: 'btn primary', type: 'button', 'aria-haspopup': 'menu', onclick: addMenu }, icon('plus'), 'Add a lane', icon('chevron')),
+        h('span', { class: 'grow' }),
+        h('span', { class: 'muted small' }, fromFile ? 'From the configuration file (config.toml).' : 'Saved in CryoPlug: they replace the [[lanes]] of config.toml.'),
+        !fromFile && data.file_lanes.length ? btn('Use config.toml again', async () => {
+          if (!(await confirmDialog('Lanes of config.toml', `Replace these lanes with those of the configuration file (${data.file_lanes.join(', ')})?`, 'Replace'))) return;
+          try { await guard(api.resetLanes(), 'Lanes of config.toml restored'); } catch { return; }
+          state.info = await api.info();
+          ctx.reload();
+        }, { cls: 'small', ic: 'undo' }) : null),
+      h('div', { class: 'lane-grid' }, ctx.lanes.map((l, i) => laneTile(l, i, ctx))),
+      h('p', { class: 'muted small' }, 'Jobs go to the default lane (the first one) unless another lane is picked in the Compute section of the job builder, '
+        + 'where GPUs can also be chosen. On a local lane each job gets its own GPU(s) (CUDA_VISIBLE_DEVICES); a SLURM lane submits a script '
+        + 'written from its settings. Changes apply to the next jobs started.'))));
+}
+
+function laneTile(l, i, ctx) {
+  const others = (l.partitions || []).filter((p) => p !== l.partition);
+  const facts = l.type === 'cluster'
+    ? [l.partition ? `partition ${l.partition}` : 'default partition', others.length ? `or ${others.join(', ')}` : null,
+      l.time_limit ? `${l.time_limit} per job` : null, l.mem ? `${l.mem} memory` : null, l.account ? `account ${l.account}` : null,
+      l.script_template.trim() ? 'own script' : null]
+    : [l.gpus.length ? `hands out GPU ${l.gpus.join(', ')}` : 'does not hand out GPUs'];
+  facts.push(`up to ${l.max_jobs} job${l.max_jobs > 1 ? 's' : ''} at once`);
+  const without = ctx.lanes.filter((x) => x !== l);
+  const more = h('button', { class: 'icon-btn', type: 'button', title: 'Actions', 'aria-label': `Actions for lane ${l.name}`, 'aria-haspopup': 'menu' }, icon('more'));
+  more.addEventListener('click', () => popupMenu(more, [
+    { label: 'Edit…', ic: 'edit', action: () => laneDialog(l, ctx) },
+    { label: 'Make it the default lane', ic: 'check', disabled: i === 0, action: () => ctx.save([l, ...without], `${l.name} is the default lane`) },
+    { label: 'Duplicate…', ic: 'copy', action: () => laneDialog(l, ctx, { copy: true }) },
+    { separator: true },
+    { label: 'Delete…', ic: 'trash', danger: true, disabled: ctx.lanes.length < 2, action: async () => {
+      if (!(await confirmDialog('Delete lane', `Delete lane ${l.name}? Jobs not started yet that use it will go to the default lane.`, 'Delete', true))) return;
+      ctx.save(without, `Lane ${l.name} deleted`);
+    } },
+  ]));
+  return h('div', { class: 'box lane-tile', ondblclick: () => laneDialog(l, ctx) },
+    h('div', { class: 'row' }, icon(l.type === 'cluster' ? 'server' : 'monitor'), h('b', {}, l.name),
+      h('span', { class: 'tag' }, l.type === 'cluster' ? (isSlurm(l) ? 'SLURM' : 'cluster') : 'this machine'),
+      i === 0 ? h('span', { class: 'tag here' }, 'default') : null, h('span', { class: 'grow' }), more),
+    l.description ? h('div', { class: 'muted small' }, l.description) : null,
+    h('div', { class: 'lane-facts' }, facts.filter(Boolean).join(' · ')),
+    h('div', { class: 'row' }, btn('Edit', () => laneDialog(l, ctx), { cls: 'small', ic: 'edit' }),
+      i > 0 ? btn('Make default', () => ctx.save([l, ...without], `${l.name} is the default lane`), { cls: 'small' }) : null));
+}
+
+function freeName(ctx, stem) {
+  const names = new Set(ctx.lanes.map((l) => l.name));
+  if (!names.has(stem)) return stem;
+  let n = 2;
+  while (names.has(`${stem}-${n}`)) n += 1;
+  return `${stem}-${n}`;
+}
+
+function laneDialog(lane, ctx, { type = 'local', copy = false } = {}) {
+  const editing = !!lane && !copy;
+  const base = lane ? { ...LANE_DEFAULTS, ...lane } : { ...LANE_DEFAULTS, type, max_jobs: type === 'cluster' ? 20 : 2 };
+  if (!editing) base.name = freeName(ctx, lane ? `${lane.name}-copy` : type === 'cluster' ? 'slurm' : 'local');
+  const input = (id, value, extra = {}) => h('input', { type: 'text', id, value: value ?? '', autocomplete: 'off', spellcheck: 'false', ...extra });
+  const area = (id, value, rows, placeholder) => { const t = h('textarea', { id, class: 'mono', rows, placeholder }); t.value = value || ''; return t; };
+  const name = input('ln-name', base.name);
+  const kind = h('select', { id: 'ln-type' }, h('option', { value: 'local' }, 'This machine'), h('option', { value: 'cluster' }, 'Cluster (SLURM)'));
+  kind.value = base.type;
+  const desc = input('ln-desc', base.description, { placeholder: type === 'cluster' ? 'e.g. GPU nodes of the institute cluster' : 'e.g. Workstation with 4 GPUs' });
+  const maxJobs = h('input', { type: 'number', id: 'ln-max', min: 1, max: 10000, value: base.max_jobs });
+
+  // local: GPUs handed out, ticked among those nvidia-smi sees (or typed)
+  const detected = ctx.hw?.gpus || [];
+  const gpuText = input('ln-gpus', (base.gpus || []).join(', '), { class: 'mono', placeholder: detected.length ? detected.map((g) => g.index).join(', ') : 'e.g. 0, 1' });
+  const ids = () => gpuText.value.split(/[\s,]+/).filter(Boolean);
+  const boxes = detected.map((g) => {
+    const box = h('input', { type: 'checkbox', id: `ln-gpu-${g.index}`, checked: ids().includes(String(g.index)), onchange: () => {
+      const set = new Set(ids());
+      if (box.checked) set.add(String(g.index)); else set.delete(String(g.index));
+      gpuText.value = [...set].sort((a, b) => Number(a) - Number(b)).join(', ');
+    } });
+    return h('label', { class: 'radio-row gpu-check', for: box.id }, box, h('b', {}, `GPU ${g.index}`), ` ${g.name} · ${fmtGiB(g.memory_total)}`);
+  });
+  gpuText.addEventListener('input', () => detected.forEach((g, k) => { boxes[k].querySelector('input').checked = ids().includes(String(g.index)); }));
+  const allGpus = detected.length ? btn('All', () => { gpuText.value = detected.map((g) => g.index).join(', '); gpuText.dispatchEvent(new Event('input')); }, { cls: 'small' }) : null;
+  const localBox = h('div', {},
+    h('div', { class: 'field' }, h('label', { for: 'ln-gpus' }, 'GPUs this lane hands out'),
+      boxes.length ? h('div', { class: 'gpu-checks' }, boxes) : null,
+      h('div', { class: 'row' }, gpuText, allGpus),
+      h('div', { class: 'help' }, 'Each job gets its own GPU(s), the free ones with the least memory in use unless the user chooses them. '
+        + 'None: the lane does not hand out GPUs (programs see them all). Numbers as nvidia-smi shows them.')));
+
+  // cluster: SLURM settings the submission script is written from
+  const partList = h('datalist', { id: 'ln-partlist' });
+  const partition = input('ln-part', base.partition, { class: 'mono', list: 'ln-partlist', placeholder: 'cluster default' });
+  const partitions = input('ln-parts', (base.partitions || []).join(', '), { class: 'mono', placeholder: 'e.g. gpu, gpu-long' });
+  const account = input('ln-account', base.account, { class: 'mono' });
+  const qos = input('ln-qos', base.qos, { class: 'mono' });
+  const time = input('ln-time', base.time_limit, { class: 'mono', placeholder: 'e.g. 48:00:00 or 2-00:00:00' });
+  const mem = input('ln-mem', base.mem, { class: 'mono', placeholder: 'cluster default (e.g. 64G)' });
+  const gres = input('ln-gres', base.gres, { class: 'mono', placeholder: 'gpu' });
+  const extra = area('ln-extra', base.extra_sbatch, 3, '--constraint=a100\n--exclude=node12');
+  const setup = area('ln-setup', base.setup, 3, 'module load cuda/12.2\nsource /opt/conda/etc/profile.d/conda.sh');
+  const submit = input('ln-submit', base.submit_cmd, { class: 'mono' });
+  const status = input('ln-status', base.status_cmd, { class: 'mono' });
+  const kill = input('ln-kill', base.kill_cmd, { class: 'mono' });
+  const template = area('ln-template', base.script_template, 8, '#!/bin/bash\n#SBATCH --gres=gpu:{num_gpus}\n…\n{worker_cmd}');
+  const python = input('ln-python', base.python, { class: 'mono', placeholder: 'the server\'s python' });
+  const clusterBox = h('div', {},
+    h('div', { class: 'form-grid' },
+      field('Default partition', partition, '--partition of the jobs.'),
+      field('Partitions users may pick', partitions, 'Offered in the job builder, besides the default one.'),
+      field('Time limit per job', time, '--time; users can ask for another one.'),
+      field('Memory per job', mem, '--mem; empty: the cluster default.'),
+      field('Account', account, '--account (empty: none).'), field('QOS', qos, '--qos (empty: none).'),
+      field('GPU resource', gres, 'GPU jobs ask --gres=<this>:<number> (e.g. gpu or gpu:a100).')),
+    field('More #SBATCH options', extra, 'One per line, with or without “#SBATCH”.'),
+    field('Before the job starts', setup, 'Shell lines run on the node before CryoPlug’s worker (modules, conda…).'), partList);
+  const advanced = h('details', { class: 'help-details' }, h('summary', {}, 'Advanced'),
+    h('div', { class: 'cluster-only form-grid' }, field('Submit command', submit, '{script}: the script file.'),
+      field('Status command', status, 'Prints the state of {cluster_job_id}.'), field('Cancel command', kill)),
+    h('div', { class: 'cluster-only' }, field('Own submission script', template, 'Replaces the script written from the settings above (other schedulers). '
+      + 'Placeholders: {num_gpus} {num_cpus} {partition} {time} {mem} {account} {qos} {gres} {setup} {job_dir} {project_uid} {job_uid} {worker_cmd}.')),
+    field('Python of the worker', python, 'Interpreter with CryoPlug installed, on the machines that run the jobs.'));
+
+  const out = h('pre', { class: 'box mono lane-out', hidden: true });
+  const show = (text) => { out.hidden = false; out.textContent = text; };
+  const collect = () => ({ ...base, name: name.value.trim(), type: kind.value, description: desc.value.trim(), max_jobs: Number(maxJobs.value || 1),
+    gpus: gpuText.value, partition: partition.value.trim(), partitions: partitions.value, account: account.value.trim(), qos: qos.value.trim(),
+    time_limit: time.value.trim(), mem: mem.value.trim(), gres: gres.value.trim(), extra_sbatch: extra.value, setup: setup.value,
+    submit_cmd: submit.value.trim(), status_cmd: status.value.trim(), kill_cmd: kill.value.trim(), script_template: template.value, python: python.value.trim() });
+  const test = btn('Test', async () => {
+    test.disabled = true;
+    show(kind.value === 'cluster' ? 'Asking SLURM (sinfo)…' : 'Asking nvidia-smi…');
+    try {
+      const res = await guard(api.testLane(collect()));
+      show(`${res.ok ? '✓' : '✗'} ${res.output || ''}`);
+      clear(partList, (res.partitions || []).map((p) => h('option', { value: p })));
+    } catch (e) { show(e.message); }
+    test.disabled = false;
+  }, { cls: 'small', ic: 'check', title: 'Check the lane from the server (sinfo for SLURM, nvidia-smi for the GPUs)' });
+  const preview = btn('Preview script', async () => {
+    try { show((await guard(api.previewLane(collect()))).script); } catch (e) { show(e.message); }
+  }, { cls: 'small', ic: 'file', title: 'The script submitted for a 1-GPU job' });
+  const sync = () => {
+    const cluster = kind.value === 'cluster';
+    localBox.hidden = cluster;
+    clusterBox.hidden = !cluster;
+    preview.hidden = !cluster;
+    advanced.querySelectorAll('.cluster-only').forEach((el) => { el.hidden = !cluster; });
+    out.hidden = true;
+  };
+  kind.addEventListener('change', sync);
+  sync();
+
+  const save = async () => {
+    const next = collect();
+    const list = editing ? ctx.lanes.map((l) => (l === lane ? next : l)) : [...ctx.lanes, next];
+    if (await ctx.save(list, editing ? `Lane ${next.name} saved` : `Lane ${next.name} added`)) m.close();
+  };
+  const m = modal({
+    title: editing ? `Lane ${lane.name}` : 'New lane',
+    wide: true,
+    body: h('form', { class: 'lane-form', onsubmit: (e) => { e.preventDefault(); save(); } },
+      h('div', { class: 'form-grid' }, field('Name', name, 'Shown in the job builder: letters, digits, . _ -'), field('Runs on', kind),
+        field('Description', desc), field('Jobs at once', maxJobs, 'Jobs of this lane running at the same time; the others wait in the queue.')),
+      localBox, clusterBox, advanced,
+      h('div', { class: 'row', style: { marginTop: '8px' } }, test, preview), out),
+    footer: [btn('Cancel', () => m.close()), btn(editing ? 'Save' : 'Add the lane', save, { cls: 'primary' })],
+  });
 }
 
 // ------------------------------------------------------------------ access (administrators)

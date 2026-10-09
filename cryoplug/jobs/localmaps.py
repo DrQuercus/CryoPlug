@@ -89,6 +89,7 @@ class LocalResolution(JobType):
     tool = "phenix"
     software = ["Phenix local_resolution"]
     cpus = 4
+    cpu_param = "nproc"
     description = ("Local resolution map from the two half maps (phenix.local_resolution), its distribution in the "
                    "molecule and, with a model, per chain and per residue. The 3D viewer colours a map by it.")
     inputs = [

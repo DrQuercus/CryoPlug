@@ -1,8 +1,8 @@
-// Top-level pages: projects, queue / resource manager, external tools, help.
+// Top-level pages: projects, external tools, help (the resources are in resources.js).
 import { api } from './api.js';
 import { browseFiles } from './filebrowser.js';
 import { navigate, setJobtypes, state } from './state.js';
-import { ago, avatar, btn, clear, confirmDialog, copyText, guard, h, icon, jobDuration, modal, popupMenu, shortPath, statusChip, toast } from './ui.js';
+import { ago, avatar, btn, clear, confirmDialog, copyText, guard, h, icon, modal, popupMenu, shortPath, toast } from './ui.js';
 
 // Who may do what (the server checks again): administrators and owners manage a project, and without
 // accounts whoever opened CryoPlug may do everything.
@@ -128,40 +128,6 @@ function newProjectDialog() {
           : 'A folder CP-<title> is created inside; every job writes into its own J<n> sub-folder.'))),
     footer: [btn('Cancel', () => m.close()), btn('Create project', create, { cls: 'primary' })],
   });
-}
-
-// -------------------------------------------------------------------- queue
-export async function renderQueue(content) {
-  let q;
-  try { q = await api.queue(); } catch (e) { clear(content, h('div', { class: 'alert error' }, e.message)); return; }
-  const lanes = q.lanes.map((l) => h('div', { class: 'box lane-card' },
-    h('div', { class: 'row' }, h('b', {}, l.name), h('span', { class: 'tag' }, l.type)),
-    l.description ? h('div', { class: 'muted small' }, l.description) : null,
-    h('div', { class: 'tiles', style: { marginTop: '8px' } },
-      h('div', { class: 'tile' }, h('div', { class: 'label' }, 'Running jobs'), h('div', { class: 'value' }, `${l.running} / ${l.max_jobs}`)),
-      l.gpus.length ? h('div', { class: 'tile' }, h('div', { class: 'label' }, 'GPUs in use'), h('div', { class: 'value' }, `${l.gpus_used.length} / ${l.gpus.length}`),
-        h('div', { class: 'gpus' }, l.gpus.map((g) => h('span', { class: `gpu ${l.gpus_used.includes(g) ? 'busy' : ''}`,
-          title: l.gpus_used.includes(g) ? 'In use' : 'Free' }, `GPU ${g}`)))) : null)));
-  // Other people's jobs (with accounts) only show what occupies the lanes.
-  const rows = q.jobs.map((j) => h('tr', { class: j.hidden ? 'other' : '' },
-    h('td', {}, j.hidden ? h('span', { class: 'muted' }, '—') : h('a', { href: `#/p/${j.project_uid}/${j.uid}` }, `${j.project_uid} / ${j.uid}`)),
-    h('td', {}, j.title, h('div', { class: 'muted small' }, j.hidden ? `job of ${j.owner || 'another user'}`
-      : [j.project_title, accounts() && j.owner && j.owner !== me().username ? j.owner : null].filter(Boolean).join(' · '))),
-    h('td', {}, statusChip(j.status)),
-    h('td', { class: 'small' }, j.message || ''),
-    h('td', {}, j.lane || ''), h('td', {}, (j.gpus || []).join(',')), h('td', {}, jobDuration(j)),
-    h('td', {}, j.hidden ? null : btn(j.status === 'queued' ? 'Dequeue' : 'Kill', async () => {
-      if (j.status !== 'queued' && !(await confirmDialog('Stop job', `Stop ${j.project_uid}/${j.uid}?`, 'Stop', true))) return;
-      await guard(api.killJob(j.project_uid, j.uid), 'Stopped');
-      renderQueue(content);
-    }, { cls: 'small danger' }))));
-  clear(content,
-    h('h2', { style: { marginTop: 0 } }, 'Resource manager'),
-    h('div', { class: 'row wrap', style: { alignItems: 'stretch', gap: '12px' } }, lanes),
-    h('div', { class: 'section' }, h('h4', {}, 'Active and queued jobs'),
-      q.jobs.length ? h('div', { class: 'box' }, h('table', { class: 'data' },
-        h('thead', {}, h('tr', {}, ['Job', 'Title', 'Status', 'Message', 'Lane', 'GPU', 'Time', ''].map((c) => h('th', {}, c)))), h('tbody', {}, rows)))
-        : h('div', { class: 'empty' }, 'Nothing is running or queued.')));
 }
 
 // -------------------------------------------------------------------- tools

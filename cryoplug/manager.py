@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import zipfile
@@ -14,7 +15,7 @@ from typing import Any, BinaryIO
 
 from cryoplug import __version__
 from cryoplug import tools as toolmod
-from cryoplug.config import Config
+from cryoplug.config import SLURM_MEM_RE, SLURM_TIME_RE, Config, LaneConfig
 from cryoplug.db import Database
 from cryoplug.jobs import get_job_type
 from cryoplug.jobs.base import ACTIVE_STATUSES, JobContext, JobError, split_paths
@@ -48,14 +49,144 @@ def _rm_contents(directory: Path, keep: tuple[str, ...] = ()) -> None:
                 pass
 
 
+REQUESTABLE = ("gpu_ids", "num_cpus", "partition", "time", "mem")
+
+
 class Manager:
     def __init__(self, config: Config):
         self.config = config
         config.data_dir.mkdir(parents=True, exist_ok=True)
         self.db = Database(config.db_path)
         self.lock = threading.RLock()
+        self.monitor = None  # set by the server: live GPU usage for the automatic GPU choice
+        self.file_lanes = list(config.lanes)  # [[lanes]] of the configuration file
+        stored = self.db.get_meta("lanes")
+        if stored:  # edited in Settings › Compute: they take precedence
+            try:
+                config.lanes = [LaneConfig.from_dict(dict(d)) for d in stored]
+            except (ValueError, TypeError):
+                pass
         self.lanes = {lane.name: make_lane(lane) for lane in config.lanes}
         self.tool_status: dict[str, dict[str, Any]] = self.db.get_meta("tool_status", {}) or {}
+
+    # =============================================================== lanes
+    @property
+    def lanes_source(self) -> str:
+        return "settings" if self.db.get_meta("lanes") else "config"
+
+    def save_lanes(self, raw: list[dict[str, Any]] | None) -> list[LaneConfig]:
+        """Replace the lanes (Settings › Compute), or go back to those of the configuration file (``None``)."""
+        with self.lock:
+            if raw is None:
+                lanes = list(self.file_lanes)
+            else:
+                try:
+                    lanes = [LaneConfig.from_dict(dict(d)) for d in raw]
+                except (ValueError, TypeError) as exc:
+                    raise ManagerError(str(exc)) from None
+            if not lanes:
+                raise ManagerError("Keep at least one lane")
+            names = [lane.name for lane in lanes]
+            duplicate = next((n for n in names if names.count(n) > 1), None)
+            if duplicate:
+                raise ManagerError(f"Two lanes are named '{duplicate}'")
+            new = {lane.name: lane for lane in lanes}
+            for job in self.db.list_jobs(statuses=["queued", "launched", "running"]):
+                name = job.get("lane") or ""
+                if name and name not in new:
+                    raise ManagerError(f"Lane '{name}' still has active jobs ({job['project_uid']}/{job['uid']}): "
+                                       "wait for them or stop them before removing or renaming it")
+                old = self.lanes.get(name)
+                if old is not None and job["status"] != "queued" and old.cfg.type != new[name].type:
+                    raise ManagerError(f"Lane '{name}' has running jobs: wait for them before changing its type")
+            self.db.set_meta("lanes", [lane.to_dict() for lane in lanes] if raw is not None else None)
+            self.config.lanes = lanes
+            current = self.lanes
+            rebuilt = {}
+            for cfg in lanes:
+                lane = current.get(cfg.name)
+                if lane is not None and lane.cfg.type == cfg.type:  # keep it: it knows its running workers
+                    lane.cfg = cfg
+                    lane.python = cfg.python or sys.executable
+                    if hasattr(lane, "_overview"):
+                        lane._overview = None
+                else:
+                    lane = make_lane(cfg)
+                rebuilt[cfg.name] = lane
+            self.lanes = rebuilt
+            return lanes
+
+    def gpu_load(self) -> dict[int, float]:
+        """Memory used on each GPU (MiB), from the live monitor when it is running."""
+        return self.monitor.gpu_memory(max_age=30.0) if self.monitor is not None else {}
+
+    def clean_requested(self, jt, params: dict[str, Any], lane_name: str | None, requested: dict[str, Any] | None,
+                        lenient: bool = False) -> dict[str, Any]:
+        """Compute choices of a job (GPUs, CPUs, SLURM partition / time / memory) checked against its lane.
+
+        ``lenient`` drops the choices that do not apply to the lane (the lane was changed afterwards)."""
+        if not requested:
+            return {}
+        if not isinstance(requested, dict):
+            raise ManagerError("Resources must be given as an object")
+        unknown = set(requested) - set(REQUESTABLE)
+        if unknown:
+            raise ManagerError(f"Unknown resource(s): {', '.join(sorted(unknown))}")
+        lane = self._lane_cfg(lane_name)
+        need = int(jt.resources(params).get("num_gpus", 0))
+        out: dict[str, Any] = {}
+
+        def refuse(message: str) -> None:
+            if not lenient:
+                raise ManagerError(message)
+
+        cpus = requested.get("num_cpus")
+        if cpus not in (None, ""):
+            try:
+                cpus = int(cpus)
+            except (TypeError, ValueError):
+                raise ManagerError("CPUs: a whole number") from None
+            if not 1 <= cpus <= 1024:
+                raise ManagerError("CPUs: between 1 and 1024")
+            out["num_cpus"] = cpus
+        ids = requested.get("gpu_ids") or []
+        if ids:
+            try:
+                ids = sorted({int(g) for g in ids})
+            except (TypeError, ValueError):
+                raise ManagerError("GPU ids are whole numbers") from None
+            if lane.type != "local" or not lane.gpus:
+                refuse(f"Lane '{lane.name}' does not hand out specific GPUs: leave the GPU choice automatic")
+            elif need == 0:
+                refuse(f"{jt.title} does not use a GPU")
+            elif any(g not in lane.gpus for g in ids):
+                refuse(f"Lane '{lane.name}' manages GPU {', '.join(map(str, lane.gpus))} only")
+            elif len(ids) != need:
+                refuse(f"{jt.title} uses {need} GPU{'s' if need > 1 else ''}: choose {need}")
+            else:
+                out["gpu_ids"] = ids
+        for key in ("partition", "time", "mem"):
+            value = str(requested.get(key) or "").strip()
+            if not value:
+                continue
+            if lane.type != "cluster":
+                refuse(f"The {key} only applies to cluster lanes")
+                continue
+            if key == "partition":
+                allowed = lane.partitions or ([lane.partition] if lane.partition else [])
+                if value not in allowed:
+                    refuse(f"Partition '{value}' is not offered by lane '{lane.name}' ({', '.join(allowed) or 'none'})")
+                    continue
+            elif key == "time" and not SLURM_TIME_RE.fullmatch(value):
+                raise ManagerError("Time limit as SLURM writes it (12:00:00, 2-00:00:00...)")
+            elif key == "mem" and not SLURM_MEM_RE.fullmatch(value):
+                raise ManagerError("Memory as 64G, 128000M...")
+            out[key] = value
+        return out
+
+    def job_resources(self, jt, params: dict[str, Any], requested: dict[str, Any]) -> dict[str, Any]:
+        """What the job asks the lane for: the job type's needs, with the user's choices."""
+        return {**jt.resources(params), **requested}
 
     # =============================================================== tools
     def check_tools(self) -> dict[str, dict[str, Any]]:
@@ -191,7 +322,8 @@ class Manager:
 
     def create_job(self, puid: str, job_type: str, params: dict | None = None, inputs: dict | None = None,
                    title: str | None = None, lane: str | None = None, notes: str = "", created_by: str = "",
-                   roots: list[Path] | None = None, inherited: dict[str, Any] | None = None) -> dict[str, Any]:
+                   roots: list[Path] | None = None, inherited: dict[str, Any] | None = None,
+                   requested: dict[str, Any] | None = None) -> dict[str, Any]:
         self.project(puid)
         try:
             jt = get_job_type(job_type)
@@ -205,10 +337,11 @@ class Manager:
         clean_inputs = self._check_inputs(puid, jt, inputs)
         if lane:
             self._lane_cfg(lane)
+        chosen = self.clean_requested(jt, clean_params, lane, requested)
         job = self.db.create_job(puid, job_type, (title or "").strip() or jt.title, clean_params, clean_inputs,
-                                 lane, jt.resources(clean_params), created_by)
-        if notes:
-            self.db.update_job(puid, job["uid"], notes=notes)
+                                 lane, self.job_resources(jt, clean_params, chosen), created_by)
+        if notes or chosen:
+            self.db.update_job(puid, job["uid"], **({"notes": notes} if notes else {}), **({"requested": chosen} if chosen else {}))
         jdir = self.job_dir(puid, job["uid"])
         jdir.mkdir(parents=True, exist_ok=True)
         return self.job(puid, job["uid"])
@@ -222,7 +355,7 @@ class Manager:
                 updates["notes"] = str(fields["notes"] or "")
             if "title" in fields and fields["title"] is not None:
                 updates["title"] = str(fields["title"]).strip() or jt.title
-            for key in ("params", "inputs", "lane"):
+            for key in ("params", "inputs", "lane", "requested"):
                 if key in fields and fields[key] is not None and job["status"] != "building":
                     raise ManagerError("Parameters and inputs can only be changed while the job is in building state (clear it first)")
                 if key in fields and fields[key] is not None and roots is not None and jt.admin_only:
@@ -241,6 +374,15 @@ class Manager:
                 if fields["lane"]:
                     self._lane_cfg(fields["lane"])
                 updates["lane"] = fields["lane"] or None
+            if any(fields.get(k) is not None for k in ("params", "lane", "requested")):
+                params = updates.get("params", job["params"])
+                lane = updates.get("lane", job.get("lane"))
+                if fields.get("requested") is not None:
+                    chosen = self.clean_requested(jt, params, lane, fields["requested"])
+                else:  # another lane or other parameters: keep what still applies
+                    chosen = self.clean_requested(jt, params, lane, job.get("requested"), lenient=True)
+                updates["requested"] = chosen
+                updates["resources"] = self.job_resources(jt, params, chosen)
             if updates:
                 self.db.update_job(puid, juid, **updates)
             return self.job(puid, juid)
@@ -275,11 +417,14 @@ class Manager:
             if problems:
                 raise ManagerError("; ".join(problems))
             lane_name = lane or job.get("lane") or self.config.lanes[0].name
+            if not lane and lane_name not in self.lanes:  # its lane was deleted or renamed since: the default lane
+                lane_name = self.config.lanes[0].name
             self._lane_cfg(lane_name)
             jt = get_job_type(job["type"])
             self._check_user_params(jt, job["params"], roots, authoring=False)  # folders again: the job may be someone else's
+            chosen = self.clean_requested(jt, job["params"], lane_name, job.get("requested"), lenient=True)
             self.db.update_job(puid, juid, status="queued", lane=lane_name, queued_at=time.time(), message="Queued",
-                               error="", progress=0.0, resources=jt.resources(job["params"]))
+                               error="", progress=0.0, requested=chosen, resources=self.job_resources(jt, job["params"], chosen))
             return self.job(puid, juid)
 
     def kill_job(self, puid: str, juid: str) -> dict[str, Any]:
@@ -330,7 +475,9 @@ class Manager:
         job = self.job(puid, juid)
         valid_inputs = {s: r for s, r in job["inputs"].items() if self.db.get_job(puid, r["job"])}
         return self.create_job(puid, job["type"], job["params"], valid_inputs, job["title"], job.get("lane"),
-                               created_by=created_by, roots=roots, inherited=job["params"])
+                               created_by=created_by, roots=roots, inherited=job["params"],
+                               requested=self.clean_requested(get_job_type(job["type"]), job["params"], job.get("lane"),
+                                                              job.get("requested"), lenient=True))
 
     # ------------------------------------------------------------ details
     def job_detail(self, puid: str, juid: str) -> dict[str, Any]:
@@ -480,7 +627,7 @@ class Manager:
             "params": params,
             "inputs": inputs,
             "tools": tools,
-            "resources": {**jt.resources(params), "gpus": gpus},
+            "resources": {**self.job_resources(jt, params, job.get("requested") or {}), "gpus": gpus},
             "ancestors": self.ancestors(job["project_uid"], job["uid"]),
         }
 
@@ -596,17 +743,21 @@ class Manager:
     def queue_overview(self) -> dict[str, Any]:
         jobs = self.db.list_jobs(statuses=["queued", "launched", "running", "waiting"])
         projects = {p["uid"]: p for p in self.db.list_projects(include_archived=True)}
-        lanes = []
-        for cfg in self.config.lanes:
-            on_lane = [j for j in jobs if j.get("lane") == cfg.name and j["status"] in ("launched", "running")]
-            used = sorted({g for j in on_lane for g in (j.get("gpus") or [])})
-            lanes.append({"name": cfg.name, "type": cfg.type, "description": cfg.description, "max_jobs": cfg.max_jobs,
-                          "running": len(on_lane), "gpus": cfg.gpus, "gpus_used": used})
         for j in jobs:
             project = projects.get(j["project_uid"]) or {}
             j["project_title"] = project.get("title", "")
             j["owner"] = project.get("owner", "")
             j["members"] = project.get("members", [])
+        lanes = []
+        for cfg in self.config.lanes:
+            on_lane = [j for j in jobs if j.get("lane") == cfg.name and j["status"] in ("launched", "running")]
+            used = sorted({g for j in on_lane for g in (j.get("gpus") or [])})
+            lanes.append({"name": cfg.name, "type": cfg.type, "description": cfg.description, "max_jobs": cfg.max_jobs,
+                          "running": len(on_lane), "queued": sum(1 for j in jobs if j.get("lane") == cfg.name and j["status"] == "queued"),
+                          "gpus": cfg.gpus, "gpus_used": used,
+                          "gpu_jobs": {str(g): {"project_uid": j["project_uid"], "uid": j["uid"], "type": j["type"], "title": j["title"],
+                                                "owner": j["owner"]} for j in on_lane for g in (j.get("gpus") or [])},
+                          "partition": cfg.partition, "partitions": cfg.partitions or ([cfg.partition] if cfg.partition else [])})
         return {"lanes": lanes, "jobs": jobs}
 
     # ============================================================ workflows

@@ -54,6 +54,7 @@ class PhenixResolveCryoEM(JobType):
     tool = "phenix"
     software = ["Phenix resolve_cryo_em"]
     cpus = 8
+    cpu_param = "nproc"
     description = ("Maximum-likelihood density modification from half maps (phenix.resolve_cryo_em, Terwilliger et al. "
                    "2020). Typically improves interpretability and the half-map FSC. A sequence helps.")
     inputs = [Slot("half_maps", ("half_maps",), "Half maps"),
@@ -118,6 +119,7 @@ class PhenixLocalAnisoSharpen(JobType):
     tool = "phenix"
     software = ["Phenix local_aniso_sharpen"]
     cpus = 4
+    cpu_param = "nproc"
     description = ("Local, anisotropic sharpening and resolution-dependent scaling from half maps "
                    "(phenix.local_aniso_sharpen), optionally guided by a model.")
     inputs = [Slot("half_maps", ("half_maps",), "Half maps"), Slot("model", ("model",), "Model", required=False)]
@@ -147,6 +149,7 @@ class LocScale(JobType):
     software = ["LocScale 2"]
     gpu = 1
     cpus = 4
+    cpu_param = "nproc"
     description = ("Local amplitude scaling. Model-free (EMmerNet reference, default), pseudo-atomic model, "
                    "model-based (requires a model; REFMAC/Servalcat used for B-factor refinement) or hybrid "
                    "(partial model completed with pseudo-atoms). Use unfiltered, unsharpened half maps.")
