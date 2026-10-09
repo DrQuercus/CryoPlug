@@ -12,17 +12,29 @@ import {
   statusChip, statusMark, toast,
 } from './ui.js';
 
-const D = { uid: null, job: null, mode: 'panel', tab: 'overview', log: '', logOffset: 0, filesSub: '', autoscroll: true, busy: false };
+const D = { puid: null, uid: null, job: null, mode: 'panel', tab: 'overview', log: '', logOffset: 0, filesSub: '', autoscroll: true, busy: false, again: false };
 const container = () => document.getElementById(D.mode === 'page' ? 'content' : 'panel');
 
 // mode: 'panel' (right side) or 'page' (main area, next to the job builder).
 export function openDetail(uid, mode = 'panel') {
-  if (D.uid !== uid || D.mode !== mode) {
-    Object.assign(D, { uid, mode, job: null, tab: 'overview', log: '', logOffset: 0, filesSub: '' });
+  const puid = state.project?.uid || null;
+  if (D.uid !== uid || D.mode !== mode || D.puid !== puid) {
+    Object.assign(D, { puid, uid, mode, job: null, tab: 'overview', log: '', logOffset: 0, filesSub: '' });
     container().scrollTop = 0;
+    renderLoading();
   }
   container().hidden = false;
   return refreshDetail(true);
+}
+
+// Shown at once when another job is opened, until its details arrive (never the previous job's).
+function renderLoading() {
+  headEl = h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'uid' }, D.uid),
+    h('span', { class: 'grow muted' }, 'Loading…'),
+    D.mode === 'page' ? null : h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => navigate(closeHref()) }, icon('close'))));
+  bodyEl = h('div', { class: 'panel-body' }, h('div', { class: 'skeleton' }), h('div', { class: 'skeleton short' }));
+  if (D.mode === 'page') clear(container(), h('div', { class: 'job-page' }, headEl, bodyEl));
+  else clear(container(), headEl, bodyEl);
 }
 
 export function closeDetail() {
@@ -47,25 +59,36 @@ document.addEventListener('builder-type', (e) => {
 const closeHref = () => (D.mode === 'page' ? builderHref() : `#/p/${state.project.uid}`);
 
 export async function refreshDetail(force = false) {
-  if (!D.uid || !state.project || D.busy) return;
+  if (!D.uid || !state.project) return;
+  if (D.busy) { // the latest request wins: refresh again once the one in flight is back
+    D.again = D.again === true || force ? true : 'soft';
+    return;
+  }
   const puid = state.project.uid;
   const uid = D.uid;
   D.busy = true;
   try {
     const job = await api.job(puid, uid);
-    if (D.uid !== uid) return;
+    if (D.uid !== uid || state.project?.uid !== puid) return; // another job was opened meanwhile
     const changed = force || !D.job || D.job.status !== job.status || JSON.stringify(D.job.outputs) !== JSON.stringify(job.outputs)
       || D.job.progress !== job.progress || D.job.message !== job.message || JSON.stringify(D.job.candidates) !== JSON.stringify(job.candidates)
       || D.job.title !== job.title;
     D.job = job;
+    // newer than the job list (the status changed in between): bring the cards and the summary up to date now
+    if (state.jobsByUid[uid] && state.jobsByUid[uid].status !== job.status) refreshJobs().catch(() => {});
     if (D.tab === 'log') await pollLog();
     const editing = bodyEl && bodyEl.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
     if (changed && D.tab !== 'log' && !editing) render();
     else if (changed) renderHeaderOnly();
   } catch (err) {
-    if (err.status === 404) { toast(`${uid} no longer exists`, 'error'); navigate(closeHref()); }
+    if (err.status === 404 && D.uid === uid) { toast(`${uid} no longer exists`, 'error'); navigate(closeHref()); }
   } finally {
     D.busy = false;
+    if (D.again) {
+      const again = D.again === true;
+      D.again = false;
+      refreshDetail(again);
+    }
   }
 }
 
@@ -92,48 +115,41 @@ function renderHeaderOnly() {
   const job = D.job;
   if (!headEl || !job) return;
   const puid = state.project.uid;
-  const titleEl = h('span', { class: 'grow', style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-    title: 'Click to rename', onclick: () => rename(job) }, job.title);
+  const titleEl = h('span', { class: 'grow panel-name', title: 'Click to rename', onclick: () => rename(job) }, job.title);
+  // the usual next step as buttons (as in CryoSPARC), everything else in the ⋯ menu
+  const shown = [];
   const actions = [];
+  const add = (key, el) => { shown.push(key); actions.push(el); };
   if (job.status === 'building') {
-    actions.push(btn('Queue', () => act(api.queueJob(puid, job.uid), 'Queued'), { cls: 'primary', ic: 'play' }));
-    actions.push(btn('Edit', () => { openBuilder({ editing: job }); navigate(`#/p/${puid}/edit/${job.uid}`); }, { ic: 'edit' }));
+    add('queue', btn('Queue', () => jobOps.queue(job), { cls: 'primary', ic: 'play' }));
+    add('edit', btn('Edit', () => jobOps.edit(job), { ic: 'edit' }));
+  } else if (ACTIVE.includes(job.status) || job.status === 'waiting') {
+    add('stop', btn(stopLabel(job), () => jobOps.stop(job), { cls: 'danger', ic: 'stop' }));
   }
-  if (ACTIVE.includes(job.status) || job.status === 'waiting') {
-    actions.push(btn(job.status === 'queued' ? 'Dequeue' : job.status === 'waiting' ? 'Cancel session' : 'Kill', async () => {
-      if (job.status !== 'queued' && !(await confirmDialog('Stop job', `Stop ${job.uid} (${job.title})?`, 'Stop', true))) return;
-      act(api.killJob(puid, job.uid), 'Stopped');
-    }, { cls: 'danger', ic: 'stop' }));
+  if (['completed', 'running', 'queued'].includes(job.status)) {
+    add('continue', btn('Continue with…', (e) => continueMenu(e.currentTarget, job), { cls: job.status === 'completed' ? 'primary' : '', ic: 'next',
+      title: 'New job using the outputs of this one' }));
   }
-  if (['completed', 'failed', 'killed'].includes(job.status)) {
-    actions.push(btn('Clear', async () => {
-      if (!(await confirmDialog('Clear job', `Delete all outputs and files of ${job.uid} and return it to building state?`, 'Clear', true))) return;
-      act(api.clearJob(puid, job.uid), 'Cleared');
-    }, { ic: 'undo' }));
+  if (['failed', 'killed'].includes(job.status)) {
+    add('clear', btn('Clear', () => jobOps.clear(job), { ic: 'undo', title: 'Delete its outputs and go back to building: fix the parameters, then queue again' }));
+    add('clone', btn('Clone', () => jobOps.clone(job), { ic: 'copy', title: 'A copy with the same inputs and parameters' }));
   }
-  actions.push(btn('Clone', async () => {
-    const c = await guard(api.cloneJob(puid, job.uid), 'Cloned');
-    await refreshJobs();
-    navigate(jobHref(c.uid));
-  }, { ic: 'copy' }));
-  const cont = btn('Continue with…', (e) => continueMenu(e.currentTarget, job), { ic: 'next' });
-  if (job.status === 'completed' || job.status === 'running' || job.status === 'queued') actions.push(cont);
-  actions.push(btn('Delete', async () => {
-    const deps = job.dependents || [];
-    const msg = deps.length ? `${job.uid} is used by ${deps.join(', ')}. Delete it anyway (their inputs become invalid)?` : `Delete ${job.uid} and its files?`;
-    if (!(await confirmDialog('Delete job', msg, 'Delete', true))) return;
-    await guard(api.deleteJob(puid, job.uid, deps.length > 0), 'Deleted');
-    await refreshJobs();
-    navigate(closeHref());
-  }, { cls: 'danger', ic: 'trash' }));
+  const view = job.status === 'completed' ? jobViewItems(job) : [];
+  if (view.length > 0) add('view', h('a', { class: 'btn', href: viewerUrl(view), target: '_blank', rel: 'noopener', title: 'Open the maps and models of this job in the 3D viewer' }, icon('eye'), 'View 3D'));
+  actions.push(h('button', {
+    class: 'btn icon-only', type: 'button', title: 'More actions', 'aria-label': `More actions for ${job.uid}`, 'aria-haspopup': 'menu',
+    onclick: (e) => popupMenu(e.currentTarget, jobMenuItems(job, e.currentTarget).filter((it) => !shown.includes(it.key))),
+  }, icon('more')));
 
   const page = D.mode === 'page';
+  const when = job.ended_at ? `${job.status === 'completed' ? 'finished' : job.status} ${ago(job.ended_at)}` : job.started_at ? `started ${ago(job.started_at)}` : `created ${ago(job.created_at)}`;
   clear(headEl,
     h('div', { class: 'panel-title' },
       page ? btn('Jobs', () => navigate(closeHref()), { cls: 'small', ic: 'back', title: 'Back to the job cards (the builder stays open)' }) : null,
       h('span', { class: 'uid' }, job.uid), titleEl, statusChip(job.status),
       page ? null : h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => navigate(closeHref()) }, icon('close'))),
-    h('div', { class: 'muted small' }, typeTitle(job.type), job.lane ? ` · lane ${job.lane}` : '', jobDuration(job) ? ` · ${jobDuration(job)}` : ''),
+    h('div', { class: 'panel-sub muted small' }, h('span', {}, typeTitle(job.type)), h('span', {}, when),
+      jobDuration(job) ? h('span', { title: 'Run time' }, icon('clock'), jobDuration(job)) : null, job.lane ? h('span', {}, `lane ${job.lane}`) : null),
     h('div', { class: 'actions-bar' }, actions),
     h('div', { class: 'tabs', role: 'tablist' }, ['overview', 'log', 'files'].map((t) => h('button', {
       class: D.tab === t ? 'on' : '', role: 'tab', 'aria-selected': D.tab === t ? 'true' : 'false',
@@ -145,6 +161,60 @@ async function act(promise, msg) {
   try { await guard(promise, msg); } catch { return; }
   await refreshJobs();
   await refreshDetail(true);
+}
+
+// ------------------------------------------------------------------ actions
+// What can be done with a job: buttons of the details header and the ⋯ menu of the job cards.
+const stopLabel = (job) => (job.status === 'queued' ? 'Dequeue' : job.status === 'waiting' ? 'Cancel session' : 'Stop');
+const dependentsOf = (job) => job.dependents || state.jobs.filter((j) => Object.values(j.inputs || {}).some((r) => r.job === job.uid)).map((j) => j.uid);
+
+const jobOps = {
+  queue: (job) => act(api.queueJob(state.project.uid, job.uid), 'Queued'),
+  edit: (job) => { openBuilder({ editing: job }); navigate(`#/p/${state.project.uid}/edit/${job.uid}`); },
+  async stop(job) {
+    if (job.status !== 'queued' && !(await confirmDialog('Stop job', `Stop ${job.uid} (${job.title})?`, 'Stop', true))) return;
+    act(api.killJob(state.project.uid, job.uid), 'Stopped');
+  },
+  async clear(job) {
+    if (!(await confirmDialog('Clear job', `Delete all outputs and files of ${job.uid} and return it to building state?`, 'Clear', true))) return;
+    act(api.clearJob(state.project.uid, job.uid), 'Cleared');
+  },
+  async clone(job) {
+    const c = await guard(api.cloneJob(state.project.uid, job.uid), 'Cloned');
+    await refreshJobs();
+    navigate(jobHref(c.uid));
+  },
+  async remove(job) {
+    const deps = dependentsOf(job);
+    const msg = deps.length ? `${job.uid} is used by ${deps.join(', ')}. Delete it anyway (their inputs become invalid)?` : `Delete ${job.uid} and its files?`;
+    if (!(await confirmDialog('Delete job', msg, 'Delete', true))) return;
+    await guard(api.deleteJob(state.project.uid, job.uid, deps.length > 0), 'Deleted');
+    await refreshJobs();
+    if (D.uid === job.uid) navigate(closeHref());
+  },
+};
+
+// Items of the ⋯ menu of a job (each with a key, so that the details header can leave out its buttons).
+export function jobMenuItems(job, anchor, { withOpen = false } = {}) {
+  const items = [];
+  if (withOpen) items.push({ key: 'open', label: 'Open', ic: 'next', action: () => navigate(jobHref(job.uid)) });
+  if (job.status === 'building') {
+    items.push({ key: 'queue', label: 'Queue', ic: 'play', action: () => jobOps.queue(job) });
+    items.push({ key: 'edit', label: 'Edit parameters', ic: 'edit', action: () => jobOps.edit(job) });
+  }
+  if (ACTIVE.includes(job.status) || job.status === 'waiting') items.push({ key: 'stop', label: stopLabel(job), ic: 'stop', action: () => jobOps.stop(job) });
+  if (['completed', 'running', 'queued'].includes(job.status)) {
+    items.push({ key: 'continue', label: 'Continue with…', ic: 'next', action: () => continueMenu(anchor, job) });
+  }
+  const view = job.status === 'completed' ? jobViewItems(job) : [];
+  if (view.length) items.push({ key: 'view', label: 'View in 3D', ic: 'eye', action: () => window.open(viewerUrl(view), '_blank', 'noopener') });
+  items.push({ separator: true });
+  items.push({ key: 'clone', label: 'Clone', ic: 'copy', action: () => jobOps.clone(job) });
+  if (['completed', 'failed', 'killed'].includes(job.status)) items.push({ key: 'clear', label: 'Clear (back to building)', ic: 'undo', action: () => jobOps.clear(job) });
+  items.push({ key: 'path', label: 'Copy folder path', ic: 'folder', action: () => copyText(job.job_dir || `${state.project.dir}/${job.uid}`) });
+  items.push({ separator: true });
+  items.push({ key: 'delete', label: 'Delete…', ic: 'trash', danger: true, action: () => jobOps.remove(job) });
+  return items;
 }
 
 async function rename(job) {
@@ -225,6 +295,22 @@ function outputViewItems(job, out) {
   return items;
 }
 
+// Files of an output: the first few, the others behind a toggle (a volume series has dozens).
+const FILES_SHOWN = 3;
+function fileList(files, puid) {
+  const line = (f) => h('div', { class: 'row file' },
+    h('a', { href: api.fileUrl(puid, f, true), title: `Download ${f}` }, f.split('/').pop()),
+    h('button', { class: 'icon-btn', title: 'Copy full path', 'aria-label': `Copy the path of ${f.split('/').pop()}`, onclick: () => copyText(`${state.project.dir}/${f}`) }, icon('copy')));
+  if (files.length <= FILES_SHOWN + 1) return h('div', { class: 'files' }, files.map(line));
+  const rest = h('div', { class: 'files', hidden: true }, files.slice(FILES_SHOWN).map(line));
+  const toggle = h('button', { type: 'button', class: 'link-btn small', 'aria-expanded': 'false', onclick: () => {
+    rest.hidden = !rest.hidden;
+    toggle.setAttribute('aria-expanded', rest.hidden ? 'false' : 'true');
+    toggle.textContent = rest.hidden ? `+ ${files.length - FILES_SHOWN} more files` : 'Show fewer files';
+  } }, `+ ${files.length - FILES_SHOWN} more files`);
+  return h('div', { class: 'files' }, files.slice(0, FILES_SHOWN).map(line), rest, toggle);
+}
+
 function renderOverview(body) {
   const job = D.job;
   const puid = state.project.uid;
@@ -271,9 +357,7 @@ function renderOverview(body) {
               o.type === 'volume_series' && o.meta.frames ? `${o.meta.frames} volumes` : null,
               o.meta.n_particles ? `${Number(o.meta.n_particles).toLocaleString()} particles` : null,
               o.type === 'latent' && o.meta.zdim ? `${o.meta.zdim}-D${o.meta.k ? ` · ${o.meta.k} clusters` : ''}` : null].filter(Boolean).join(' · ')) : null,
-          h('div', { class: 'files' }, (o.files || [o.path]).map((f) => h('div', { class: 'row' },
-            h('a', { href: api.fileUrl(puid, f, true), title: 'Download' }, f.split('/').pop()),
-            h('button', { class: 'icon-btn', title: 'Copy full path', 'aria-label': 'Copy path', onclick: () => copyText(`${state.project.dir}/${f}`) }, icon('copy'))))),
+          fileList(o.files || [o.path], puid),
           h('div', { class: 'actions' },
             slots.length ? btn('Use as input', () => {
               const slot = builderConnect(ref);

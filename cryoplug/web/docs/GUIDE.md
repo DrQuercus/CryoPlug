@@ -66,6 +66,10 @@ Pour essayer sans données : `cryoplug demo-data ~/cryoplug_demo`, puis importez
 
 ### Sélection et raccourcis
 
+Le bouton **⋯** d'une carte (ou un **clic droit**) réunit les actions du job : ouvrir, *Continue with…*,
+voir en 3D, cloner, réinitialiser, copier le chemin du dossier, supprimer. Le résumé en haut à droite
+compte les jobs par statut ; un clic sur un statut (par exemple *failed*) n'affiche que ces jobs.
+
 Comme dans CryoSPARC : **Ctrl/⌘ + clic** ajoute un job à la sélection, **Maj + clic** une plage,
 **Ctrl/⌘ + A** tous les jobs affichés ; la barre qui apparaît met en file, arrête, réinitialise ou supprime
 les jobs sélectionnés. Quand un job est ouvert, ses entrées sont entourées en violet et les jobs qui

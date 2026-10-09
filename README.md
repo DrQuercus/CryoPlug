@@ -22,7 +22,7 @@ installés sur votre serveur local :
 | Constructeur de job (pré-rempli, glisser-déposer) | Résolution directionnelle (3D FSC) |
 |---|---|
 | ![](docs/images/builder.png) | ![](docs/images/directional_fsc.png) |
-| **Session ISOLDE en attente** (les jobs suivants attendent) | **Graphe du pipeline** |
+| **Session ISOLDE prête** (ouvrir sur le serveur ou télécharger le paquet) | **Graphe du pipeline** |
 | ![](docs/images/isolde.png) | ![](docs/images/graph.png) |
 | **Workflows** | **Checklist avant dépôt** |
 | ![](docs/images/workflows.png) | ![](docs/images/checklist.png) |
@@ -219,8 +219,14 @@ Les fichiers de particules `.cs` des versions récentes de CryoSPARC (format com
 6. **View 3D** (dans les sorties d'un job, ou bouton **3D** au survol d'une carte de job) ouvre le
    visualiseur décrit ci-dessous.
 
-### Sélection multiple et raccourcis (comme CryoSPARC)
+### Actions, sélection multiple et raccourcis (comme CryoSPARC)
 
+- Le bouton **⋯** d'une carte de job (ou un **clic droit**) ouvre son menu : ouvrir, *Continue with…*,
+  voir en 3D, cloner, réinitialiser, copier le chemin du dossier, supprimer. Dans le détail d'un job,
+  l'action principale (*Queue*, *Continue with…*, *Stop*…) reste en évidence et les autres sont dans le
+  même menu **⋯**.
+- En haut à droite, le **résumé** compte les jobs par statut (en cours, en file, en attente, échoués) :
+  un clic sur un statut n'affiche que ces jobs, un second clic revient à tous.
 - **Ctrl/⌘ + clic** ajoute un job à la sélection, **Maj + clic** une plage, **Ctrl/⌘ + A** tous les jobs
   affichés ; la barre de sélection propose **Queue**, **Stop**, **Clear** et **Delete** (avec le nombre de
   jobs concernés par chaque action et une confirmation).

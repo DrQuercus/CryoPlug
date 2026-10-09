@@ -251,7 +251,7 @@ export function paramField(prm, values, idPrefix = 'p') {
     input = h('select', { id, onchange: (e) => set(e.target.value) },
       prm.choices.map((c) => h('option', { value: c, selected: c === v }, String(c).replaceAll('_', ' '))));
   } else if (prm.type === 'text') {
-    input = h('textarea', { id, rows: 4, placeholder: prm.placeholder || '', oninput: (e) => set(e.target.value) });
+    input = h('textarea', { id, class: 'mono', rows: 4, placeholder: prm.placeholder || '', oninput: (e) => set(e.target.value) });
     input.value = v ?? '';
   } else if (prm.type === 'float' || prm.type === 'int') {
     const isAuto = prm.name === 'resolution' || (prm.help || '').startsWith('0 =');

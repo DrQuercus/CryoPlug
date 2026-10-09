@@ -5,7 +5,12 @@ export function h(tag, attrs = {}, ...children) {
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v === undefined || v === null || v === false) continue;
     if (k === 'class') el.className = v;
-    else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+    else if (k === 'style' && typeof v === 'object') {
+      for (const [prop, val] of Object.entries(v)) {
+        if (prop.startsWith('--')) el.style.setProperty(prop, val); // custom properties need setProperty
+        else el.style[prop] = val;
+      }
+    }
     else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
     else if (k === 'dataset') Object.assign(el.dataset, v);
     else if (v === true) el.setAttribute(k, '');
@@ -83,6 +88,11 @@ const ICONS = {
   camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
   help: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5V14M12 17.5v.01',
   target: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM12 12h.01',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4.3-4.3',
+  clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2',
+  package: 'M12 3l8 4.5v9L12 21l-8-4.5v-9zM8 5.2l8 4.6M12 12v9M4 7.5l8 4.5 8-4.5',
+  shield: 'M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6zM8.5 12l2.5 2.5 4.5-5',
+  sliders: 'M4 7h10M18 7h2M4 17h4M12 17h8M14 4v6M8 14v6',
 };
 
 export function icon(name, cls = '') {
@@ -163,7 +173,9 @@ export function confirmDialog(title, message, okLabel = 'Confirm', danger = fals
   });
 }
 
-export function popupMenu(anchor, items) {
+// Items: { label, action, ic, danger, disabled }, { category } (heading) or { separator: true }.
+// at: { x, y } opens the menu at a point (right-click) instead of below the anchor.
+export function popupMenu(anchor, items, at = null) {
   document.querySelectorAll('.menu').forEach((m) => m.remove());
   const menu = h('div', { class: 'menu', role: 'menu' });
   const close = () => {
@@ -172,12 +184,33 @@ export function popupMenu(anchor, items) {
     document.removeEventListener('keydown', onKey, true);
   };
   const outside = (e) => { if (!menu.contains(e.target)) close(); };
-  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const buttons = () => [...menu.querySelectorAll('button:not(:disabled)')];
+  const onKey = (e) => {
+    if (e.key === 'Escape') { close(); anchor?.focus?.(); return; }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const list = buttons();
+    const i = list.indexOf(document.activeElement);
+    list[(i + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length]?.focus();
+  };
   for (const it of items) {
     if (it.category) menu.appendChild(h('div', { class: 'menu-cat' }, it.category));
-    else menu.appendChild(h('button', { type: 'button', role: 'menuitem', onclick: () => { close(); runAction(it.action); } }, it.label));
+    else if (it.separator) {
+      if (menu.lastChild && !menu.lastChild.classList.contains('menu-sep')) menu.appendChild(h('div', { class: 'menu-sep', role: 'separator' }));
+    } else {
+      menu.appendChild(h('button', { type: 'button', role: 'menuitem', class: it.danger ? 'danger' : '', disabled: it.disabled,
+        onclick: () => { close(); runAction(it.action); } }, it.ic ? icon(it.ic) : null, it.label));
+    }
   }
+  if (menu.lastChild?.classList.contains('menu-sep')) menu.lastChild.remove();
   document.body.appendChild(menu);
+  if (at) {
+    menu.style.top = `${Math.max(8, Math.min(at.y, window.innerHeight - menu.offsetHeight - 8))}px`;
+    menu.style.left = `${Math.max(8, Math.min(at.x, window.innerWidth - menu.offsetWidth - 8))}px`;
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('keydown', onKey, true);
+    return menu;
+  }
   // Fixed next to the anchor and kept inside the window (opens upwards when there is more room there).
   const r = anchor.getBoundingClientRect();
   const below = window.innerHeight - r.bottom - 12;

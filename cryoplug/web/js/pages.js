@@ -2,31 +2,54 @@
 import { api } from './api.js';
 import { browseFiles } from './filebrowser.js';
 import { navigate, setJobtypes, state } from './state.js';
-import { ago, btn, clear, confirmDialog, guard, h, icon, jobDuration, modal, statusChip, toast } from './ui.js';
+import { ago, btn, clear, confirmDialog, copyText, guard, h, icon, jobDuration, modal, popupMenu, statusChip, toast } from './ui.js';
+
+// A long path shortened to its last folders ("…/projects/CP-demo"), for display only.
+export function shortPath(path, max = 44) {
+  if (!path || path.length <= max) return path || '';
+  const parts = path.split('/');
+  let out = parts.pop();
+  while (parts.length && out.length + parts[parts.length - 1].length + 1 <= max - 2) out = `${parts.pop()}/${out}`;
+  return `…/${out}`;
+}
 
 // ----------------------------------------------------------------- projects
 export async function renderProjects(content) {
   let projects;
   try { projects = await api.projects(); } catch (e) { clear(content, h('div', { class: 'alert error' }, e.message)); return; }
   state.projects = projects;
-  const cards = projects.map((p) => h('div', { class: 'card project-card', tabindex: 0, role: 'button', onclick: () => navigate(`#/p/${p.uid}`),
-    onkeydown: (e) => { if (e.key === 'Enter') navigate(`#/p/${p.uid}`); } },
-  h('div', { class: 'card-head' }, h('span', { class: 'uid' }, p.uid), p.num_active ? h('span', { class: 'chip running' }, `${p.num_active} active`) : null),
-  h('div', { class: 'card-title' }, p.title),
-  p.description ? h('div', { class: 'card-type' }, p.description) : null,
-  h('div', { class: 'muted small mono', style: { wordBreak: 'break-all' } }, p.dir),
-  h('div', { class: 'card-foot' }, h('span', {}, `${p.num_jobs} job${p.num_jobs === 1 ? '' : 's'}`), h('span', {}, `updated ${ago(p.updated_at)}`)),
-  h('div', { class: 'row' }, h('span', { class: 'grow' }), h('button', { class: 'icon-btn', title: 'Remove project', 'aria-label': `Remove ${p.title}`,
-    onclick: async (e) => {
+  const remove = async (p) => {
+    if (!(await confirmDialog('Remove project', `Remove ${p.uid} "${p.title}" from CryoPlug?\nThe project directory is kept on disk:\n${p.dir}`, 'Remove', true))) return;
+    await guard(api.deleteProject(p.uid, false), 'Project removed');
+    renderProjects(content);
+  };
+  const cards = projects.map((p) => {
+    const open = () => navigate(`#/p/${p.uid}`);
+    const more = h('button', { class: 'card-more icon-btn', type: 'button', title: 'Actions', 'aria-label': `Actions for ${p.uid}`, 'aria-haspopup': 'menu',
+      onclick: (e) => menu(e) }, icon('more'));
+    const menu = (e) => {
+      e.preventDefault();
       e.stopPropagation();
-      if (!(await confirmDialog('Remove project', `Remove ${p.uid} "${p.title}" from CryoPlug?\nThe project directory is kept on disk:\n${p.dir}`, 'Remove', true))) return;
-      await guard(api.deleteProject(p.uid, false), 'Project removed');
-      renderProjects(content);
-    } }, icon('trash')))));
+      popupMenu(more, [
+        { label: 'Open', ic: 'next', action: open },
+        { label: 'Copy folder path', ic: 'folder', action: () => copyText(p.dir) },
+        { separator: true },
+        { label: 'Remove from CryoPlug…', ic: 'trash', danger: true, action: () => remove(p) },
+      ], e.type === 'contextmenu' ? { x: e.clientX, y: e.clientY } : null);
+    };
+    return h('div', { class: 'card project-card', tabindex: 0, role: 'button', onclick: (e) => { if (!e.target.closest('.card-more')) open(); },
+      oncontextmenu: menu, onkeydown: (e) => { if (e.target === e.currentTarget && e.key === 'Enter') open(); } },
+    h('div', { class: 'card-head' }, h('span', { class: 'uid' }, p.uid),
+      p.num_active ? h('span', { class: 'chip running' }, `${p.num_active} active`) : null, h('span', { class: 'grow' }), more),
+    h('div', { class: 'card-title' }, p.title),
+    p.description ? h('div', { class: 'project-card-desc' }, p.description) : null,
+    h('div', { class: 'project-path', title: p.dir }, icon('folder'), h('span', {}, shortPath(p.dir, 40))),
+    h('div', { class: 'card-foot' }, h('span', {}, `${p.num_jobs} job${p.num_jobs === 1 ? '' : 's'}`), h('span', {}, `updated ${ago(p.updated_at)}`)));
+  });
   clear(content,
     h('div', { class: 'toolbar' }, btn('New project', () => newProjectDialog(), { cls: 'primary', ic: 'plus' }), h('span', { class: 'grow' }),
-      h('span', { class: 'muted small' }, `Server ${state.info.hostname} · projects in ${state.info.projects_root}`)),
-    projects.length ? h('div', { class: 'cards' }, cards) : h('div', { class: 'empty' }, h('h3', {}, 'Welcome to CryoPlug'),
+      h('span', { class: 'muted small', title: state.info.projects_root }, `Server ${state.info.hostname} · projects in ${shortPath(state.info.projects_root, 50)}`)),
+    projects.length ? h('div', { class: 'cards projects' }, cards) : h('div', { class: 'empty' }, h('h3', {}, 'Welcome to CryoPlug'),
       h('p', {}, 'Create a project to post-process a CryoSPARC map: sharpening, model building, refinement, validation and deposition.'),
       btn('New project', () => newProjectDialog(), { cls: 'primary', ic: 'plus' })));
 }
@@ -69,7 +92,8 @@ export async function renderQueue(content) {
     h('div', { class: 'tiles', style: { marginTop: '8px' } },
       h('div', { class: 'tile' }, h('div', { class: 'label' }, 'Running jobs'), h('div', { class: 'value' }, `${l.running} / ${l.max_jobs}`)),
       l.gpus.length ? h('div', { class: 'tile' }, h('div', { class: 'label' }, 'GPUs in use'), h('div', { class: 'value' }, `${l.gpus_used.length} / ${l.gpus.length}`),
-        h('div', { class: 'muted small' }, l.gpus.map((g) => `${g}${l.gpus_used.includes(g) ? '●' : '○'}`).join(' '))) : null)));
+        h('div', { class: 'gpus' }, l.gpus.map((g) => h('span', { class: `gpu ${l.gpus_used.includes(g) ? 'busy' : ''}`,
+          title: l.gpus_used.includes(g) ? 'In use' : 'Free' }, `GPU ${g}`)))) : null)));
   const rows = q.jobs.map((j) => h('tr', {},
     h('td', {}, h('a', { href: `#/p/${j.project_uid}/${j.uid}` }, `${j.project_uid} / ${j.uid}`)),
     h('td', {}, j.title, h('div', { class: 'muted small' }, j.project_title)),
@@ -107,20 +131,25 @@ export async function renderTools(content) {
   const rows = tools.map((t) => {
     const st = t.status || {};
     const cfg = t.config || {};
-    const cfgText = [cfg.setup && `setup: ${cfg.setup}`, cfg.bin_dir && `bin_dir: ${cfg.bin_dir}`, cfg.executable && `executable: ${cfg.executable}`]
-      .filter(Boolean).join('\n') || '(defaults: looked up on PATH)';
+    const cfgLines = [cfg.setup && `setup: ${cfg.setup}`, cfg.bin_dir && `bin_dir: ${shortPath(cfg.bin_dir, 40)}`,
+      cfg.executable && `executable: ${shortPath(cfg.executable, 40)}`].filter(Boolean);
+    const cfgText = cfgLines.join('\n') || '(defaults: looked up on PATH)';
+    const cfgFull = [cfg.setup && `setup: ${cfg.setup}`, cfg.bin_dir && `bin_dir: ${cfg.bin_dir}`, cfg.executable && `executable: ${cfg.executable}`]
+      .filter(Boolean).join('\n');
     return h('tr', {},
       h('td', {}, h('b', {}, t.label), h('div', { class: 'muted small' }, t.description),
         t.homepage ? h('a', { class: 'small', href: t.homepage, target: '_blank', rel: 'noopener' }, t.homepage) : null),
       h('td', {}, h('span', { class: `chip ${st.status === 'found' ? 'completed' : st.status === 'missing' ? 'failed' : 'building'}` }, label[st.status] || st.status || 'not checked')),
-      h('td', { class: 'small' }, st.path ? h('span', { class: 'mono' }, st.path) : h('span', { class: 'muted' }, st.message || ''),
-        st.version ? h('div', { class: 'muted' }, st.version) : null),
-      h('td', { class: 'small mono', style: { whiteSpace: 'pre-wrap' } }, `[tools.${t.key}]\n${cfgText}`));
+      h('td', { class: 'small' }, st.path ? h('span', { class: 'mono path', title: st.path }, shortPath(st.path, 46),
+        h('button', { class: 'icon-btn', title: 'Copy full path', 'aria-label': `Copy the path of ${t.label}`, onclick: () => copyText(st.path) }, icon('copy')))
+        : h('span', { class: 'muted' }, st.message || ''),
+      st.version ? h('div', { class: 'muted' }, st.version) : null),
+      h('td', { class: 'small mono', style: { whiteSpace: 'pre-wrap' }, title: cfgFull || null }, `[tools.${t.key}]\n${cfgText}`));
   });
   clear(content,
     h('div', { class: 'toolbar' }, h('h2', { style: { margin: 0 } }, 'External programs'), h('span', { class: 'grow' }), recheck),
     h('p', { class: 'muted' }, 'CryoPlug drives programs installed on this server. Configure how each one is started (source script, conda environment, module, path) in ',
-      h('span', { class: 'mono' }, state.info.config_path || '~/.cryoplug/config.toml'), ', restart the server, then re-check.'),
+      h('span', { class: 'mono', title: state.info.config_path || '' }, shortPath(state.info.config_path, 60) || '~/.cryoplug/config.toml'), ', restart the server, then re-check.'),
     h('div', { class: 'box' }, h('table', { class: 'data' }, h('thead', {}, h('tr', {}, ['Program', 'Status', 'Location', 'Configuration'].map((c) => h('th', {}, c)))),
       h('tbody', {}, rows))),
     h('div', { class: 'section' }, h('h4', {}, 'Example configuration'), h('pre', { class: 'box mono', style: { whiteSpace: 'pre-wrap' } },

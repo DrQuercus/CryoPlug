@@ -1,29 +1,42 @@
 // Project page: job cards (CryoSPARC-like), pipeline graph, filters and workflow templates.
 import { api } from './api.js';
 import { openBuilder, paramField } from './builder.js';
-import { detailUid, jobViewItems, viewerUrl } from './detail.js';
-import { jobHref, navigate, refreshJobs, state, typeTitle } from './state.js';
-import { ACTIVE, btn, clear, confirmDialog, guard, h, icon, jobDuration, modal, s, statusChip, toast } from './ui.js';
+import { detailMode, detailUid, jobMenuItems, jobViewItems, viewerUrl } from './detail.js';
+import { builderHref, jobHref, navigate, refreshJobs, state, typeTitle } from './state.js';
+import {
+  ACTIVE, ago, btn, clear, confirmDialog, fmtTime, guard, h, icon, jobDuration, modal, popupMenu, s, statusChip, toast,
+} from './ui.js';
 
 const STATUSES = ['building', 'queued', 'launched', 'running', 'waiting', 'completed', 'failed', 'killed'];
 
 export function renderProject(content) {
   const p = state.project;
-  const search = h('input', { type: 'search', placeholder: 'Filter jobs…', value: state.filter.text, 'aria-label': 'Filter jobs',
-    oninput: (e) => { state.filter.text = e.target.value; renderJobs(); } });
+  const search = h('label', { class: 'search-field', title: 'Filter by number, title, job type or notes (/)' }, icon('search'),
+    h('input', { type: 'search', placeholder: 'Filter jobs', value: state.filter.text, 'aria-label': 'Filter jobs',
+      oninput: (e) => { state.filter.text = e.target.value; renderJobs(); } }));
   const statusSel = h('select', { 'aria-label': 'Status filter', onchange: (e) => { state.filter.status = e.target.value; renderJobs(); } },
-    h('option', { value: '' }, 'All statuses'), STATUSES.map((st) => h('option', { value: st, selected: state.filter.status === st }, st)));
+    h('option', { value: '' }, 'Any status'), STATUSES.map((st) => h('option', { value: st, selected: state.filter.status === st }, st)));
   const catSel = h('select', { 'aria-label': 'Category filter', onchange: (e) => { state.filter.category = e.target.value; renderJobs(); } },
     h('option', { value: '' }, 'All categories'), state.info.categories.map((c) => h('option', { value: c, selected: state.filter.category === c }, c)));
-  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'View' },
+  // in the top bar, as in CryoSPARC: how many jobs in each state, and cards / graph
+  const seg = h('div', { class: 'seg view-seg', role: 'group', 'aria-label': 'View' },
     ['cards', 'graph'].map((v) => h('button', { class: state.view === v ? 'on' : '', type: 'button', 'aria-pressed': state.view === v ? 'true' : 'false',
-      onclick: () => { state.view = v; localStorage.setItem('cryoplug.view', v); renderProject(content); } }, icon(v === 'cards' ? 'grid' : 'graph'), ` ${v[0].toUpperCase()}${v.slice(1)}`)));
+      title: v === 'cards' ? 'Job cards' : 'Pipeline graph (G)',
+      onclick: () => {
+        state.view = v;
+        localStorage.setItem('cryoplug.view', v);
+        if (detailMode() === 'page') navigate(builderHref()); // back from the job shown next to the builder
+        else renderProject(content);
+      } },
+    icon(v === 'cards' ? 'grid' : 'graph'), h('span', { class: 'lbl' }, v === 'cards' ? 'Cards' : 'Graph'))));
+  clear(document.getElementById('topbar-right'), h('div', { class: 'job-summary', id: 'job-summary' }), seg);
   clear(content,
     h('div', { class: 'toolbar' },
-      btn('New job', () => { openBuilder(); navigate(`#/p/${p.uid}/new`); }, { cls: 'primary', ic: 'plus' }),
-      btn('Workflows', () => workflowDialog(), { ic: 'flow' }),
-      h('span', { style: { width: '8px' } }), search, statusSel, catSel, h('span', { class: 'grow' }), seg),
-    p.description ? h('p', { class: 'muted', style: { margin: '-4px 0 12px' } }, p.description) : null,
+      btn('New job', () => { openBuilder(); navigate(`#/p/${p.uid}/new`); }, { cls: 'primary', ic: 'plus', title: 'New job (N)' }),
+      h('button', { class: 'btn', type: 'button', title: 'Create a chain of linked jobs from a template', onclick: () => workflowDialog() },
+        icon('flow'), h('span', { class: 'lbl' }, 'Workflows')),
+      h('span', { class: 'toolbar-gap' }), search, statusSel, catSel),
+    p.description ? h('p', { class: 'project-desc' }, p.description) : null,
     h('div', { id: 'jobs-area' }));
   renderJobs();
 }
@@ -36,9 +49,27 @@ function filtered() {
     && (!q || `${j.uid} ${j.title} ${j.type} ${typeTitle(j.type)} ${j.notes || ''}`.toLowerCase().includes(q)));
 }
 
+// Job counts in the top bar: the total, then the states that need attention (click: show only those).
+function renderSummary() {
+  const box = document.getElementById('job-summary');
+  if (!box) return;
+  const count = {};
+  for (const j of state.jobs) count[j.status] = (count[j.status] || 0) + 1;
+  const items = ['running', 'queued', 'waiting', 'building', 'failed', 'killed'].filter((st) => count[st] || (st === 'running' && count.launched))
+    .map((st) => {
+      const n = (count[st] || 0) + (st === 'running' ? count.launched || 0 : 0);
+      const on = state.filter.status === st;
+      return h('button', { type: 'button', class: `chip ${st} ${on ? 'on' : ''}`, 'aria-pressed': on ? 'true' : 'false',
+        title: on ? 'Show all the jobs' : `Show only the ${st} jobs`,
+        onclick: () => { state.filter.status = on ? '' : st; renderProject(document.getElementById('content')); } }, `${n} ${st}`);
+    });
+  clear(box, h('span', { class: 'muted small' }, `${state.jobs.length} job${state.jobs.length === 1 ? '' : 's'}`), items);
+}
+
 export function renderJobs() {
   const area = document.getElementById('jobs-area');
   if (!area) return;
+  renderSummary();
   if (!state.jobs.length) {
     clear(area, h('div', { class: 'empty' }, h('h3', {}, 'No jobs yet'),
       h('p', {}, 'Start by importing your CryoSPARC refinement (half maps, sharpened map, mask), or create a whole pipeline from a workflow template.'),
@@ -172,13 +203,40 @@ function lineage() {
   };
 }
 
-function typeIcon(type) {
-  const cat = state.types[type]?.category || '';
-  if (cat === 'Import') return icon('download');
-  if (cat === 'Map processing') return icon('map');
-  if (['Model building', 'Interactive', 'Refinement'].includes(cat)) return icon('model');
-  if (cat === 'Validation' || cat === 'Deposition') return icon('check');
-  return icon('file');
+// Icon and colour of each job category: the picture of a card whose job has no image of its own.
+const CATEGORY_LOOK = {
+  Import: ['download', '--cat-import'],
+  'Map processing': ['map', '--series-1'],
+  Heterogeneity: ['layers', '--series-4'],
+  'Model building': ['model', '--series-2'],
+  Interactive: ['monitor', '--series-7'],
+  Refinement: ['sliders', '--series-3'],
+  Validation: ['shield', '--series-6'],
+  Deposition: ['package', '--series-5'],
+  Utilities: ['file', '--ink-3'],
+};
+
+function categoryThumb(type) {
+  const [ic, color] = CATEGORY_LOOK[state.types[type]?.category] || ['file', '--ink-3'];
+  return { el: icon(ic), style: { '--cat': `var(${color})` } };
+}
+
+// When the job ran (or was created), its run time and lane; dates in the tooltip.
+function cardFoot(job) {
+  const when = job.ended_at || job.started_at || job.created_at;
+  const tip = [`Created ${fmtTime(job.created_at)}`, job.started_at ? `started ${fmtTime(job.started_at)}` : '',
+    job.ended_at ? `ended ${fmtTime(job.ended_at)}` : '', job.lane ? `lane ${job.lane}` : ''].filter(Boolean).join(' · ');
+  const dur = jobDuration(job);
+  return h('div', { class: 'card-foot', title: tip },
+    h('span', {}, ago(when)),
+    h('span', {}, dur ? h('span', { class: 'dur' }, icon('clock'), dur) : null, state.info.lanes.length > 1 && job.lane ? ` · ${job.lane}` : ''));
+}
+
+function cardMenu(e, job) {
+  e.preventDefault();
+  e.stopPropagation();
+  const anchor = e.currentTarget.closest('.card')?.querySelector('.card-more') || e.currentTarget;
+  popupMenu(anchor, jobMenuItems(job, anchor, { withOpen: true }), e.type === 'contextmenu' ? { x: e.clientX, y: e.clientY } : null);
 }
 
 function jobCard(job, rel) {
@@ -189,19 +247,25 @@ function jobCard(job, rel) {
   const child = rel?.children.has(job.uid);
   const picked = state.selection.has(job.uid);
   const view3d = job.status === 'completed' ? jobViewItems(job) : [];
+  const ph = thumbOut ? null : categoryThumb(job.type);
   const card = h('div', {
     class: `card ${job.status} ${detailUid() === job.uid ? 'selected' : ''} ${picked ? 'picked' : ''} ${parent ? 'lineage-parent' : ''} ${child ? 'lineage-child' : ''}`,
     tabindex: 0, role: 'button', dataset: { uid: job.uid }, 'aria-pressed': picked ? 'true' : 'false',
     'aria-label': `${job.uid} ${job.title} ${job.status}${parent ? `, input of ${rel.uid}` : ''}${child ? `, uses ${rel.uid}` : ''}`,
     onmousedown: (e) => { if (e.shiftKey) e.preventDefault(); },
-    onclick: (e) => { if (e.target.closest('.out-chip') || pickJob(e, job.uid)) return; openJob(job.uid); },
+    onclick: (e) => { if (e.target.closest('.out-chip, .card-more') || pickJob(e, job.uid)) return; openJob(job.uid); },
+    oncontextmenu: (e) => cardMenu(e, job),
     onkeydown: (e) => {
+      if (e.target !== e.currentTarget) return;
       if (e.key === 'Enter') openJob(job.uid);
       else if (e.key === ' ') { e.preventDefault(); pickJob({ ctrlKey: true }, job.uid); }
+      else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) cardMenu(e, job);
     },
   },
-  h('div', { class: 'card-head' }, h('span', { class: 'uid' }, job.uid), statusChip(job.status)),
-  h('div', { class: 'card-thumb' }, thumbOut ? h('img', { src: api.fileUrl(puid, thumbOut.thumbnail), alt: '', loading: 'lazy' }) : typeIcon(job.type),
+  h('div', { class: 'card-head' }, h('span', { class: 'uid' }, job.uid), statusChip(job.status),
+    h('button', { class: 'card-more icon-btn', type: 'button', title: 'Actions', 'aria-label': `Actions for ${job.uid}`, 'aria-haspopup': 'menu',
+      onclick: (e) => cardMenu(e, job) }, icon('more'))),
+  h('div', { class: `card-thumb ${ph ? 'ph' : ''}`, style: ph?.style }, thumbOut ? h('img', { src: api.fileUrl(puid, thumbOut.thumbnail), alt: '', loading: 'lazy' }) : ph.el,
     parent ? h('span', { class: 'lineage-tag up' }, `input of ${rel.uid}`) : null,
     child ? h('span', { class: 'lineage-tag down' }, `uses ${rel.uid}`) : null,
     view3d.length ? h('a', {
@@ -215,7 +279,7 @@ function jobCard(job, rel) {
   job.status === 'running' ? h('div', { class: 'progress' }, h('i', { style: { width: `${Math.max(3, Math.round((job.progress || 0) * 100))}%` } })) : null,
   job.status === 'failed' && job.error ? h('div', { class: 'card-msg', title: job.error }, job.error) : null,
   builderOpen && job.status === 'completed' && job.outputs.length ? outputChips(job) : null,
-  h('div', { class: 'card-foot' }, h('span', {}, jobDuration(job)), h('span', {}, job.lane || '')));
+  cardFoot(job));
   return card;
 }
 
@@ -246,7 +310,7 @@ function renderGraph(area, jobs, rel) {
   jobs.forEach((j) => depthOf(j.uid));
   const cols = {};
   [...jobs].sort((a, b) => a.num - b.num).forEach((j) => { (cols[depth[j.uid]] ||= []).push(j); });
-  const NW = 178, NH = 50, GX = 70, GY = 18, PAD = 20;
+  const NW = 166, NH = 50, GX = 46, GY = 16, PAD = 18;
   const pos = {};
   let maxRows = 0;
   Object.entries(cols).forEach(([d, list]) => {
@@ -269,7 +333,7 @@ function renderGraph(area, jobs, rel) {
     failed: '--st-critical', killed: '--st-serious', building: '--st-idle' };
   for (const j of jobs) {
     const p = pos[j.uid];
-    const title = clip(j.title, 24);
+    const title = clip(j.title, 22);
     const cls = [detailUid() === j.uid ? 'selected' : '', state.selection.has(j.uid) ? 'picked' : '',
       rel?.parents.has(j.uid) ? 'lineage-parent' : '', rel?.children.has(j.uid) ? 'lineage-child' : ''].join(' ');
     const g = s('g', { class: `gnode ${cls}`, transform: `translate(${p.x},${p.y})`, tabindex: 0, role: 'button',
@@ -282,7 +346,8 @@ function renderGraph(area, jobs, rel) {
     svg.appendChild(g);
   }
   const fit = localStorage.getItem('cryoplug.graphFit') !== '0';
-  if (fit) Object.assign(svg.style, { width: '100%', height: 'auto', maxWidth: `${W}px` });
+  // "Fit" shrinks the graph to the width of the page, but not below 72 % (the labels stay readable; it scrolls)
+  if (fit) Object.assign(svg.style, { width: '100%', height: 'auto', maxWidth: `${W}px`, minWidth: `${Math.round(W * 0.72)}px` });
   const zoom = h('div', { class: 'seg', role: 'group', 'aria-label': 'Graph zoom' },
     [['Fit', true], ['100%', false]].map(([label, val]) => h('button', { type: 'button', class: fit === val ? 'on' : '', 'aria-pressed': fit === val ? 'true' : 'false',
       onclick: () => { localStorage.setItem('cryoplug.graphFit', val ? '1' : '0'); renderGraph(area, jobs); } }, label)));
@@ -304,8 +369,10 @@ async function workflowDialog() {
   const showList = () => clear(body,
     h('p', { class: 'muted', style: { marginTop: 0 } }, 'A workflow creates a chain of linked jobs in one go. Optional steps can be left out; downstream jobs are re-wired automatically.'),
     workflows.map((wf) => h('div', { class: 'wf-card', tabindex: 0, role: 'button', onclick: () => showForm(wf), onkeydown: (e) => { if (e.key === 'Enter') showForm(wf); } },
-      h('b', {}, wf.title), h('div', { class: 'muted small' }, wf.description),
-      h('div', { class: 'small', style: { marginTop: '4px' } }, wf.nodes.map((n) => n.title).join(' → ')))));
+      h('div', { class: 'row' }, h('b', { class: 'grow' }, wf.title), h('span', { class: 'muted small' }, `${wf.nodes.length} jobs`), icon('next')),
+      h('div', { class: 'muted small' }, wf.description),
+      h('div', { class: 'wf-steps' }, wf.nodes.map((n, i) => [i ? h('span', { class: 'wf-arrow', 'aria-hidden': 'true' }, '→') : null,
+        h('span', { class: `wf-step ${n.optional ? 'opt' : ''}`, title: `${n.type_title}${n.optional ? ' (optional)' : ''}` }, n.title)])))));
   const showForm = (wf) => {
     const include = new Set(wf.nodes.filter((n) => n.optional && n.default).map((n) => n.id));
     const overrides = {};
