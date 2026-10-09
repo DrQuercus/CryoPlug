@@ -1223,6 +1223,7 @@ Lance n'importe quel programme sur les données du projet (script bash avec des 
 **À éviter / pièges**
 
 - Opérations déjà couvertes par un job dédié (meilleure traçabilité et rapports).
+- Avec des comptes utilisateurs, réservé aux administrateurs : le script s'exécute sous le compte du serveur.
 
 **Entrées conseillées** : Les entrées utiles au programme ; choisissez l'environnement (configuration d'un outil).
 

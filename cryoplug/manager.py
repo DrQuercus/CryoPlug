@@ -17,8 +17,9 @@ from cryoplug import tools as toolmod
 from cryoplug.config import Config
 from cryoplug.db import Database
 from cryoplug.jobs import get_job_type
-from cryoplug.jobs.base import ACTIVE_STATUSES, JobContext, JobError
+from cryoplug.jobs.base import ACTIVE_STATUSES, JobContext, JobError, split_paths
 from cryoplug.lanes import make_lane
+from cryoplug.users import path_allowed
 
 
 class ManagerError(Exception):
@@ -82,11 +83,16 @@ class Manager:
     def project_dir(self, uid: str) -> Path:
         return Path(self.project(uid)["dir"])
 
-    def create_project(self, title: str, description: str = "", parent: str | None = None) -> dict[str, Any]:
+    def create_project(self, title: str, description: str = "", parent: str | None = None, owner: str = "",
+                       roots: list[Path] | None = None, default_parent: Path | None = None) -> dict[str, Any]:
+        """New project folder CP-<title> in ``parent``; ``roots`` limits where (a user's folders)."""
         title = (title or "").strip()
         if not title:
             raise ManagerError("Project title is required")
-        parent_dir = Path(parent or self.config.projects_root).expanduser()
+        parent_dir = Path(parent or default_parent or self.config.projects_root).expanduser()
+        if not path_allowed(parent_dir, roots):
+            raise ManagerError(f"{parent_dir} is outside your folders: create the project in your projects folder"
+                               f"{f' ({default_parent})' if default_parent else ''}")
         try:
             parent_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -99,14 +105,14 @@ class Manager:
             pdir = Path(f"{base}-{n}")
             n += 1
         pdir.mkdir(parents=True)
-        proj = self.db.create_project(title, description, str(pdir))
-        (pdir / "cryoplug_project.json").write_text(json.dumps({"uid": proj["uid"], "title": title,
-                                                                "description": description, "created_at": proj["created_at"]}, indent=1))
+        proj = self.db.create_project(title, description, str(pdir), owner)
+        (pdir / "cryoplug_project.json").write_text(json.dumps({"uid": proj["uid"], "title": title, "description": description,
+                                                                "owner": owner, "created_at": proj["created_at"]}, indent=1))
         return proj
 
     def update_project(self, uid: str, **fields: Any) -> dict[str, Any]:
         self.project(uid)
-        allowed = {k: v for k, v in fields.items() if k in ("title", "description", "archived")}
+        allowed = {k: v for k, v in fields.items() if k in ("title", "description", "archived", "owner", "members")}
         self.db.update_project(uid, **allowed)
         return self.project(uid)
 
@@ -158,8 +164,34 @@ class Manager:
             clean[slot_name] = {"job": ref["job"], "output": ref["output"]}
         return clean
 
+    @staticmethod
+    def _check_user_params(jt, params: dict[str, Any], roots: list[Path] | None, authoring: bool = True,
+                           previous: dict[str, Any] | None = None) -> None:
+        """What a user who is not an administrator (``roots``: their folders; None = administrator) may ask for.
+
+        Files and folders must lie in their folders.  When ``authoring`` (creating or editing a job), job types and
+        parameters that can run code on the server or reach other folders (custom command, ChimeraX commands, extra
+        program arguments) are refused, unless left as they were (``previous``: the job edited or cloned)."""
+        if roots is None:
+            return
+        if authoring and jt.admin_only:
+            raise ManagerError(f"{jt.title} runs any command on the server: only administrators can use it")
+        for p in jt.params:
+            value = params.get(p.name)
+            if not value:
+                continue
+            label = p.label or p.name
+            if authoring and p.admin_only and value != (previous or {}).get(p.name, p.default):
+                raise ManagerError(f"{label}: only administrators can set this (it can run code or reach any folder on the server)")
+            if p.type == "path" or p.path_kind == "files":
+                for v in [value] if p.type == "path" else split_paths(value):
+                    if not path_allowed(v, roots):
+                        raise ManagerError(f"{label}: {v} is outside your folders "
+                                           "(an administrator can add its folder to yours in Settings › Users)")
+
     def create_job(self, puid: str, job_type: str, params: dict | None = None, inputs: dict | None = None,
-                   title: str | None = None, lane: str | None = None, notes: str = "") -> dict[str, Any]:
+                   title: str | None = None, lane: str | None = None, notes: str = "", created_by: str = "",
+                   roots: list[Path] | None = None, inherited: dict[str, Any] | None = None) -> dict[str, Any]:
         self.project(puid)
         try:
             jt = get_job_type(job_type)
@@ -169,18 +201,19 @@ class Manager:
             clean_params = jt.coerce_params(params)
         except ValueError as exc:
             raise ManagerError(str(exc)) from None
+        self._check_user_params(jt, clean_params, roots, previous=inherited)
         clean_inputs = self._check_inputs(puid, jt, inputs)
         if lane:
             self._lane_cfg(lane)
         job = self.db.create_job(puid, job_type, (title or "").strip() or jt.title, clean_params, clean_inputs,
-                                 lane, jt.resources(clean_params))
+                                 lane, jt.resources(clean_params), created_by)
         if notes:
             self.db.update_job(puid, job["uid"], notes=notes)
         jdir = self.job_dir(puid, job["uid"])
         jdir.mkdir(parents=True, exist_ok=True)
         return self.job(puid, job["uid"])
 
-    def update_job(self, puid: str, juid: str, **fields: Any) -> dict[str, Any]:
+    def update_job(self, puid: str, juid: str, roots: list[Path] | None = None, **fields: Any) -> dict[str, Any]:
         with self.lock:
             job = self.job(puid, juid)
             jt = get_job_type(job["type"])
@@ -192,12 +225,15 @@ class Manager:
             for key in ("params", "inputs", "lane"):
                 if key in fields and fields[key] is not None and job["status"] != "building":
                     raise ManagerError("Parameters and inputs can only be changed while the job is in building state (clear it first)")
+                if key in fields and fields[key] is not None and roots is not None and jt.admin_only:
+                    raise ManagerError(f"{jt.title} runs any command on the server: only administrators can change it")
             if fields.get("params") is not None:
                 merged = {**job["params"], **fields["params"]}
                 try:
                     updates["params"] = jt.coerce_params(merged)
                 except ValueError as exc:
                     raise ManagerError(str(exc)) from None
+                self._check_user_params(jt, updates["params"], roots, previous=job["params"])
                 updates["resources"] = jt.resources(updates["params"])
             if fields.get("inputs") is not None:
                 updates["inputs"] = self._check_inputs(puid, jt, fields["inputs"])
@@ -230,7 +266,7 @@ class Manager:
         problems += jt.check(job["params"], connected)
         return problems
 
-    def queue_job(self, puid: str, juid: str, lane: str | None = None) -> dict[str, Any]:
+    def queue_job(self, puid: str, juid: str, lane: str | None = None, roots: list[Path] | None = None) -> dict[str, Any]:
         with self.lock:
             job = self.job(puid, juid)
             if job["status"] != "building":
@@ -241,6 +277,7 @@ class Manager:
             lane_name = lane or job.get("lane") or self.config.lanes[0].name
             self._lane_cfg(lane_name)
             jt = get_job_type(job["type"])
+            self._check_user_params(jt, job["params"], roots, authoring=False)  # folders again: the job may be someone else's
             self.db.update_job(puid, juid, status="queued", lane=lane_name, queued_at=time.time(), message="Queued",
                                error="", progress=0.0, resources=jt.resources(job["params"]))
             return self.job(puid, juid)
@@ -289,10 +326,11 @@ class Manager:
             shutil.rmtree(self.job_dir(puid, juid), ignore_errors=True)
             self.db.delete_job(puid, juid)
 
-    def clone_job(self, puid: str, juid: str) -> dict[str, Any]:
+    def clone_job(self, puid: str, juid: str, created_by: str = "", roots: list[Path] | None = None) -> dict[str, Any]:
         job = self.job(puid, juid)
         valid_inputs = {s: r for s, r in job["inputs"].items() if self.db.get_job(puid, r["job"])}
-        return self.create_job(puid, job["type"], job["params"], valid_inputs, job["title"], job.get("lane"))
+        return self.create_job(puid, job["type"], job["params"], valid_inputs, job["title"], job.get("lane"),
+                               created_by=created_by, roots=roots, inherited=job["params"])
 
     # ------------------------------------------------------------ details
     def job_detail(self, puid: str, juid: str) -> dict[str, Any]:
@@ -557,7 +595,7 @@ class Manager:
     # ============================================================== queue
     def queue_overview(self) -> dict[str, Any]:
         jobs = self.db.list_jobs(statuses=["queued", "launched", "running", "waiting"])
-        projects = {p["uid"]: p["title"] for p in self.db.list_projects(include_archived=True)}
+        projects = {p["uid"]: p for p in self.db.list_projects(include_archived=True)}
         lanes = []
         for cfg in self.config.lanes:
             on_lane = [j for j in jobs if j.get("lane") == cfg.name and j["status"] in ("launched", "running")]
@@ -565,12 +603,16 @@ class Manager:
             lanes.append({"name": cfg.name, "type": cfg.type, "description": cfg.description, "max_jobs": cfg.max_jobs,
                           "running": len(on_lane), "gpus": cfg.gpus, "gpus_used": used})
         for j in jobs:
-            j["project_title"] = projects.get(j["project_uid"], "")
+            project = projects.get(j["project_uid"]) or {}
+            j["project_title"] = project.get("title", "")
+            j["owner"] = project.get("owner", "")
+            j["members"] = project.get("members", [])
         return {"lanes": lanes, "jobs": jobs}
 
     # ============================================================ workflows
     def instantiate_workflow(self, puid: str, workflow_id: str, overrides: dict[str, dict] | None = None,
-                             include: list[str] | None = None, queue: bool = False, lane: str | None = None) -> dict[str, Any]:
+                             include: list[str] | None = None, queue: bool = False, lane: str | None = None,
+                             created_by: str = "", roots: list[Path] | None = None) -> dict[str, Any]:
         from cryoplug.workflows import get_workflow
         wf = get_workflow(workflow_id)
         overrides = overrides or {}
@@ -587,13 +629,14 @@ class Manager:
                         inputs[slot] = {"job": created[src_node]["uid"], "output": out}
                         break
             params = {**(node.get("params") or {}), **(overrides.get(node["id"]) or {})}
-            created[node["id"]] = self.create_job(puid, node["type"], params, inputs, node.get("title"), lane)
+            created[node["id"]] = self.create_job(puid, node["type"], params, inputs, node.get("title"), lane,
+                                                  created_by=created_by, roots=roots)
         queued, problems = [], {}
         if queue:
             for node in active:
                 job = created[node["id"]]
                 try:
-                    self.queue_job(puid, job["uid"], lane)
+                    self.queue_job(puid, job["uid"], lane, roots=roots)
                     queued.append(job["uid"])
                 except ManagerError as exc:
                     problems[job["uid"]] = str(exc)

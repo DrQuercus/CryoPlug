@@ -5,13 +5,9 @@ import time
 from pathlib import Path
 
 from cryoplug.jobs import register
-from cryoplug.jobs.base import JobContext, JobType, OutputDef, Param, Slot, extra_args_param, resolution_param
+from cryoplug.jobs.base import JobContext, JobType, OutputDef, Param, Slot, extra_args_param, resolution_param, split_paths
 from cryoplug.jobs.building import pick_new_model, quick_cc, report_model
 from cryoplug.parsers import highlights, metrics_table, parse_metrics
-
-
-def _restraint_files(value: str) -> list[str]:
-    return [p.strip() for p in str(value or "").replace(",", ";").split(";") if p.strip()]
 
 
 @register
@@ -36,7 +32,7 @@ class PhenixRealSpaceRefine(JobType):
         Param("rama_restraints", "bool", False, label="Ramachandran restraints",
               help="Useful at low resolution; avoid if you report Ramachandran statistics as validation."),
         Param("nqh_flips", "bool", True, label="N/Q/H flips"),
-        Param("restraints", "str", "", label="Ligand restraint CIFs", path_kind="file",
+        Param("restraints", "str", "", label="Ligand restraint CIFs", path_kind="files",
               help="Restraint dictionaries for ligands (paths separated by ';')."),
         Param("nproc", "int", 4, label="Processors", min=1),
         extra_args_param(),
@@ -46,7 +42,7 @@ class PhenixRealSpaceRefine(JobType):
     def run(self, ctx: JobContext) -> None:
         model, m = ctx.require("model"), ctx.require("map")
         res = ctx.resolution(slots=["map", "model"])
-        restraints = _restraint_files(ctx.params["restraints"])
+        restraints = split_paths(ctx.params["restraints"])
         if ctx.input("restraints"):
             restraints.append(ctx.input("restraints").path)
         args = [ctx.program("phenix", "phenix.real_space_refine"), model.path, m.path, *restraints,
@@ -92,7 +88,7 @@ class ServalcatRefine(JobType):
         Param("hydrogen", "choice", "all", choices=["all", "yes", "no"], label="Hydrogens"),
         Param("jellybody", "bool", False, label="Jelly-body restraints"),
         Param("weight", "float", 0.0, label="Weight", min=0.0, help="0 = automatic."),
-        Param("ligand", "str", "", label="Ligand restraint CIFs", help="Paths separated by ';'."),
+        Param("ligand", "str", "", label="Ligand restraint CIFs", help="Paths separated by ';'.", path_kind="files"),
         extra_args_param(),
     ]
     outputs = [OutputDef("model", "model", "Refined model"), OutputDef("fofc", "map", "Fo-Fc map")]
@@ -123,7 +119,7 @@ class ServalcatRefine(JobType):
             args.append("--jellybody")
         if ctx.params["weight"] > 0:
             args += ["--weight", str(ctx.params["weight"])]
-        ligands = _restraint_files(ctx.params["ligand"])
+        ligands = split_paths(ctx.params["ligand"])
         if ctx.input("restraints"):
             ligands.append(ctx.input("restraints").path)
         if ligands:

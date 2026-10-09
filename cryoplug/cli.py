@@ -1,4 +1,4 @@
-"""Command-line interface: ``cryoplug init | start | tools | fetch-viewer | status | jobtypes | service | worker``."""
+"""Command-line interface: ``cryoplug init | start | url | user | tools | fetch-viewer | status | jobtypes | service | worker``."""
 from __future__ import annotations
 
 import argparse
@@ -71,10 +71,16 @@ def print_access(cfg, mode: str | None, token: str) -> None:
     print("Open in a browser on this machine:" if local else "Open from any computer on the network:")
     for url in access_urls(cfg, token if mode == "token" else ""):
         print(f"  {url}")
-    if mode == "password":
+    if mode == "users":
+        print("Log in with your CryoPlug account (administrators manage accounts in Settings > Users,")
+        print("or with `cryoplug user`).")
+        if not local and not cfg.ssl_certfile:
+            print("Passwords cross the network unencrypted over http: consider HTTPS ([server] ssl_certfile).")
+    elif mode == "password":
         print("Log in with the password set in [server] password.")
     elif mode == "token":
         print(f"Access token: {token}  (`cryoplug url` prints these links again)")
+        print("Personal accounts (as in CryoSPARC): Settings > Users in the interface, or `cryoplug user add`.")
     if local:
         print(f'From another computer: set [server] host = "0.0.0.0" (or `cryoplug start --host 0.0.0.0`), '
               f"or open an SSH tunnel on that computer:\n"
@@ -82,14 +88,92 @@ def print_access(cfg, mode: str | None, token: str) -> None:
 
 
 def cmd_url(args: argparse.Namespace) -> None:
-    from cryoplug.server.auth import access_token, auth_required
+    from cryoplug.db import Database
+    from cryoplug.server.auth import access_token, auth_mode
 
     cfg = _server_config(args)
     if args.reset_token:
         access_token(cfg, reset=True)
         print("New access token: restart the server (browsers logged in with the old one must log in again).")
-    mode = ("password" if cfg.password else "token") if auth_required(cfg) else None
+    mode = auth_mode(cfg, cfg.db_path.exists() and Database(cfg.db_path).has_users())
     print_access(cfg, mode, access_token(cfg) if mode == "token" else "")
+
+
+def _ask_password(args: argparse.Namespace, users) -> tuple[str, bool]:
+    """--password, --generate, or typed twice. Returns (password, generated)."""
+    import getpass
+
+    if getattr(args, "generate", False):
+        return users.generate_password(), True
+    if getattr(args, "password", None):
+        return args.password, False
+    if not sys.stdin.isatty():
+        sys.exit("No terminal to type the password: use --generate (or --password)")
+    first = getpass.getpass("Password: ")
+    users.check_password(first, getattr(args, "name", ""))
+    if getpass.getpass("Password again: ") != first:
+        sys.exit("The passwords differ")
+    return first, False
+
+
+def cmd_user(args: argparse.Namespace) -> None:
+    from datetime import datetime
+
+    from cryoplug.db import Database
+    from cryoplug.users import UserError, Users
+
+    cfg = load_config(args.config)
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    users = Users(Database(cfg.db_path), cfg)
+    when = lambda t: datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M") if t else "never"  # noqa: E731
+    try:
+        if args.action == "list":
+            accounts = users.list()
+            if not accounts:
+                print("No accounts: CryoPlug is protected by the access token or [server] password (or localhost only).")
+            for u in accounts:
+                flags = [u["role"]] + (["disabled"] if u["disabled"] else []) + (["must change password"] if u["must_change_password"] else [])
+                print(f"{u['username']:<20} {', '.join(flags):<32} last login {when(u['last_login_at'])}")
+                print(f"{'':<20} projects: {users.projects_dir(u)}")
+                for folder in u["allowed_paths"]:
+                    print(f"{'':<20} may read: {folder}")
+        elif args.action == "add":
+            first = not users.exist()
+            password, generated = _ask_password(args, users)
+            user = users.create(args.name, password, role="admin" if args.admin or first else "user", full_name=args.full_name or "",
+                                email=args.email or "", projects_dir=args.projects_dir or "", allowed_paths=args.allow or [],
+                                must_change_password=args.must_change)
+            print(f"Created {user['role']} account '{user['username']}'" + (f" with password: {password}" if generated else ""))
+            if first:
+                adopted = users.adopt_projects(user["username"])
+                print("Accounts are now required: everyone logs in with a user name and a password"
+                      + (f"; the {adopted} existing project(s) belong to {user['username']}." if adopted else "."))
+        elif args.action == "passwd":
+            password, generated = _ask_password(args, users)
+            users.set_password(args.name, password, must_change=args.must_change)
+            print(f"New password for '{users.require(args.name)['username']}'" + (f": {password}" if generated else ""))
+        elif args.action == "set":
+            fields = {}
+            if args.role:
+                fields["role"] = args.role
+            if args.full_name is not None:
+                fields["full_name"] = args.full_name
+            if args.email is not None:
+                fields["email"] = args.email
+            if args.projects_dir is not None:
+                fields["projects_dir"] = args.projects_dir
+            if args.allow is not None:
+                fields["allowed_paths"] = args.allow
+            user = users.update(args.name, **fields)
+            print(f"Updated '{user['username']}' ({user['role']}, projects in {users.projects_dir(user)})")
+        elif args.action in ("disable", "enable"):
+            user = users.update(args.name, disabled=args.action == "disable")
+            print(f"'{user['username']}' {'disabled' if user['disabled'] else 'enabled'}")
+        elif args.action == "delete":
+            users.delete(args.name, args.transfer_to or "")
+            print(f"Deleted '{args.name}'" + (f"; projects given to {args.transfer_to}" if args.transfer_to else ""))
+    except UserError as exc:
+        sys.exit(str(exc))
 
 
 def cmd_tools(args: argparse.Namespace) -> None:
@@ -221,6 +305,38 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--port", type=int)
     p.add_argument("--reset-token", action="store_true", help="Create a new access token (restart the server afterwards)")
     p.set_defaults(func=cmd_url)
+
+    p = sub.add_parser("user", help="Manage user accounts (also in Settings > Users)")
+    usub = p.add_subparsers(dest="action", required=True)
+    usub.add_parser("list", help="List the accounts")
+    up = usub.add_parser("add", help="Create an account (the first one is an administrator)")
+    up.add_argument("name")
+    up.add_argument("--admin", action="store_true", help="Administrator (manages accounts, sees every project)")
+    up.add_argument("--full-name")
+    up.add_argument("--email")
+    up.add_argument("--projects-dir", help="Where the user's projects go (default: <projects_root>/<name>)")
+    up.add_argument("--allow", action="append", metavar="DIR", help="A folder the user may read data from (repeat)")
+    up.add_argument("--generate", action="store_true", help="Generate a random password and print it")
+    up.add_argument("--password", help=argparse.SUPPRESS)
+    up.add_argument("--must-change", action="store_true", help="Ask for a new password at the first login")
+    up = usub.add_parser("passwd", help="Set a new password")
+    up.add_argument("name")
+    up.add_argument("--generate", action="store_true")
+    up.add_argument("--password", help=argparse.SUPPRESS)
+    up.add_argument("--must-change", action="store_true")
+    up = usub.add_parser("set", help="Change the role, name, e-mail or folders of an account")
+    up.add_argument("name")
+    up.add_argument("--role", choices=["admin", "user"])
+    up.add_argument("--full-name")
+    up.add_argument("--email")
+    up.add_argument("--projects-dir")
+    up.add_argument("--allow", action="append", metavar="DIR", help="Replaces the folders the user may read (repeat)")
+    for action in ("disable", "enable"):
+        usub.add_parser(action, help=f"{action.capitalize()} an account").add_argument("name")
+    up = usub.add_parser("delete", help="Delete an account")
+    up.add_argument("name")
+    up.add_argument("--transfer-to", metavar="USER", help="Give the user's projects to this account")
+    p.set_defaults(func=cmd_user)
 
     p = sub.add_parser("tools", help="Detect the external programs")
     p.set_defaults(func=cmd_tools)

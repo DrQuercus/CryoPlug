@@ -110,7 +110,7 @@ class IsoldeSession(InteractiveBase):
                    "(e.g. 'save isolde_model.cif models #1') then finish the job.")
     params = [
         Param("start_isolde", "bool", True, label="Start ISOLDE automatically"),
-        Param("extra_commands", "text", "", label="Extra ChimeraX commands", advanced=True,
+        Param("extra_commands", "text", "", label="Extra ChimeraX commands", advanced=True, admin_only=True,
               help="One ChimeraX command per line, run after loading (e.g. 'isolde restrain ligands #1')."),
     ]
 

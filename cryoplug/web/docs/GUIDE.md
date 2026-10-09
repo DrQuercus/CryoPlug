@@ -76,14 +76,39 @@ les jobs sélectionnés. Quand un job est ouvert, ses entrées sont entourées e
 l'utilisent en vert. Touches : **N** nouveau job, **/** filtrer, **G** cartes ⇄ graphe, **Échap** fermer,
 **?** liste des raccourcis.
 
+### Comptes utilisateurs et réglages
+
+Comme dans CryoSPARC, chacun peut avoir son compte. Dès qu'un compte existe, tout le monde se connecte avec
+son nom d'utilisateur et son mot de passe. L'onglet **Settings** réunit tout :
+
+| Onglet | Pour qui | Contenu |
+|---|---|---|
+| **My account** | chacun | Nom, e-mail, changement de mot de passe, navigateurs connectés (« déconnecter les autres »), vos dossiers. |
+| **Users** | administrateurs | Ajouter, modifier, désactiver, supprimer un compte ; lui donner un nouveau mot de passe (généré, affiché une fois, à changer à la connexion) ; son **dossier de projets** et les **dossiers qu'il peut lire**. |
+| **Access & security** | administrateurs | Mode de protection, adresse d'écoute, chiffrement, durée des sessions, longueur minimale des mots de passe. |
+
+- Un **utilisateur** voit ses projets et ceux partagés avec lui, crée ses projets dans son dossier et ne
+  choisit des fichiers (import CryoSPARC, cartes, modèles, bases de séquences) que dans ses dossiers ; le
+  navigateur de fichiers propose un raccourci vers chacun. Un **administrateur** voit et lit tout.
+- **Partager un projet** : menu **⋯** de la carte du projet › *Share…* (propriétaire ou administrateur). Les
+  membres travaillent dans le projet ; les données qu'ils ajoutent doivent être dans leurs propres dossiers.
+- Réservé aux administrateurs, car capable d'exécuter du code ou de lire n'importe où : le job *Custom
+  command*, les commandes ChimeraX supplémentaires d'ISOLDE et les *Extra arguments* des programmes.
+- Premier compte : **Settings › Users › Create the administrator account** (les projets existants deviennent
+  les siens), ou `cryoplug user add admin --admin` sur le serveur. Mot de passe administrateur oublié :
+  `cryoplug user passwd <nom>`.
+- Les jobs tournent sous le compte Unix qui a lancé CryoPlug (comme le compte `cryosparc`) : pour une
+  séparation stricte des données, utilisez aussi les permissions Unix.
+
 ### Ouvrir CryoPlug depuis votre portable
 
 Par défaut, l'interface ne s'ouvre que sur le serveur lui-même (`http://localhost:39500`). Pour l'utiliser
 depuis un autre ordinateur, mettez `host = "0.0.0.0"` dans la section `[server]` de la configuration et
-redémarrez CryoPlug : le terminal affiche des liens `http://<serveur>:39500/?token=…` qui vous connectent
-directement (la commande `cryoplug url` les réaffiche). Hors du labo, passez par un tunnel SSH
-(`ssh -N -L 39500:localhost:39500 utilisateur@serveur`, puis `http://localhost:39500` sur le portable).
-Détails, pare-feu et HTTPS : **Help → Installation & commandes**.
+redémarrez CryoPlug. Avec des comptes, chacun ouvre `http://<serveur>:39500` et se connecte ; sans compte, le
+terminal affiche des liens `http://<serveur>:39500/?token=…` qui vous connectent directement (la commande
+`cryoplug url` les réaffiche), le temps de créer le compte administrateur. Hors du labo, passez par un tunnel
+SSH (`ssh -N -L 39500:localhost:39500 utilisateur@serveur`, puis `http://localhost:39500` sur le portable).
+Le port ouvert, préférez HTTPS. Détails, pare-feu et HTTPS : **Help → Installation & commandes**.
 
 ---
 

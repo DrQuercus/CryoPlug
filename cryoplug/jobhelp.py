@@ -794,7 +794,8 @@ HELP: dict[str, dict[str, Any]] = {
         "purpose": "Lance n'importe quel programme sur les données du projet (script bash avec des emplacements {map}, "
                    "{half_map_a}, {model}…), et enregistre les fichiers produits comme sorties.",
         "when": ["Logiciel pas encore intégré (DeepMainmast, EModelX, CryoREAD, scripts maison…)."],
-        "avoid": ["Opérations déjà couvertes par un job dédié (meilleure traçabilité et rapports)."],
+        "avoid": ["Opérations déjà couvertes par un job dédié (meilleure traçabilité et rapports).",
+                  "Avec des comptes utilisateurs, réservé aux administrateurs : le script s'exécute sous le compte du serveur."],
         "inputs": "Les entrées utiles au programme ; choisissez l'environnement (configuration d'un outil).",
         "tips": ["Indiquez les motifs de sortie (ex. result*.mrc) pour récupérer cartes et modèles."],
         "next": [],

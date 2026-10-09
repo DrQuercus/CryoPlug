@@ -93,6 +93,13 @@ const ICONS = {
   package: 'M12 3l8 4.5v9L12 21l-8-4.5v-9zM8 5.2l8 4.6M12 12v9M4 7.5l8 4.5 8-4.5',
   shield: 'M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6zM8.5 12l2.5 2.5 4.5-5',
   sliders: 'M4 7h10M18 7h2M4 17h4M12 17h8M14 4v6M8 14v6',
+  user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4.5 20c1.1-3.4 4-5 7.5-5s6.4 1.6 7.5 5',
+  users: 'M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 19.5c.9-3 3.4-4.6 6.5-4.6s5.6 1.6 6.5 4.6M16 4.3a3.5 3.5 0 0 1 0 6.4M18.2 14.9c1.6.7 2.7 2 3.3 4.4',
+  key: 'M8 19.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zM11.2 11.8L20 3M16.5 6.5l3 3M14.5 8.5l2 2',
+  lock: 'M6 11h12v10H6zM8.5 11V7.5a3.5 3.5 0 0 1 7 0V11M12 15v2',
+  share: 'M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8.6 13.5l6.8 4M15.4 6.5l-6.8 4',
+  gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM12 18.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1',
+  logout: 'M14 4h4.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H14M10 16l-4-4 4-4M6 12h10',
 };
 
 export function icon(name, cls = '') {
@@ -279,6 +286,27 @@ export function ago(ts) {
   if (d < 3600) return `${Math.floor(d / 60)} min ago`;
   if (d < 86400) return `${Math.floor(d / 3600)} h ago`;
   return `${Math.floor(d / 86400)} d ago`;
+}
+
+// A long path shortened to its last folders ("…/projects/CP-demo"), for display only.
+export function shortPath(path, max = 44) {
+  if (!path || path.length <= max) return path || '';
+  const parts = path.split('/');
+  let out = parts.pop();
+  while (parts.length && out.length + parts[parts.length - 1].length + 1 <= max - 2) out = `${parts.pop()}/${out}`;
+  return `…/${out}`;
+}
+
+function initials(user) {
+  const parts = (user.full_name || user.username || '?').trim().split(/[\s._@-]+/).filter(Boolean);
+  return ((parts[0]?.[0] || '?') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
+// A round badge with a user's initials, in a colour of its own for each user name.
+export function avatar(user, cls = '') {
+  let hue = 0;
+  for (const c of user.username || '') hue = (hue * 31 + c.charCodeAt(0)) % 360;
+  return h('span', { class: `avatar ${cls}`, style: { '--hue': String(hue) }, 'aria-hidden': 'true' }, initials(user));
 }
 
 export function copyText(text) {

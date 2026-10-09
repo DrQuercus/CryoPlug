@@ -60,7 +60,7 @@ class CreateMask(JobType):
         Param("combine", "choice", "none", choices=["none", "union", "subtract", "intersect"], label="Combine with mask",
               help="Operation with the 'Mask to combine' input, applied to the soft masks."),
         Param("invert", "bool", False, label="Invert (1 − mask)", advanced=True),
-        Param("output_name", "str", "mask", label="Output file name", advanced=True),
+        Param("output_name", "str", "mask", label="Output file name", advanced=True, path_kind="name"),
     ]
     outputs = [OutputDef("mask", "mask", "Mask")]
 

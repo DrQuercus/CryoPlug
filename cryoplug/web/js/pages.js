@@ -2,16 +2,14 @@
 import { api } from './api.js';
 import { browseFiles } from './filebrowser.js';
 import { navigate, setJobtypes, state } from './state.js';
-import { ago, btn, clear, confirmDialog, copyText, guard, h, icon, jobDuration, modal, popupMenu, statusChip, toast } from './ui.js';
+import { ago, avatar, btn, clear, confirmDialog, copyText, guard, h, icon, jobDuration, modal, popupMenu, shortPath, statusChip, toast } from './ui.js';
 
-// A long path shortened to its last folders ("…/projects/CP-demo"), for display only.
-export function shortPath(path, max = 44) {
-  if (!path || path.length <= max) return path || '';
-  const parts = path.split('/');
-  let out = parts.pop();
-  while (parts.length && out.length + parts[parts.length - 1].length + 1 <= max - 2) out = `${parts.pop()}/${out}`;
-  return `…/${out}`;
-}
+// Who may do what (the server checks again): administrators and owners manage a project, and without
+// accounts whoever opened CryoPlug may do everything.
+const me = () => state.info.user || { builtin: true, role: 'admin' };
+const isAdmin = () => me().builtin || me().role === 'admin';
+const accounts = () => state.info.auth === 'users';
+const canManage = (p) => isAdmin() || p.owner === me().username;
 
 // ----------------------------------------------------------------- projects
 export async function renderProjects(content) {
@@ -32,11 +30,17 @@ export async function renderProjects(content) {
       e.stopPropagation();
       popupMenu(more, [
         { label: 'Open', ic: 'next', action: open },
+        accounts() && canManage(p) ? { label: 'Share…', ic: 'share', action: () => shareDialog(p, () => renderProjects(content)) } : null,
         { label: 'Copy folder path', ic: 'folder', action: () => copyText(p.dir) },
-        { separator: true },
-        { label: 'Remove from CryoPlug…', ic: 'trash', danger: true, action: () => remove(p) },
-      ], e.type === 'contextmenu' ? { x: e.clientX, y: e.clientY } : null);
+        ...(canManage(p) ? [{ separator: true }, { label: 'Remove from CryoPlug…', ic: 'trash', danger: true, action: () => remove(p) }] : []),
+      ].filter(Boolean), e.type === 'contextmenu' ? { x: e.clientX, y: e.clientY } : null);
     };
+    // With accounts: whose project it is (when not one's own) and with whom it is shared.
+    const people = accounts() && (p.owner !== me().username || p.members.length) ? h('div', { class: 'project-people' },
+      p.owner !== me().username ? h('span', { class: 'owner-chip', title: p.owner ? `Owner: ${p.owner}` : 'No owner: administrators only' },
+        p.owner ? avatar({ username: p.owner }, 'small') : icon('lock'), p.owner || 'no owner') : null,
+      p.members.length ? h('span', { class: 'owner-chip shared', title: `Shared with ${p.members.join(', ')}` }, icon('users'),
+        sharedLabel(p.members)) : null) : null;
     return h('div', { class: 'card project-card', tabindex: 0, role: 'button', onclick: (e) => { if (!e.target.closest('.card-more')) open(); },
       oncontextmenu: menu, onkeydown: (e) => { if (e.target === e.currentTarget && e.key === 'Enter') open(); } },
     h('div', { class: 'card-head' }, h('span', { class: 'uid' }, p.uid),
@@ -44,6 +48,7 @@ export async function renderProjects(content) {
     h('div', { class: 'card-title' }, p.title),
     p.description ? h('div', { class: 'project-card-desc' }, p.description) : null,
     h('div', { class: 'project-path', title: p.dir }, icon('folder'), h('span', {}, shortPath(p.dir, 40))),
+    people,
     h('div', { class: 'card-foot' }, h('span', {}, `${p.num_jobs} job${p.num_jobs === 1 ? '' : 's'}`), h('span', {}, `updated ${ago(p.updated_at)}`)));
   });
   clear(content,
@@ -52,6 +57,48 @@ export async function renderProjects(content) {
     projects.length ? h('div', { class: 'cards projects' }, cards) : h('div', { class: 'empty' }, h('h3', {}, 'Welcome to CryoPlug'),
       h('p', {}, 'Create a project to post-process a CryoSPARC map: sharpening, model building, refinement, validation and deposition.'),
       btn('New project', () => newProjectDialog(), { cls: 'primary', ic: 'plus' })));
+}
+
+// Members of a project, as seen by the user ("shared with you", "alice", "3 members").
+function sharedLabel(members) {
+  const others = members.filter((m) => m !== me().username);
+  if (others.length < members.length) return others.length ? `you + ${others.length}` : 'shared with you';
+  return members.length === 1 ? members[0] : `${members.length} members`;
+}
+
+// Owner and members of a project (with accounts).
+async function shareDialog(project, onDone) {
+  let people;
+  try { people = await guard(api.people()); } catch { return; }
+  const owner = h('select', { id: 'share-owner', disabled: !isAdmin() }, h('option', { value: '' }, 'Nobody: administrators only'),
+    people.map((u) => h('option', { value: u.username }, u.full_name ? `${u.full_name} (${u.username})` : u.username)));
+  owner.value = project.owner || '';
+  const chosen = new Set(project.members || []);
+  const list = h('div', { class: 'member-list' });
+  const draw = () => clear(list, people.filter((u) => u.username !== owner.value).map((u) => {
+    const box = h('input', { type: 'checkbox', id: `share-${u.username}`, checked: chosen.has(u.username),
+      onchange: () => { if (box.checked) chosen.add(u.username); else chosen.delete(u.username); } });
+    return h('label', { class: 'member-row', for: box.id }, box, avatar(u, 'small'), h('span', {}, u.full_name || u.username),
+      u.full_name ? h('span', { class: 'muted small' }, u.username) : null);
+  }));
+  owner.addEventListener('change', draw);
+  draw();
+  const save = async () => {
+    const body = { members: [...chosen].filter((m) => m !== owner.value) };
+    if (isAdmin() && owner.value !== (project.owner || '')) body.owner = owner.value;
+    try { await guard(api.updateProject(project.uid, body), 'Sharing saved'); } catch { return; }
+    m.close();
+    onDone();
+  };
+  const m = modal({
+    title: `Share ${project.uid} · ${project.title}`,
+    body: h('div', {},
+      h('div', { class: 'field' }, h('label', { for: 'share-owner' }, 'Owner'), owner,
+        h('div', { class: 'help' }, isAdmin() ? 'The owner shares, renames and removes the project.' : 'Only an administrator can give the project to someone else.')),
+      h('div', { class: 'field' }, h('label', {}, 'Members'), list,
+        h('div', { class: 'help' }, 'Members see the project and work in it (jobs, files, 3D viewer). The data they add still has to be in their own folders.'))),
+    footer: [btn('Cancel', () => m.close()), btn('Save', save, { cls: 'primary' })],
+  });
 }
 
 function newProjectDialog() {
@@ -77,7 +124,8 @@ function newProjectDialog() {
           const d = await browseFiles({ start: parent.value, kind: 'dir', title: 'Parent directory for the project' });
           if (d) parent.value = d;
         }, { cls: 'small', ic: 'folder' })),
-        h('div', { class: 'help' }, 'A folder CP-<title> is created inside; every job writes into its own J<n> sub-folder.'))),
+        h('div', { class: 'help' }, accounts() && !isAdmin() ? 'Your projects folder (or another of your folders). A folder CP-<title> is created inside; every job writes into its own J<n> sub-folder.'
+          : 'A folder CP-<title> is created inside; every job writes into its own J<n> sub-folder.'))),
     footer: [btn('Cancel', () => m.close()), btn('Create project', create, { cls: 'primary' })],
   });
 }
@@ -94,13 +142,15 @@ export async function renderQueue(content) {
       l.gpus.length ? h('div', { class: 'tile' }, h('div', { class: 'label' }, 'GPUs in use'), h('div', { class: 'value' }, `${l.gpus_used.length} / ${l.gpus.length}`),
         h('div', { class: 'gpus' }, l.gpus.map((g) => h('span', { class: `gpu ${l.gpus_used.includes(g) ? 'busy' : ''}`,
           title: l.gpus_used.includes(g) ? 'In use' : 'Free' }, `GPU ${g}`)))) : null)));
-  const rows = q.jobs.map((j) => h('tr', {},
-    h('td', {}, h('a', { href: `#/p/${j.project_uid}/${j.uid}` }, `${j.project_uid} / ${j.uid}`)),
-    h('td', {}, j.title, h('div', { class: 'muted small' }, j.project_title)),
+  // Other people's jobs (with accounts) only show what occupies the lanes.
+  const rows = q.jobs.map((j) => h('tr', { class: j.hidden ? 'other' : '' },
+    h('td', {}, j.hidden ? h('span', { class: 'muted' }, '—') : h('a', { href: `#/p/${j.project_uid}/${j.uid}` }, `${j.project_uid} / ${j.uid}`)),
+    h('td', {}, j.title, h('div', { class: 'muted small' }, j.hidden ? `job of ${j.owner || 'another user'}`
+      : [j.project_title, accounts() && j.owner && j.owner !== me().username ? j.owner : null].filter(Boolean).join(' · '))),
     h('td', {}, statusChip(j.status)),
     h('td', { class: 'small' }, j.message || ''),
     h('td', {}, j.lane || ''), h('td', {}, (j.gpus || []).join(',')), h('td', {}, jobDuration(j)),
-    h('td', {}, btn(j.status === 'queued' ? 'Dequeue' : 'Kill', async () => {
+    h('td', {}, j.hidden ? null : btn(j.status === 'queued' ? 'Dequeue' : 'Kill', async () => {
       if (j.status !== 'queued' && !(await confirmDialog('Stop job', `Stop ${j.project_uid}/${j.uid}?`, 'Stop', true))) return;
       await guard(api.killJob(j.project_uid, j.uid), 'Stopped');
       renderQueue(content);
@@ -147,7 +197,7 @@ export async function renderTools(content) {
       h('td', { class: 'small mono', style: { whiteSpace: 'pre-wrap' }, title: cfgFull || null }, `[tools.${t.key}]\n${cfgText}`));
   });
   clear(content,
-    h('div', { class: 'toolbar' }, h('h2', { style: { margin: 0 } }, 'External programs'), h('span', { class: 'grow' }), recheck),
+    h('div', { class: 'toolbar' }, h('h2', { style: { margin: 0 } }, 'External programs'), h('span', { class: 'grow' }), isAdmin() ? recheck : null),
     h('p', { class: 'muted' }, 'CryoPlug drives programs installed on this server. Configure how each one is started (source script, conda environment, module, path) in ',
       h('span', { class: 'mono', title: state.info.config_path || '' }, shortPath(state.info.config_path, 60) || '~/.cryoplug/config.toml'), ', restart the server, then re-check.'),
     h('div', { class: 'box' }, h('table', { class: 'data' }, h('thead', {}, h('tr', {}, ['Program', 'Status', 'Location', 'Configuration'].map((c) => h('th', {}, c)))),
@@ -230,8 +280,9 @@ function remoteAccess() {
   const firewall = h('pre', {}, `sudo ufw allow ${port}/tcp            # Ubuntu / Debian\n`
     + `sudo firewall-cmd --permanent --add-port=${port}/tcp && sudo firewall-cmd --reload   # Rocky / RHEL`);
   if (listen.network) {
-    const login = auth === 'password' ? 'le mot de passe de [server] password'
-      : 'le jeton d\'accès affiché au démarrage du serveur (la commande cryoplug url le réaffiche)';
+    const login = auth === 'users' ? 'votre compte CryoPlug (nom d\'utilisateur et mot de passe, gérés par les administrateurs dans Settings › Users)'
+      : auth === 'password' ? 'le mot de passe de [server] password'
+        : 'le jeton d\'accès affiché au démarrage du serveur (la commande cryoplug url le réaffiche)';
     return [
       h('p', {}, 'Le serveur est ouvert au réseau. Depuis un portable ou un autre poste, ouvrez :'),
       h('pre', {}, `${location.protocol}//${hostname}:${port}`),
@@ -247,8 +298,10 @@ function remoteAccess() {
     h('p', {}, h('b', {}, '1. Réseau du labo.'), ' Dans ', h('code', {}, configPath || '~/.cryoplug/config.toml'), ' :'),
     h('pre', {}, '[server]\nhost = "0.0.0.0"'),
     h('p', {}, `Redémarrez CryoPlug puis ouvrez http://${hostname}:${port} (ou l'IP du serveur) depuis le portable. `
-      + 'Une connexion est alors demandée : jeton d\'accès affiché au démarrage (ou par cryoplug url), '
-      + 'ou mot de passe si vous en définissez un ([server] password). Si la page ne répond pas, ouvrez le port :'),
+      + (auth === 'users' ? 'Chacun se connecte avec son compte CryoPlug. '
+        : 'Une connexion est alors demandée : jeton d\'accès affiché au démarrage (ou par cryoplug url), ou mot de passe si vous en définissez un '
+          + '([server] password) ; mieux, créez des comptes personnels dans Settings › Users. ')
+      + 'Si la page ne répond pas, ouvrez le port :'),
     firewall,
     h('p', {}, h('b', {}, '2. Tunnel SSH'), ' (hors du labo, pare-feu strict) : sur le portable,'),
     h('pre', {}, `ssh -N -L ${port}:localhost:${port} utilisateur@${hostname}`),
@@ -267,7 +320,14 @@ function renderSetup(body) {
       h('p', {}, 'La page ', h('a', { href: '#/tools' }, 'Tools'), ' indique ce qui est détecté. Fichier de configuration : ',
         h('code', {}, state.info.config_path || '~/.cryoplug/config.toml'), '.')),
     ...sec('Accès depuis un autre ordinateur', ...remoteAccess()),
+    ...sec('Comptes utilisateurs',
+      h('p', {}, 'Comme dans CryoSPARC, chacun peut avoir son compte : il se connecte avec son nom d\'utilisateur et son mot de passe, '
+        + 'voit ses projets (et ceux partagés avec lui), crée ses projets dans son dossier et ne choisit des données que dans les dossiers '
+        + 'que l\'administrateur lui ouvre. Les administrateurs gèrent tout dans ', h('a', { href: '#/settings' }, 'Settings'),
+      ' (ajout, suppression, mots de passe, dossiers, durée des sessions). Sur le serveur :'),
+      h('pre', {}, 'cryoplug user add admin --admin          # premier compte (administrateur)\ncryoplug user add alice --generate --allow /data/alice\ncryoplug user passwd admin               # mot de passe oublié\ncryoplug user list'),
+      h('p', { class: 'muted small' }, 'Les jobs tournent sous le compte Unix qui a lancé CryoPlug (comme le compte cryosparc) : pour une séparation stricte des données, utilisez aussi les permissions Unix.')),
     ...sec('Commandes',
-      h('pre', {}, 'cryoplug init          # écrit ~/.cryoplug/config.toml\ncryoplug tools         # détecte les logiciels\ncryoplug fetch-viewer  # installe le visualiseur 3D Mol* (hors-ligne)\ncryoplug start         # serveur web + planificateur\ncryoplug url           # adresses à ouvrir (avec le jeton d\'accès)\ncryoplug status        # lanes et jobs actifs\ncryoplug jobtypes      # liste des jobs\ncryoplug docs-jobs     # régénère docs/JOBS.md\ncryoplug demo-data DIR # jeu de données synthétique\ncryoplug service       # fichier systemd')),
+      h('pre', {}, 'cryoplug init          # écrit ~/.cryoplug/config.toml\ncryoplug tools         # détecte les logiciels\ncryoplug fetch-viewer  # installe le visualiseur 3D Mol* (hors-ligne)\ncryoplug start         # serveur web + planificateur\ncryoplug url           # adresses à ouvrir (avec le jeton d\'accès)\ncryoplug user …        # comptes utilisateurs (add, passwd, list, set, delete)\ncryoplug status        # lanes et jobs actifs\ncryoplug jobtypes      # liste des jobs\ncryoplug docs-jobs     # régénère docs/JOBS.md\ncryoplug demo-data DIR # jeu de données synthétique\ncryoplug service       # fichier systemd')),
     h('p', { class: 'muted small' }, `CryoPlug ${state.info.version}`)));
 }

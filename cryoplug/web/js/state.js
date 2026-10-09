@@ -43,10 +43,12 @@ export function onJobsChanged(fn) {
   return () => state.listeners.delete(fn);
 }
 
+// False when the user must first replace a temporary password (nothing else is reachable until then).
 export async function loadStatic() {
-  const [info, jobtypes] = await Promise.all([api.info(), api.jobtypes()]);
-  state.info = info;
-  setJobtypes(jobtypes);
+  state.info = await api.info();
+  if (state.info.user?.must_change_password) return false;
+  setJobtypes(await api.jobtypes());
+  return true;
 }
 
 export function setJobtypes(jobtypes) {
@@ -62,6 +64,11 @@ export async function refreshJobs() {
   for (const fn of state.listeners) {
     try { fn(jobs); } catch (e) { console.error(e); }
   }
+}
+
+// With accounts, users who are not administrators cannot run arbitrary code (custom commands, ChimeraX commands).
+export function restricted() {
+  return state.info?.auth === 'users' && state.info.user?.role !== 'admin';
 }
 
 export function typeTitle(name) {

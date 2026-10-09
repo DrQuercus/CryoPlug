@@ -6,7 +6,7 @@ import { builderConnect, builderPrefill, builderSetParams, builderSlotsFor, open
 import { helpSheet } from './help.js';
 import { latentExplorer } from './latent.js';
 import { heatmap, lineChart } from './plots.js';
-import { builderHref, jobHref, navigate, refreshJobs, state, typeTitle } from './state.js';
+import { builderHref, jobHref, navigate, refreshJobs, restricted, state, typeTitle } from './state.js';
 import {
   ACTIVE, ago, btn, clear, confirmDialog, copyText, fmtSize, fmtTime, guard, h, icon, jobDuration, LIVE, popupMenu,
   statusChip, statusMark, toast,
@@ -149,7 +149,8 @@ function renderHeaderOnly() {
       h('span', { class: 'uid' }, job.uid), titleEl, statusChip(job.status),
       page ? null : h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => navigate(closeHref()) }, icon('close'))),
     h('div', { class: 'panel-sub muted small' }, h('span', {}, typeTitle(job.type)), h('span', {}, when),
-      jobDuration(job) ? h('span', { title: 'Run time' }, icon('clock'), jobDuration(job)) : null, job.lane ? h('span', {}, `lane ${job.lane}`) : null),
+      jobDuration(job) ? h('span', { title: 'Run time' }, icon('clock'), jobDuration(job)) : null, job.lane ? h('span', {}, `lane ${job.lane}`) : null,
+      job.created_by && state.info.auth === 'users' ? h('span', { title: 'Created by' }, icon('user'), job.created_by) : null),
     h('div', { class: 'actions-bar' }, actions),
     h('div', { class: 'tabs', role: 'tablist' }, ['overview', 'log', 'files'].map((t) => h('button', {
       class: D.tab === t ? 'on' : '', role: 'tab', 'aria-selected': D.tab === t ? 'true' : 'false',
@@ -228,7 +229,8 @@ function continueMenu(anchor, job) {
   const outTypes = new Set(outs.map((o) => o.type));
   const items = [];
   for (const cat of state.info.categories) {
-    const types = state.jobtypes.filter((t) => t.category === cat && t.inputs.some((s) => s.types.some((ty) => outTypes.has(ty))));
+    const types = state.jobtypes.filter((t) => t.category === cat && !(t.admin_only && restricted())
+      && t.inputs.some((s) => s.types.some((ty) => outTypes.has(ty))));
     if (!types.length) continue;
     items.push({ category: cat });
     for (const t of types) {

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import socket
 import stat
 from contextlib import asynccontextmanager
@@ -18,9 +19,12 @@ from cryoplug.config import MOLSTAR_VERSION, Config
 from cryoplug.jobs import CATEGORIES, DATA_TYPES, all_job_types, get_job_type
 from cryoplug.manager import Manager, ManagerError, NotFound
 from cryoplug.scheduler import Scheduler
+from cryoplug.server.accounts import author, can_access, can_manage, current_user, install as install_accounts, is_admin, require_admin
 from cryoplug.server.auth import install as install_auth, is_loopback
+from cryoplug.users import UserError, Users, path_allowed
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+PROJECT_PATH = re.compile(r"^/api/projects/([^/]+)")
 
 
 def create_app(config: Config, start_scheduler: bool = True, manager: Manager | None = None) -> FastAPI:
@@ -39,8 +43,20 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     app.state.scheduler = scheduler
 
     # ------------------------------------------------------------- auth
-    auth = install_auth(app, config)
+    users = Users(manager.db, config)
+    app.state.users = users
+
+    def project_gate(user: dict[str, Any], request: Request) -> bool:
+        """A project (and everything in it) exists only for its owner, its members and administrators."""
+        match = PROJECT_PATH.match(request.url.path)
+        if not match or is_admin(user):
+            return True
+        project = manager.db.get_project(match.group(1))
+        return project is not None and can_access(user, project)
+
+    auth = install_auth(app, config, users, project_gate)
     app.state.auth = auth
+    install_accounts(app, manager, auth)
 
     @app.exception_handler(NotFound)
     async def not_found(request: Request, exc: NotFound):
@@ -49,6 +65,14 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     @app.exception_handler(ManagerError)
     async def bad_request(request: Request, exc: ManagerError):
         return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    @app.exception_handler(UserError)
+    async def bad_account_request(request: Request, exc: UserError):
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    def roots(request: Request) -> list[Path] | None:
+        """The folders the user may read data from (None: anywhere, for administrators)."""
+        return users.roots(current_user(request))
 
     # ------------------------------------------------------------- info
     def molstar_urls() -> dict[str, str]:
@@ -59,15 +83,19 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
         return {"js": config.molstar_js or f"{cdn}/molstar.js", "css": config.molstar_css or f"{cdn}/molstar.css", "local": False}
 
     @app.get("/api/info")
-    def info() -> dict[str, Any]:
+    def info(request: Request) -> dict[str, Any]:
+        user = current_user(request)
+        folders = users.roots(user)
         return {
             "version": __version__,
             "hostname": socket.gethostname(),
-            "config_path": str(config.config_path) if config.config_path else None,
-            "projects_root": str(config.projects_root),
-            "browse_roots": config.browse_roots,
+            "config_path": str(config.config_path) if config.config_path and is_admin(user) else None,
+            "projects_root": str(config.projects_root if user.get("builtin") else users.projects_dir(user)),
+            "browse_roots": [str(r) for r in folders] if folders is not None else config.browse_roots,
             "display": config.display,
             "auth": auth.mode,
+            "user": app.state.describe_user(user),
+            "password_min": users.settings()["min_password_length"],
             "listen": {"host": config.host, "port": config.port, "network": not is_loopback(config.host)},
             "lanes": [{"name": l.name, "type": l.type, "description": l.description, "max_jobs": l.max_jobs, "gpus": l.gpus}
                       for l in config.lanes],
@@ -90,7 +118,8 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
         return manager.tools_overview()
 
     @app.post("/api/tools/check")
-    def check_tools() -> list[dict[str, Any]]:
+    def check_tools(request: Request) -> list[dict[str, Any]]:
+        require_admin(request)
         manager.check_tools()
         return manager.tools_overview()
 
@@ -100,16 +129,44 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
         return workflows_overview()
 
     @app.get("/api/queue")
-    def queue() -> dict[str, Any]:
-        return manager.queue_overview()
+    def queue(request: Request) -> dict[str, Any]:
+        user = current_user(request)
+        overview = manager.queue_overview()
+        if not is_admin(user):
+            # Other people's jobs show what occupies the lanes and GPUs, not their projects.
+            overview["jobs"] = [j if can_access(user, j) else {
+                "hidden": True, "project_uid": "", "uid": "", "project_title": "", "message": "", "type": j["type"],
+                "title": _type_title(j["type"]), "status": j["status"], "lane": j.get("lane"), "gpus": j.get("gpus") or [],
+                "owner": j.get("owner") or "", "created_at": j.get("created_at"), "queued_at": j.get("queued_at"),
+                "started_at": j.get("started_at"), "ended_at": j.get("ended_at")} for j in overview["jobs"]]
+        return overview
+
+    def _type_title(name: str) -> str:
+        try:
+            return get_job_type(name).title
+        except KeyError:
+            return name
 
     # --------------------------------------------------------- filesystem
     @app.get("/api/fs")
-    def browse(path: str = Query(""), show_hidden: bool = False) -> dict[str, Any]:
-        roots = [Path(r).resolve() for r in config.browse_roots]
-        target = Path(path).expanduser().resolve() if path else (Path.home() if any(Path.home().resolve().is_relative_to(r) for r in roots) else roots[0])
-        if not any(target == r or target.is_relative_to(r) for r in roots):
-            raise HTTPException(403, "Outside the allowed browse roots")
+    def browse(request: Request, path: str = Query(""), show_hidden: bool = False) -> dict[str, Any]:
+        user = current_user(request)
+        mine = users.roots(user)
+        if mine is None:
+            folders = [Path(r).resolve() for r in config.browse_roots]
+            start = Path.home() if path_allowed(Path.home(), folders) else folders[0]
+        else:
+            try:  # a new user's projects folder appears with their first project: make it now, to browse
+                users.projects_dir(user).mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
+            folders = [r.resolve() for r in mine]
+            start = next((r for r in folders if r.is_dir()), None)
+            if start is None:
+                raise HTTPException(404, "None of your folders exists: ask an administrator (Settings › Users)")
+        target = Path(path).expanduser().resolve() if path else start
+        if not path_allowed(target, folders):
+            raise HTTPException(403, "Outside your folders" if mine is not None else "Outside the allowed browse roots")
         if target.is_file():
             target = target.parent
         if not target.is_dir():
@@ -129,30 +186,58 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
                 continue
             entries.append({"name": name, "path": str(p), "is_dir": stat.S_ISDIR(st.st_mode), "size": st.st_size, "mtime": st.st_mtime})
         entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
-        parent = str(target.parent) if any(target.parent == r or target.parent.is_relative_to(r) for r in roots) and target.parent != target else None
-        return {"path": str(target), "parent": parent, "entries": entries[:5000], "roots": [str(r) for r in roots]}
+        parent = str(target.parent) if target.parent != target and path_allowed(target.parent, folders) else None
+        return {"path": str(target), "parent": parent, "entries": entries[:5000], "roots": [str(r) for r in folders]}
 
     # ----------------------------------------------------------- projects
     @app.get("/api/projects")
-    def list_projects(archived: bool = False) -> list[dict[str, Any]]:
-        return manager.db.list_projects(include_archived=archived)
+    def list_projects(request: Request, archived: bool = False) -> list[dict[str, Any]]:
+        user = current_user(request)
+        return [p for p in manager.db.list_projects(include_archived=archived) if can_access(user, p)]
 
     @app.post("/api/projects")
-    def create_project(body: dict = Body(...)) -> dict[str, Any]:
-        return manager.create_project(body.get("title", ""), body.get("description", ""), body.get("parent") or None)
+    def create_project(request: Request, body: dict = Body(...)) -> dict[str, Any]:
+        user = current_user(request)
+        return manager.create_project(body.get("title", ""), body.get("description", ""), body.get("parent") or None,
+                                      owner=author(user), roots=users.roots(user),
+                                      default_parent=None if user.get("builtin") else users.projects_dir(user))
 
     @app.get("/api/projects/{puid}")
     def get_project(puid: str) -> dict[str, Any]:
         return manager.project(puid)
 
+    def managed_project(request: Request, puid: str) -> dict[str, Any]:
+        project = manager.project(puid)
+        if not can_manage(current_user(request), project):
+            raise HTTPException(403, "Only the owner of the project or an administrator can do this")
+        return project
+
     @app.patch("/api/projects/{puid}")
-    def update_project(puid: str, body: dict = Body(...)) -> dict[str, Any]:
-        return manager.update_project(puid, **body)
+    def update_project(puid: str, request: Request, body: dict = Body(...)) -> dict[str, Any]:
+        project = managed_project(request, puid)
+        changes = {k: body[k] for k in ("title", "description", "archived") if k in body}
+        owner = project["owner"]
+        if "owner" in body:
+            if not is_admin(current_user(request)):
+                raise HTTPException(403, "Only an administrator can give a project to someone else")
+            owner = users.require(body["owner"])["username"] if body["owner"] else ""
+            changes["owner"] = owner
+        if "members" in body or "owner" in body:
+            members = [users.require(m)["username"] for m in (body["members"] if "members" in body else project["members"]) or []]
+            changes["members"] = [m for m in dict.fromkeys(members) if m != owner]
+        return manager.update_project(puid, **changes)
 
     @app.delete("/api/projects/{puid}")
-    def delete_project(puid: str, delete_files: bool = False) -> dict[str, Any]:
+    def delete_project(puid: str, request: Request, delete_files: bool = False) -> dict[str, Any]:
+        managed_project(request, puid)
         manager.delete_project(puid, delete_files)
         return {"deleted": puid}
+
+    @app.get("/api/people")
+    def people(request: Request) -> list[dict[str, Any]]:
+        """Accounts one can share a project with (names only)."""
+        current_user(request)
+        return [{"username": u["username"], "full_name": u["full_name"]} for u in users.list() if not u["disabled"]]
 
     # --------------------------------------------------------------- jobs
     @app.get("/api/projects/{puid}/jobs")
@@ -161,12 +246,12 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
         return manager.db.list_jobs(puid)
 
     @app.post("/api/projects/{puid}/jobs")
-    def create_job(puid: str, body: dict = Body(...)) -> dict[str, Any]:
+    def create_job(puid: str, request: Request, body: dict = Body(...)) -> dict[str, Any]:
         job = manager.create_job(puid, body.get("type", ""), body.get("params"), body.get("inputs"), body.get("title"),
-                                 body.get("lane"), body.get("notes", ""))
+                                 body.get("lane"), body.get("notes", ""), created_by=author(current_user(request)), roots=roots(request))
         if body.get("queue"):
             try:
-                job = manager.queue_job(puid, job["uid"], body.get("lane"))
+                job = manager.queue_job(puid, job["uid"], body.get("lane"), roots=roots(request))
             except ManagerError as exc:
                 raise ManagerError(f"{job['uid']} was created but not queued: {exc}") from None
         return job
@@ -176,12 +261,13 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
         return manager.job_detail(puid, juid)
 
     @app.patch("/api/projects/{puid}/jobs/{juid}")
-    def update_job(puid: str, juid: str, body: dict = Body(...)) -> dict[str, Any]:
-        return manager.update_job(puid, juid, **{k: body.get(k) for k in ("params", "inputs", "title", "notes", "lane") if k in body})
+    def update_job(puid: str, juid: str, request: Request, body: dict = Body(...)) -> dict[str, Any]:
+        return manager.update_job(puid, juid, roots=roots(request),
+                                  **{k: body.get(k) for k in ("params", "inputs", "title", "notes", "lane") if k in body})
 
     @app.post("/api/projects/{puid}/jobs/{juid}/queue")
-    def queue_job(puid: str, juid: str, body: dict = Body(default={})) -> dict[str, Any]:
-        return manager.queue_job(puid, juid, (body or {}).get("lane"))
+    def queue_job(puid: str, juid: str, request: Request, body: dict = Body(default={})) -> dict[str, Any]:
+        return manager.queue_job(puid, juid, (body or {}).get("lane"), roots=roots(request))
 
     @app.post("/api/projects/{puid}/jobs/{juid}/kill")
     def kill_job(puid: str, juid: str) -> dict[str, Any]:
@@ -192,8 +278,8 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
         return manager.clear_job(puid, juid)
 
     @app.post("/api/projects/{puid}/jobs/{juid}/clone")
-    def clone_job(puid: str, juid: str) -> dict[str, Any]:
-        return manager.clone_job(puid, juid)
+    def clone_job(puid: str, juid: str, request: Request) -> dict[str, Any]:
+        return manager.clone_job(puid, juid, created_by=author(current_user(request)), roots=roots(request))
 
     @app.delete("/api/projects/{puid}/jobs/{juid}")
     def delete_job(puid: str, juid: str, force: bool = False) -> dict[str, Any]:
@@ -285,10 +371,10 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
 
     # ----------------------------------------------------------- workflows
     @app.post("/api/projects/{puid}/workflows/{wid}")
-    def instantiate(puid: str, wid: str, body: dict = Body(default={})) -> dict[str, Any]:
+    def instantiate(puid: str, wid: str, request: Request, body: dict = Body(default={})) -> dict[str, Any]:
         try:
             return manager.instantiate_workflow(puid, wid, body.get("overrides"), body.get("include"), bool(body.get("queue")),
-                                                body.get("lane"))
+                                                body.get("lane"), created_by=author(current_user(request)), roots=roots(request))
         except KeyError as exc:
             raise HTTPException(404, str(exc)) from None
 

@@ -89,7 +89,7 @@ class MapTools(JobType):
         Param("lowpass", "float", 0.0, label="Low-pass filter", unit="Å", min=0.0, help="0 = none."),
         Param("apply_mask", "bool", False, label="Multiply by mask"),
         Param("normalize", "bool", False, label="Normalise (mean 0, sd 1)"),
-        Param("output_name", "str", "map_processed", label="Output file name", advanced=True),
+        Param("output_name", "str", "map_processed", label="Output file name", advanced=True, path_kind="name"),
     ]
     outputs = [OutputDef("map", "map", "Processed map")]
 

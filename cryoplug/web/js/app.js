@@ -4,8 +4,9 @@ import { closeBuilder, openBuilder, refreshBuilderInputs, renderBuilder } from '
 import { closeDetail, detailIsLive, detailMode, detailUid, openDetail, refreshDetail } from './detail.js';
 import { renderHelp, renderProjects, renderQueue, renderTools } from './pages.js';
 import { clearSelection, renderJobs, renderProject, selectAllShown } from './project.js';
+import { renderPasswordChange, renderSettings } from './settings.js';
 import { builderHref, loadStatic, navigate, onJobsChanged, refreshJobs, state } from './state.js';
-import { clear, guard, h, modal, showError, toast } from './ui.js';
+import { avatar, clear, guard, h, modal, showError, toast } from './ui.js';
 
 const content = document.getElementById('content');
 const panel = document.getElementById('panel');
@@ -65,7 +66,7 @@ function setCrumbs(route) {
     if (route.panel === 'new') items.push(h('span', { class: 'sep' }, '›'), h('span', {}, 'New job'));
     if (route.inspect) items.push(h('span', { class: 'sep' }, '›'), h('span', {}, route.inspect));
   } else if (route.page !== 'projects') {
-    const names = { help: 'Aide', queue: 'Queue', tools: 'Tools' };
+    const names = { help: 'Aide', queue: 'Queue', tools: 'Tools', settings: 'Settings' };
     items.push(h('span', { class: 'sep' }, '›'), h('span', {}, names[route.page] || route.page));
   }
   clear(crumbs, items);
@@ -91,6 +92,7 @@ async function route() {
     else if (r.page === 'queue') await renderQueue(content);
     else if (r.page === 'tools') await renderTools(content);
     else if (r.page === 'help') await renderHelp(content, r.sub, r.item);
+    else if (r.page === 'settings') await renderSettings(content, r.sub);
     else clear(content, h('div', { class: 'empty' }, 'Page not found.'));
     return;
   }
@@ -238,9 +240,24 @@ async function poll() {
   }
 }
 
+// The logged-in user, at the bottom of the sidebar (opens My account).
+function renderUserBadge() {
+  const badge = document.getElementById('user-badge');
+  const user = state.info.user;
+  badge.hidden = !user || user.builtin;
+  if (badge.hidden) return;
+  badge.title = `${user.full_name || user.username} (${user.username}, ${user.role === 'admin' ? 'administrator' : 'user'}): my account`;
+  badge.setAttribute('aria-label', badge.title);
+  clear(badge, avatar(user));
+}
+document.addEventListener('cryoplug-user', renderUserBadge);
+// A temporary password must be replaced first: reloading shows that form.
+window.addEventListener('cryoplug-password-change', () => location.reload());
+
 async function start() {
+  let ready;
   try {
-    await loadStatic();
+    ready = await loadStatic();
   } catch (e) {
     clear(content, h('div', { class: 'alert error' }, `Cannot reach the CryoPlug server: ${e.message}`));
     return;
@@ -252,6 +269,12 @@ async function start() {
     await fetch('/logout', { method: 'POST' });
     location.assign('/login');
   });
+  renderUserBadge();
+  if (!ready) {
+    document.querySelectorAll('.nav-link').forEach((a) => { a.hidden = true; });
+    renderPasswordChange(content);
+    return;
+  }
   window.addEventListener('hashchange', () => { route().catch((e) => guard(Promise.reject(e))); });
   await route();
   setInterval(poll, 2500);

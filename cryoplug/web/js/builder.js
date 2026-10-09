@@ -2,7 +2,7 @@
 import { api } from './api.js';
 import { browseFiles } from './filebrowser.js';
 import { CATEGORY_FR, helpDetails, helpModal } from './help.js';
-import { compatibleOutputs, navigate, refreshJobs, state, typeTitle } from './state.js';
+import { compatibleOutputs, navigate, refreshJobs, restricted, state, typeTitle } from './state.js';
 import { btn, clear, guard, h, icon, toast } from './ui.js';
 
 const panel = () => document.getElementById('panel');
@@ -261,6 +261,8 @@ export function paramField(prm, values, idPrefix = 'p') {
     input = h('input', { id, type: 'text', value: v ?? '', placeholder: prm.placeholder || '', oninput: (e) => set(e.target.value) });
   }
   const controls = [input];
+  const locked = prm.admin_only && restricted();
+  if (locked) input.disabled = true;
   if (prm.unit) controls.push(h('span', { class: 'unit' }, prm.unit));
   if (prm.type === 'path') {
     controls.push(btn('Browse', async () => {
@@ -270,7 +272,8 @@ export function paramField(prm, values, idPrefix = 'p') {
       if (chosen) { input.value = chosen; set(chosen); }
     }, { cls: 'small', ic: 'folder' }));
   }
-  return h('div', { class: 'field' }, label, h('div', { class: 'row' }, controls), help);
+  return h('div', { class: 'field' }, label, h('div', { class: 'row' }, controls), help,
+    locked ? h('div', { class: 'help' }, icon('lock'), ' Administrators only: it can run code on the server.') : null);
 }
 
 function renderTypePicker(p) {
@@ -283,7 +286,7 @@ function renderTypePicker(p) {
     const q = b.search.trim().toLowerCase();
     const items = [];
     for (const cat of state.info.categories) {
-      let types = state.jobtypes.filter((t) => t.category === cat);
+      let types = state.jobtypes.filter((t) => t.category === cat && !(t.admin_only && restricted()));
       if (from) {
         const outTypes = new Set((from.status === 'completed' ? from.outputs : state.types[from.type].outputs).map((o) => o.type));
         types = types.filter((t) => t.inputs.some((s) => s.types.some((ty) => outTypes.has(ty))));

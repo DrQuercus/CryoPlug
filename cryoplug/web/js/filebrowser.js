@@ -1,6 +1,6 @@
 // Server-side file browser (to pick CryoSPARC job directories, maps, models, FASTA files).
 import { api } from './api.js';
-import { btn, clear, fmtSize, guard, h, icon, modal } from './ui.js';
+import { btn, clear, fmtSize, guard, h, icon, modal, shortPath } from './ui.js';
 
 const MAP_EXT = /\.(mrc|map|ccp4|mrcs)$/i;
 const MODEL_EXT = /\.(pdb|cif|mmcif|ent)(\.gz)?$/i;
@@ -12,6 +12,8 @@ export function browseFiles({ start = '', kind = 'any', title = 'Select a file' 
     let showHidden = false;
     const pathInput = h('input', { type: 'text', placeholder: '/path/to/directory', onkeydown: (e) => { if (e.key === 'Enter') load(pathInput.value); } });
     const list = h('div', { class: 'fs-list' });
+    // Shortcuts to each folder one may browse (with accounts, a user's projects folder and data folders).
+    const roots = h('div', { class: 'fs-roots', hidden: true });
     const info = h('div', { class: 'muted small', style: { marginTop: '6px' } });
     const hiddenBox = h('input', { type: 'checkbox', id: 'fs-hidden', onchange: () => { showHidden = hiddenBox.checked; load(current); } });
     const choose = btn(kind === 'dir' ? 'Select this folder' : 'Select', () => {
@@ -27,6 +29,10 @@ export function browseFiles({ start = '', kind = 'any', title = 'Select a file' 
       current = data.path;
       pathInput.value = data.path;
       selected = null;
+      roots.hidden = !(data.roots.length > 1 || (data.roots.length === 1 && data.roots[0] !== '/'));
+      clear(roots, h('span', { class: 'muted small' }, 'Your folders:'), data.roots.map((r) => h('button', {
+        type: 'button', class: `fs-root ${data.path === r || data.path.startsWith(`${r}/`) ? 'on' : ''}`, title: r, onclick: () => load(r),
+      }, icon('folder'), shortPath(r, 34))));
       const items = [];
       if (data.parent) {
         items.push(h('div', { class: 'fs-item', ondblclick: () => load(data.parent), onclick: () => load(data.parent) }, icon('folder'), '..'));
@@ -60,7 +66,7 @@ export function browseFiles({ start = '', kind = 'any', title = 'Select a file' 
       wide: true,
       body: h('div', {},
         h('div', { class: 'row' }, pathInput, btn('Go', () => load(pathInput.value))),
-        list, info,
+        roots, list, info,
         h('label', { class: 'row small muted', for: 'fs-hidden', style: { marginTop: '6px' } }, hiddenBox, 'Show hidden files')),
       footer: [btn('Cancel', () => { done = true; m.close(); resolve(null); }), choose],
       onClose: () => { if (!done) resolve(null); },

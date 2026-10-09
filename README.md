@@ -3,8 +3,8 @@
 **Suite de post-traitement cryo-EM dans le navigateur, de la meilleure carte CryoSPARC jusqu'au dépôt PDB/EMDB.**
 
 CryoPlug prend le relais une fois la reconstruction terminée dans CryoSPARC. Il pilote, depuis une
-interface web inspirée de CryoSPARC (projets, cartes de jobs, file d'attente, lanes), tous les logiciels
-installés sur votre serveur local :
+interface web inspirée de CryoSPARC (projets, cartes de jobs, file d'attente, lanes, **comptes
+utilisateurs**), tous les logiciels installés sur votre serveur local :
 
 | Étape | Logiciels pilotés | Jobs CryoPlug |
 |---|---|---|
@@ -47,6 +47,10 @@ installés sur votre serveur local :
 | **Carte de variabilité** sur la carte moyenne (bleu = stable, rouge = variable) | **Analyse de série** : densité de chaque chaîne dans chaque volume (une hélice disparaît) |
 | ![](docs/images/viewer_variability.png) | ![](docs/images/series_analysis.png) |
 
+| **Comptes utilisateurs** (Settings › Users) : rôle, dossier des projets, dossiers lisibles, statut | **Ajout d'un utilisateur** : mot de passe généré ou choisi, dossiers autorisés |
+|---|---|
+| ![](docs/images/accounts_users.png) | ![](docs/images/accounts_add_user.png) |
+
 *Captures réalisées avec les jeux de données synthétiques de démonstration et des programmes de substitution
 (aucun calcul réel de ModelAngelo, CryoAtom2, Phenix, cryoDRGN… dans ces images).*
 
@@ -68,7 +72,7 @@ installés sur votre serveur local :
 2. [Configurer les logiciels](#2-configurer-les-logiciels)
 3. [Utilisation](#3-utilisation)
 4. [Lanes, GPU et cluster SLURM](#4-lanes-gpu-et-cluster-slurm)
-5. [Accès depuis un autre ordinateur et sécurité](#5-accès-depuis-un-autre-ordinateur-et-sécurité)
+5. [Comptes utilisateurs, accès réseau et sécurité](#5-comptes-utilisateurs-accès-réseau-et-sécurité)
 6. [Référence des jobs](#6-référence-des-jobs)
 7. [Architecture et ajout d'un nouveau logiciel](#7-architecture-et-ajout-dun-nouveau-logiciel)
 8. [Tests](#8-tests)
@@ -93,8 +97,9 @@ nano ~/.cryoplug/config.toml               # déclarer vos logiciels (§2)
 ~/cryoplug-venv/bin/cryoplug start         # serveur web + planificateur de jobs
 ```
 
-Ouvrez ensuite **http://localhost:39500** sur le serveur. Pour l'utiliser depuis votre portable ou un autre
-poste, voir [§5](#5-accès-depuis-un-autre-ordinateur-et-sécurité) (`host = "0.0.0.0"` puis le lien affiché au démarrage).
+Ouvrez ensuite **http://localhost:39500** sur le serveur. Pour l'utiliser à plusieurs depuis d'autres postes,
+créez les comptes dans **Settings › Users** et ouvrez le port : voir
+[§5](#5-comptes-utilisateurs-accès-réseau-et-sécurité) (`host = "0.0.0.0"`, comptes comme dans CryoSPARC).
 
 Pour essayer sans vraies données :
 
@@ -344,12 +349,71 @@ Les workers communiquent uniquement par fichiers dans le dossier du job (`job.js
 `job.log`, `report.json`) : il suffit que les dossiers de projet soient sur un système de fichiers
 partagé ; aucune base de données ni port réseau n'est nécessaire sur les nœuds.
 
-## 5. Accès depuis un autre ordinateur et sécurité
+## 5. Comptes utilisateurs, accès réseau et sécurité
 
 Par défaut le serveur n'écoute que sur `127.0.0.1` : l'interface ne s'ouvre que sur la machine elle-même.
-Deux façons de l'utiliser depuis votre portable.
+Pour une plateforme ou un labo, la configuration conseillée est celle de CryoSPARC : **des comptes
+personnels** et **le port ouvert** sur le réseau (idéalement en HTTPS).
 
-### Option 1 : sur le réseau du labo
+### Comptes utilisateurs (comme CryoSPARC)
+
+Dès qu'un compte existe, **tout le monde se connecte avec son nom d'utilisateur et son mot de passe**, sur
+le serveur lui-même aussi. Tout se règle dans l'onglet **Settings** de l'interface :
+
+- **Users** (administrateurs) : ajouter un utilisateur (mot de passe généré, affiché une seule fois, ou
+  choisi ; nouveau mot de passe demandé à la première connexion), modifier son nom, son e-mail et son rôle,
+  lui donner un nouveau mot de passe, le désactiver, le supprimer (ses projets vont à un autre compte ou aux
+  seuls administrateurs). Pour chaque utilisateur, deux **chemins d'accès** :
+  - son **dossier de projets**, où ses nouveaux projets sont créés (par défaut `<projects_root>/<nom>`) ;
+  - les **dossiers qu'il peut lire** : données qu'il parcourt dans le navigateur de fichiers et donne aux
+    jobs (projets CryoSPARC, cartes, modèles, bases de séquences). Tout chemin en dehors est refusé.
+- **Access & security** (administrateurs) : mode de protection actif, adresse d'écoute, chiffrement,
+  durée des sessions, longueur minimale des mots de passe.
+- **My account** (chacun) : nom, e-mail, mot de passe, navigateurs connectés (et « déconnecter les autres »).
+
+| **Rôles** | |
+|---|---|
+| **Administrateur** | Voit tous les projets, lit tous les dossiers (`browse_roots`), gère les comptes et les réglages. |
+| **Utilisateur** | Voit ses projets et ceux partagés avec lui, crée ses projets dans son dossier, ne choisit des données que dans ses dossiers. La file d'attente lui montre l'occupation des lanes sans le détail des projets des autres. |
+
+Chaque projet a un **propriétaire** ; il le **partage** depuis le menu **⋯** de la carte du projet (*Share…*) :
+les membres y travaillent (jobs, fichiers, visualiseur 3D), mais les données qu'ils ajoutent doivent
+toujours être dans *leurs* dossiers. Ce qui peut exécuter du code sur le serveur ou lire n'importe quel
+dossier est réservé aux administrateurs : le job *Custom command*, les commandes ChimeraX supplémentaires
+d'ISOLDE et les *Extra arguments* des programmes (un membre peut relancer un job préparé ainsi, sans en
+changer ces réglages).
+
+**Mise en place** (sans accès au terminal) :
+
+1. Ouvrez **Settings › Users** sur le serveur (ou avec le jeton d'accès si le port est déjà ouvert) et créez
+   le **compte administrateur** : vous restez connecté avec lui, et les projets existants deviennent les siens.
+2. Ajoutez les utilisateurs, leur dossier de projets et les dossiers qu'ils peuvent lire.
+3. Ouvrez le port (ci-dessous) : chacun se connecte depuis son poste, avec son compte.
+
+| **Premier administrateur** (Settings › Users, avant tout compte) | **Access & security** : protection, écoute, sessions |
+|---|---|
+| ![](docs/images/accounts_first_admin.png) | ![](docs/images/accounts_access.png) |
+| **Partager un projet** (menu ⋯ du projet) | **Navigateur de fichiers d'un utilisateur** : ses seuls dossiers |
+| ![](docs/images/accounts_share.png) | ![](docs/images/accounts_browser.png) |
+| **My account** (vue d'un utilisateur) | **Première connexion** avec un mot de passe temporaire |
+| ![](docs/images/accounts_my_account.png) | ![](docs/images/accounts_first_login.png) |
+
+En ligne de commande sur le serveur (par exemple pour un mot de passe administrateur oublié) :
+
+```bash
+cryoplug user add admin --admin                          # premier compte (administrateur)
+cryoplug user add alice --generate --allow /data/alice   # mot de passe généré et affiché
+cryoplug user set alice --projects-dir /data/alice/cryoplug --allow /data/alice --allow /data/shared
+cryoplug user passwd admin                               # nouveau mot de passe (tapé deux fois)
+cryoplug user disable bob | enable bob | delete bob --transfer-to alice
+cryoplug user list
+```
+
+Comme dans CryoSPARC (où tout tourne sous le compte `cryosparc`), **les jobs s'exécutent sous le compte Unix
+qui a lancé CryoPlug** : les dossiers de chaque utilisateur limitent ce qu'il peut choisir dans CryoPlug.
+Pour une séparation stricte des données entre utilisateurs, appliquez aussi les permissions Unix.
+
+### Ouvrir le port sur le réseau du labo
 
 Dans `~/.cryoplug/config.toml` :
 
@@ -359,7 +423,9 @@ host = "0.0.0.0"
 ```
 
 (ou ponctuellement `cryoplug start --host 0.0.0.0`), puis redémarrez CryoPlug
-(`sudo systemctl restart cryoplug` avec le service). Le terminal affiche les adresses à ouvrir :
+(`sudo systemctl restart cryoplug` avec le service). Avec des comptes, chacun ouvre
+`http://<serveur>:39500` et se connecte avec son compte. Sans compte, le terminal affiche des liens avec un
+**jeton d'accès** :
 
 ```
 Open from any computer on the network:
@@ -368,11 +434,12 @@ Open from any computer on the network:
 Access token: Xk3…  (`cryoplug url` prints these links again)
 ```
 
-Ouvrez l'un de ces liens sur le portable : le jeton vous connecte et le navigateur le reste 30 jours
-(bouton de déconnexion en bas de la barre latérale). Sans le lien, la page de connexion demande le jeton.
+Ce lien vous connecte (le navigateur le reste 30 jours) : c'est le moyen de créer le premier compte
+administrateur depuis un portable. Dès qu'un compte existe, le jeton n'ouvre plus CryoPlug.
 
-- **Mot de passe plutôt qu'un jeton** : `password = "…"` dans `[server]`. Changer le mot de passe
-  déconnecte tous les navigateurs ; `cryoplug url --reset-token` (puis redémarrage) fait de même pour le jeton.
+- **Mot de passe partagé** (sans comptes) : `password = "…"` dans `[server]` remplace le jeton. Changer le
+  mot de passe déconnecte tous les navigateurs ; `cryoplug url --reset-token` (puis redémarrage) fait de
+  même pour le jeton.
 - **Avec le service systemd** : le lien est dans `journalctl -u cryoplug`, ou affiché par `cryoplug url`
   lancé par le même utilisateur que le service.
 - **La page ne répond pas** : le pare-feu du serveur bloque probablement le port.
@@ -384,7 +451,7 @@ Ouvrez l'un de ces liens sur le portable : le jeton vous connecte et le navigate
 
   Si le nom de la machine n'est pas connu du portable, utilisez l'adresse IP affichée.
 
-### Option 2 : tunnel SSH (hors du labo, ou sans toucher à la configuration)
+### Tunnel SSH (hors du labo, ou sans toucher à la configuration)
 
 Sur le portable :
 
@@ -394,10 +461,10 @@ ssh -N -L 39500:localhost:39500 utilisateur@serveur-cryoem
 
 puis http://localhost:39500. Le trafic passe par SSH (chiffré) et rien n'est exposé sur le réseau.
 
-### HTTPS (facultatif)
+### HTTPS (conseillé quand le port est ouvert)
 
-En HTTP, le jeton et le cookie de session circulent en clair sur le réseau local. Pour chiffrer avec un
-certificat auto-signé :
+En HTTP, les mots de passe, le jeton et les cookies de session circulent en clair sur le réseau local
+(l'onglet *Access & security* le signale). Pour chiffrer avec un certificat auto-signé :
 
 ```bash
 openssl req -x509 -newkey rsa:3072 -nodes -days 825 -subj "/CN=$(hostname)" \
@@ -414,13 +481,21 @@ L'adresse devient `https://…` ; le navigateur affiche un avertissement la prem
 
 ### Ce qui est protégé
 
-CryoPlug peut lancer des commandes sur le serveur (job *Custom command*) et en parcourir les fichiers. Dès
-qu'il écoute sur le réseau, toute requête doit donc être authentifiée : cookie de session signé, ou en-tête
-`Authorization: Bearer <jeton>` pour les scripts (`curl -H "Authorization: Bearer $(cat ~/.cryoplug/access_token)" …`).
-Les requêtes qui modifient quelque chose doivent venir de la page CryoPlug elle-même, et en mode local sans
-connexion seuls les noms `localhost` / `127.0.0.1` sont acceptés : une page web malveillante ouverte dans le
-même navigateur ne peut pas piloter CryoPlug. Sur un poste partagé entre plusieurs utilisateurs,
-`auth = "always"` impose aussi la connexion en local. Le navigateur de fichiers reste limité à `browse_roots`.
+CryoPlug lance des programmes sur le serveur et en parcourt les fichiers. Dès qu'il écoute sur le réseau (ou
+qu'un compte existe), toute requête doit donc être authentifiée :
+
+- **Avec des comptes** : mots de passe hachés avec scrypt (jamais stockés en clair), sessions côté serveur
+  (cookie aléatoire `HttpOnly`, `SameSite=Lax`, `Secure` en HTTPS), terminées à la déconnexion, au
+  changement de mot de passe ou à la désactivation du compte. Après 5 mots de passe faux pour un compte depuis
+  un même poste (20 tous comptes confondus), les connexions depuis ce poste sont suspendues 5 minutes. Les
+  scripts s'authentifient avec `curl -u nom:motdepasse …`.
+- **Sans compte** : cookie de session signé, ou `Authorization: Bearer <jeton>` pour les scripts
+  (`curl -H "Authorization: Bearer $(cat ~/.cryoplug/access_token)" …`).
+- Les requêtes qui modifient quelque chose doivent venir de la page CryoPlug elle-même (contrôle de
+  l'origine), la page ne peut pas être intégrée dans un autre site, et en mode local sans connexion seuls les
+  noms `localhost` / `127.0.0.1` sont acceptés : une page web malveillante ouverte dans le même navigateur ne
+  peut pas piloter CryoPlug. Sur un poste partagé sans comptes, `auth = "always"` impose aussi le jeton en
+  local.
 
 ## 6. Référence des jobs
 
@@ -453,6 +528,9 @@ cryoplug/
   cli.py           commandes `cryoplug ...`
   config.py        configuration TOML (serveur, lanes, logiciels)
   server/app.py    API REST FastAPI + fichiers statiques de l'interface
+  server/auth.py   connexion, sessions, jeton / mot de passe partagé, contrôles des requêtes
+  server/accounts.py  API des comptes (Settings) et règles d'accès aux projets
+  users.py         comptes : mots de passe (scrypt), sessions, limitation des tentatives, dossiers
   manager.py       projets, jobs, entrées/sorties, sessions interactives, workflows
   scheduler.py     lance les jobs prêts (dépendances, slots, GPU), suit les workers
   lanes.py         exécution locale ou soumission cluster

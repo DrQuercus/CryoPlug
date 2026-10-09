@@ -5,6 +5,7 @@ import datetime as _dt
 import fnmatch
 import json
 import os
+import re
 import shlex
 import signal
 import socket
@@ -71,7 +72,8 @@ class Param:
     max: float | None = None
     unit: str = ""
     placeholder: str = ""
-    path_kind: str = "any"  # for type=path: file | dir | any
+    path_kind: str = "any"  # type=path: file | dir | any; type=str: "files" (paths separated by ';'), "name" (file name)
+    admin_only: bool = False  # with user accounts, only administrators may set it (it can run code on the server)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -100,12 +102,18 @@ class Param:
                     raise ValueError(f"must be one of {self.choices}")
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Parameter '{self.name}': invalid value {value!r} ({exc})") from None
+        if self.path_kind == "name" and value and not SAFE_FILE_NAME.fullmatch(str(value)):
+            # written inside the job folder: no '/' or '..' that would lead elsewhere
+            raise ValueError(f"Parameter '{self.name}': use a simple file name (letters, digits, '.', '_', '-')")
         if self.type in ("float", "int"):
             if self.min is not None and value < self.min:
                 raise ValueError(f"Parameter '{self.name}' must be >= {self.min}")
             if self.max is not None and value > self.max:
                 raise ValueError(f"Parameter '{self.name}' must be <= {self.max}")
         return value
+
+
+SAFE_FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 
 
 @dataclass
@@ -140,13 +148,20 @@ def resolution_param(**kw: Any) -> Param:
 
 
 def extra_args_param() -> Param:
-    return Param("extra_args", "str", "", label="Extra arguments", advanced=True,
+    # Administrators only with accounts: program options can read or write anywhere the server account can.
+    return Param("extra_args", "str", "", label="Extra arguments", advanced=True, admin_only=True,
                  help="Additional command-line arguments appended verbatim to the program call.")
+
+
+def split_paths(value: Any) -> list[str]:
+    """Paths separated by ';' (or ',') in one parameter."""
+    return [p.strip() for p in str(value or "").replace(",", ";").split(";") if p.strip()]
 
 
 class JobType:
     name: ClassVar[str] = ""
     title: ClassVar[str] = ""
+    admin_only: ClassVar[bool] = False  # with user accounts, only administrators may create it (runs any command)
     category: ClassVar[str] = "Utilities"
     description: ClassVar[str] = ""
     tool: ClassVar[str | None] = None  # key in cryoplug.tools.TOOLS
@@ -172,6 +187,7 @@ class JobType:
             "gpu": cls.gpu,
             "cpus": cls.cpus,
             "interactive": cls.interactive,
+            "admin_only": cls.admin_only,
             "params": [p.to_dict() for p in cls.params],
             "inputs": [s.to_dict() for s in cls.inputs],
             "outputs": [o.to_dict() for o in cls.outputs],

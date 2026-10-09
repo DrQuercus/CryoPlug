@@ -17,6 +17,10 @@ async function request(method, url, body, isForm = false) {
     // Session expired or never opened: back to the login page, then here again.
     location.assign(`/login?${new URLSearchParams({ next: location.pathname })}${location.hash}`);
   }
+  if (res.status === 403 && data && data.code === 'password_change') {
+    // A temporary password must be replaced before anything else (handled by app.js).
+    window.dispatchEvent(new CustomEvent('cryoplug-password-change'));
+  }
   if (!res.ok) {
     let detail = data && data.detail !== undefined ? data.detail : text || res.statusText;
     if (Array.isArray(detail)) detail = detail.map((d) => d.msg || JSON.stringify(d)).join('; ');
@@ -37,6 +41,20 @@ export const api = {
   workflows: () => request('GET', '/api/workflows'),
   queue: () => request('GET', '/api/queue'),
   fs: (path, hidden = false) => request('GET', `/api/fs?path=${enc(path || '')}&show_hidden=${hidden}`),
+
+  me: () => request('GET', '/api/me'),
+  updateMe: (body) => request('PATCH', '/api/me', body),
+  changePassword: (current, password) => request('POST', '/api/me/password', { current, new: password }),
+  mySessions: () => request('GET', '/api/me/sessions'),
+  endOtherSessions: () => request('POST', '/api/me/sessions/end-others'),
+  users: () => request('GET', '/api/users'),
+  people: () => request('GET', '/api/people'),
+  createUser: (body) => request('POST', '/api/users', body),
+  updateUser: (name, body) => request('PATCH', `/api/users/${enc(name)}`, body),
+  resetPassword: (name, body) => request('POST', `/api/users/${enc(name)}/password`, body),
+  deleteUser: (name, transferTo) => request('DELETE', `/api/users/${enc(name)}?transfer_to=${enc(transferTo || '')}`),
+  settings: () => request('GET', '/api/settings'),
+  updateSettings: (body) => request('PATCH', '/api/settings', body),
 
   projects: () => request('GET', '/api/projects'),
   createProject: (body) => request('POST', '/api/projects', body),

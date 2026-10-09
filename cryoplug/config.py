@@ -179,17 +179,21 @@ EXAMPLE_CONFIG = f"""# CryoPlug configuration file.
 [server]
 # "127.0.0.1": only this machine can open the interface (or through an SSH tunnel).
 # "0.0.0.0": reachable from other computers (laptop...) at http://<this-server>:{DEFAULT_PORT}.
-# A login is then required: a random access token is printed at start-up (and by
-# `cryoplug url`), or set a password below.
+# A login is then required. Best: personal accounts, as in CryoSPARC (Settings > Users in
+# the interface, or `cryoplug user add NAME --admin`): as soon as one exists, everyone logs
+# in with their user name and password, on this machine too. Without accounts, a random
+# access token is printed at start-up (and by `cryoplug url`), or set a password below.
 host = "127.0.0.1"
 port = {DEFAULT_PORT}
 # Database, cached tool checks and the downloaded 3D viewer live here.
 data_dir = "~/.cryoplug"
-# Default parent directory for new projects.
+# Default parent directory for new projects (with accounts: <projects_root>/<user name>,
+# unless an administrator sets another projects folder for the user).
 projects_root = "~/cryoplug_projects"
-# Directories visible in the file browser (import of CryoSPARC jobs, maps, models...).
+# Directories visible in the file browser for administrators (import of CryoSPARC jobs,
+# maps, models...). Other users see their own folders, set in Settings > Users.
 browse_roots = ["/"]
-# Password for the login page (replaces the access token).
+# Shared password for the login page, without accounts (replaces the access token).
 # password = "change-me"
 # "always" also requires the login on 127.0.0.1 (shared workstations).
 # auth = "auto"

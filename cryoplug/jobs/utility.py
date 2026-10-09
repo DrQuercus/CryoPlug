@@ -30,7 +30,7 @@ class ModelTools(JobType):
         Param("remove_altlocs", "bool", False, label="Keep only the first alternative conformation"),
         Param("set_bfactor", "float", 0.0, label="Set all B-factors", unit="Å²", min=0.0, help="0 = keep."),
         Param("set_occupancy_one", "bool", False, label="Set occupancies to 1"),
-        Param("output_name", "str", "model_edited", label="Output name", advanced=True),
+        Param("output_name", "str", "model_edited", label="Output name", advanced=True, path_kind="name"),
     ]
     outputs = [OutputDef("model", "model", "Edited model")]
 
@@ -203,6 +203,7 @@ class CustomCommand(JobType):
     title = "Custom command"
     category = "Utilities"
     tool = "shell"
+    admin_only = True  # any bash script, run under the server's account
     software = []
     description = ("Run any program on CryoPlug data (bash script template). Placeholders: {map} {map2} {half_map_a} "
                    "{half_map_b} {model} {mask} {sequence} {job_dir} {resolution} {pixel_size} {gpus}. Files matching "
