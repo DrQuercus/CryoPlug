@@ -133,7 +133,7 @@ class ClusterLane:
             "project_uid": job["project_uid"],
             "job_uid": job["uid"],
             "job_type": job["type"],
-            "job_title": job.get("title", ""),
+            "job_title": re.sub(r"[^A-Za-z0-9 ._+-]", "_", job.get("title", ""))[:80],  # user text: nothing the shell reads
             "job_dir": str(job_dir),
             "num_gpus": int(resources.get("num_gpus", 0)),
             "num_cpus": int(resources.get("num_cpus", 1)),
@@ -151,7 +151,7 @@ class ClusterLane:
         return generated_script(cfg, values)
 
     def partition_flag(self) -> str:
-        parts = self.cfg.partitions or ([self.cfg.partition] if self.cfg.partition else [])
+        parts = self.cfg.all_partitions
         return f" -p {shlex.quote(','.join(parts))}" if parts else ""
 
     def overview(self, max_age: float = 20.0) -> dict[str, Any]:
@@ -212,7 +212,7 @@ class ClusterLane:
         """Is the scheduler reachable from the server? Lists the partitions it knows."""
         if not self.is_slurm:
             try:
-                out = self._shell(self.cfg.submit_cmd.split()[0] + " --version 2>&1 || true", timeout=15)
+                out = self._shell(shlex.quote((self.cfg.submit_cmd.split() or ["true"])[0]) + " --version 2>&1 || true", timeout=15)
             except subprocess.TimeoutExpired:
                 return {"ok": False, "output": "No answer within 15 s"}
             return {"ok": True, "output": out.stdout.strip()[-400:], "partitions": []}
@@ -224,7 +224,7 @@ class ClusterLane:
         if version.returncode != 0:
             return {"ok": False, "output": (version.stderr or version.stdout or "sinfo not found").strip()[-400:]}
         names = list(dict.fromkeys(p.strip().rstrip("*") for p in parts.stdout.splitlines() if p.strip()))  # one line per node state
-        missing = [p for p in (self.cfg.partitions or [self.cfg.partition]) if p and p not in names]
+        missing = [p for p in self.cfg.all_partitions if p not in names]
         out = version.stdout.strip() + (f"\nPartitions: {', '.join(names)}" if names else "")
         if missing:
             out += f"\nUnknown partition(s): {', '.join(missing)}"

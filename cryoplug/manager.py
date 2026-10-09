@@ -132,6 +132,8 @@ class Manager:
         unknown = set(requested) - set(REQUESTABLE)
         if unknown:
             raise ManagerError(f"Unknown resource(s): {', '.join(sorted(unknown))}")
+        if lenient and lane_name and lane_name not in self.lanes:  # its lane was deleted or renamed: the default one
+            lane_name = None
         lane = self._lane_cfg(lane_name)
         need = int(jt.resources(params).get("num_gpus", 0))
         out: dict[str, Any] = {}
@@ -148,7 +150,10 @@ class Manager:
                 raise ManagerError("CPUs: a whole number") from None
             if not 1 <= cpus <= 1024:
                 raise ManagerError("CPUs: between 1 and 1024")
-            out["num_cpus"] = cpus
+            if jt.cpu_param:  # e.g. Phenix nproc: the program starts that many processes
+                refuse(f"{jt.title} takes its CPUs from the parameter '{jt.param(jt.cpu_param).to_dict()['label']}'")
+            else:
+                out["num_cpus"] = cpus
         ids = requested.get("gpu_ids") or []
         if ids:
             try:
@@ -173,7 +178,7 @@ class Manager:
                 refuse(f"The {key} only applies to cluster lanes")
                 continue
             if key == "partition":
-                allowed = lane.partitions or ([lane.partition] if lane.partition else [])
+                allowed = lane.all_partitions
                 if value not in allowed:
                     refuse(f"Partition '{value}' is not offered by lane '{lane.name}' ({', '.join(allowed) or 'none'})")
                     continue
@@ -474,7 +479,8 @@ class Manager:
     def clone_job(self, puid: str, juid: str, created_by: str = "", roots: list[Path] | None = None) -> dict[str, Any]:
         job = self.job(puid, juid)
         valid_inputs = {s: r for s, r in job["inputs"].items() if self.db.get_job(puid, r["job"])}
-        return self.create_job(puid, job["type"], job["params"], valid_inputs, job["title"], job.get("lane"),
+        lane = job.get("lane") if job.get("lane") in self.lanes else None  # a deleted lane: the default one
+        return self.create_job(puid, job["type"], job["params"], valid_inputs, job["title"], lane,
                                created_by=created_by, roots=roots, inherited=job["params"],
                                requested=self.clean_requested(get_job_type(job["type"]), job["params"], job.get("lane"),
                                                               job.get("requested"), lenient=True))
@@ -757,7 +763,7 @@ class Manager:
                           "gpus": cfg.gpus, "gpus_used": used,
                           "gpu_jobs": {str(g): {"project_uid": j["project_uid"], "uid": j["uid"], "type": j["type"], "title": j["title"],
                                                 "owner": j["owner"]} for j in on_lane for g in (j.get("gpus") or [])},
-                          "partition": cfg.partition, "partitions": cfg.partitions or ([cfg.partition] if cfg.partition else [])})
+                          "partition": cfg.partition, "partitions": cfg.all_partitions})
         return {"lanes": lanes, "jobs": jobs}
 
     # ============================================================ workflows

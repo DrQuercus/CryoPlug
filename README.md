@@ -340,7 +340,7 @@ défaut ; rien n'est à choisir pour lancer un job, mais tout peut l'être.
   - Lane locale : les GPU qu'elle distribue (cases à cocher parmi les GPU détectés) et le nombre de jobs
     simultanés. Aucun GPU coché : la lane ne distribue pas de GPU (les programmes les voient tous).
   - Lane SLURM : partition par défaut et partitions proposées aux utilisateurs, compte (`--account`), QOS,
-    durée et mémoire par job, ressource GPU (`--gres=gpu:<n>`, ou `gpu:a100`…), options `#SBATCH`
+    durée et mémoire par job, ressource GPU (`--gres=gpu:<n>`, ou `gpu:a100`… ; vide : pas de `--gres`), options `#SBATCH`
     supplémentaires, lignes exécutées sur le nœud avant le job (`module load cuda/12.2`, conda…). Le script
     de soumission est écrit à partir de ces champs ; *Advanced* permet de changer les commandes
     (`sbatch`, `squeue`, `scancel`) ou de fournir son propre script (autres ordonnanceurs).
@@ -359,8 +359,9 @@ défaut ; rien n'est à choisir pour lancer un job, mais tout peut l'être.
   charge, sa température et le job CryoPlug qui l'occupe. Un GPU occupé peut être choisi : le job attend
   qu'il se libère (« Waiting for GPU 1 (used by P2/J5) »). Le nombre de GPU suit le job (paramètre *GPUs*
   de cryoDRGN, *Needs a GPU* d'une commande personnalisée…).
-- **CPU threads** : par défaut ceux du job (ou de son paramètre *Processors*) ; sur la machine, fixe
-  `OMP_NUM_THREADS` ; sous SLURM, `--cpus-per-task`.
+- **CPU threads** : par défaut ceux du job ; sur la machine, fixe `OMP_NUM_THREADS` ; sous SLURM,
+  `--cpus-per-task`. Pour les jobs Phenix, c'est leur paramètre *Processors* (le nombre de processus lancés)
+  qui les fixe.
 - **SLURM** : partition, durée et mémoire pour ce job (vides : réglages de la lane).
 - Le panneau du job rappelle ces choix (section *Compute*) et les GPU attribués.
 

@@ -104,7 +104,7 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
             "password_min": users.settings()["min_password_length"],
             "listen": {"host": config.host, "port": config.port, "network": not is_loopback(config.host)},
             "lanes": [{"name": l.name, "type": l.type, "description": l.description, "max_jobs": l.max_jobs, "gpus": l.gpus,
-                       "partition": l.partition, "partitions": l.partitions or ([l.partition] if l.partition else []),
+                       "partition": l.partition, "partitions": l.all_partitions,
                        "time_limit": l.time_limit, "mem": l.mem} for l in config.lanes],
             "categories": CATEGORIES,
             "data_types": DATA_TYPES,
@@ -205,7 +205,12 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     @app.put("/api/lanes")
     def put_lanes(request: Request, body: dict = Body(...)) -> dict[str, Any]:
         require_admin(request)
-        manager.save_lanes(None if body.get("reset") else body.get("lanes"))
+        if body.get("reset"):
+            manager.save_lanes(None)
+        elif isinstance(body.get("lanes"), list):
+            manager.save_lanes(body["lanes"])
+        else:
+            raise ManagerError("Send the lanes as a list (or reset: true for those of the configuration file)")
         return lanes_payload()
 
     @app.get("/api/hardware")

@@ -24,6 +24,8 @@ log = logging.getLogger("cryoplug.monitor")
 INTERVAL = 2.0
 HISTORY = 150  # 5 minutes
 IDLE_STOP = 60.0
+GPU_TIMEOUT = 8.0  # seconds given to nvidia-smi
+GPU_RETRY = 300.0  # after nvidia-smi hung, seconds before asking it again
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
 PAGE_SIZE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
 PSEUDO_FS = {"proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup", "cgroup2", "securityfs", "pstore", "debugfs",
@@ -53,37 +55,39 @@ def nvidia_smi_path(config) -> str | None:
     return getattr(config, "nvidia_smi", "") or shutil.which("nvidia-smi")
 
 
+def _run(cmd: list[str], timeout: float) -> tuple[int, str, str] | None:
+    """(return code, stdout, stderr) of a short command, or None if it did not answer in time. Unlike
+    subprocess.run, never waits without limit: a wedged GPU driver can leave nvidia-smi stuck in the kernel,
+    where even SIGKILL waits."""
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass  # cannot be reaped yet: left behind rather than blocking the caller
+        return None
+    return proc.returncode, out, err
+
+
 def detect_gpus(nvidia_smi: str | None) -> list[dict[str, Any]]:
     """The NVIDIA GPUs of this machine (index as nvidia-smi numbers them, name, memory)."""
     if not nvidia_smi:
         return []
     try:
-        out = subprocess.run([nvidia_smi, "--query-gpu=index,name,memory.total,uuid", "--format=csv,noheader,nounits"],
-                             capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
+        out = _run([nvidia_smi, "--query-gpu=index,name,memory.total,uuid", "--format=csv,noheader,nounits"], timeout=10)
+    except OSError:
+        return []
+    if out is None or out[0] != 0:
         return []
     gpus = []
-    for line in out.stdout.splitlines():
+    for line in out[1].splitlines():
         fields = [f.strip() for f in line.split(",")]
         if len(fields) >= 4 and fields[0].isdigit():
             gpus.append({"index": int(fields[0]), "name": fields[1], "memory_total": _num(fields[2]), "uuid": fields[3]})
     return gpus
-
-
-def _statvfs(path: str, timeout: float = 2.0) -> os.statvfs_result | None | str:
-    """os.statvfs that gives up on a filesystem that does not answer (a stale NFS mount would block forever)."""
-    result: dict[str, Any] = {}
-
-    def run() -> None:
-        try:
-            result["value"] = os.statvfs(path)
-        except OSError:
-            result["value"] = None
-
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
-    thread.join(timeout)
-    return "hung" if thread.is_alive() else result.get("value")
 
 
 class Monitor:
@@ -94,12 +98,14 @@ class Monitor:
         self.available = Path("/proc/stat").exists()
         self.history: deque[dict[str, Any]] = deque(maxlen=HISTORY)
         self.latest: dict[str, Any] | None = None
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()  # one sample at a time
+        self._start_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._last_request = 0.0
         self._prev: dict[str, Any] = {}
         self._filesystems_cache: tuple[float, list[dict[str, Any]]] = (0.0, [])
-        self._hung: dict[str, float] = {}
+        self._statvfs_waiting: dict[str, threading.Thread] = {}  # mount -> statvfs still waiting for its answer
+        self._gpu_hung_until = 0.0  # nvidia-smi did not answer: not asked again before then
         self._projects: tuple[float, dict[str, str]] = (0.0, {})
         self._users: dict[int, str] = {}
         self._cpu_model = ""
@@ -107,17 +113,23 @@ class Monitor:
     # ------------------------------------------------------------- public
     def snapshot(self, history: bool = False) -> dict[str, Any]:
         self._last_request = time.monotonic()
-        if self._thread is None or not self._thread.is_alive():
-            self._thread = threading.Thread(target=self._loop, name="cryoplug-monitor", daemon=True)
-            self._thread.start()
+        with self._start_lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._loop, name="cryoplug-monitor", daemon=True)
+                self._thread.start()
         latest = self.latest
         if latest is None or time.time() - latest["time"] > 3 * INTERVAL or (self.available and (latest.get("cpu") or {}).get("total") is None):
-            with self._lock:  # first look (or the sampler just stopped): sample now, twice for the rates
-                if self.latest is None or time.time() - self.latest["time"] > 3 * INTERVAL:
-                    self._sample()
-                if self.available and (self.latest.get("cpu") or {}).get("total") is None:
-                    time.sleep(0.3)
-                    self._sample()
+            # first look (or the sampler just stopped): sample now, twice for the rates; while a slow sample
+            # holds the lock (nvidia-smi taking its time), the last one is served
+            if self._lock.acquire(timeout=GPU_TIMEOUT + 2):
+                try:
+                    if self.latest is None or time.time() - self.latest["time"] > 3 * INTERVAL:
+                        self._sample()
+                    if self.available and (self.latest.get("cpu") or {}).get("total") is None:
+                        time.sleep(0.3)
+                        self._sample()
+                finally:
+                    self._lock.release()
             latest = self.latest
         data = dict(latest or {})
         if history:
@@ -125,11 +137,34 @@ class Monitor:
         return data
 
     def gpu_memory(self, max_age: float = 30.0) -> dict[int, float]:
-        """Memory used on each GPU (MiB), if a recent sample exists."""
+        """Memory used on each GPU (MiB): from a recent sample, otherwise asked to nvidia-smi now (the automatic
+        GPU choice of the scheduler must also see the programs started outside CryoPlug)."""
         latest = self.latest
-        if not latest or time.time() - latest["time"] > max_age:
-            return {}
-        return {g["index"]: g.get("memory_used") or 0.0 for g in latest.get("gpus", [])}
+        if latest and time.time() - latest["time"] <= max_age and latest.get("gpus"):
+            return {g["index"]: g.get("memory_used") or 0.0 for g in latest["gpus"]}
+        out = self._nvidia_smi(["--query-gpu=index,memory.used", "--format=csv,noheader,nounits"], timeout=5)
+        used = {}
+        for line in out[1].splitlines() if out and out[0] == 0 else []:
+            fields = [f.strip() for f in line.split(",")]
+            if len(fields) >= 2 and fields[0].isdigit() and _num(fields[1]) is not None:
+                used[int(fields[0])] = _num(fields[1])
+        return used
+
+    def _nvidia_smi(self, args: list[str], timeout: float) -> tuple[int, str, str] | str | None:
+        """nvidia-smi's answer; None without nvidia-smi; an error message when it fails or hangs (then it is left
+        alone for a few minutes, so that stuck processes do not pile up)."""
+        if not self.nvidia_smi:
+            return None
+        if time.monotonic() < self._gpu_hung_until:
+            return "nvidia-smi does not answer (GPU driver busy or stuck); trying again in a few minutes"
+        try:
+            out = _run([self.nvidia_smi, *args], timeout=timeout)
+        except OSError as exc:
+            return f"nvidia-smi: {exc}"
+        if out is None:
+            self._gpu_hung_until = time.monotonic() + GPU_RETRY
+            return f"nvidia-smi did not answer within {timeout:g} s (GPU driver busy or stuck)"
+        return out
 
     # ------------------------------------------------------------- loop
     def _loop(self) -> None:
@@ -218,19 +253,16 @@ class Monitor:
                 "swap_total": swap_total, "swap_used": swap_used}
 
     def _gpus(self) -> tuple[list[dict[str, Any]], str | None, dict[int, list[dict[str, Any]]]]:
-        if not self.nvidia_smi:
+        out = self._nvidia_smi([f"--query-gpu={','.join(GPU_FIELDS)}", "--format=csv,noheader,nounits"], timeout=GPU_TIMEOUT)
+        if out is None:
             return [], None, {}
-        try:
-            out = subprocess.run([self.nvidia_smi, f"--query-gpu={','.join(GPU_FIELDS)}", "--format=csv,noheader,nounits"],
-                                 capture_output=True, text=True, timeout=8)
-            apps = subprocess.run([self.nvidia_smi, "--query-compute-apps=pid,gpu_uuid,used_memory", "--format=csv,noheader,nounits"],
-                                  capture_output=True, text=True, timeout=8)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return [], f"nvidia-smi: {exc}", {}
-        if out.returncode != 0:
-            return [], (out.stderr or out.stdout or "nvidia-smi failed").strip()[-300:], {}
+        if isinstance(out, str):
+            return [], out, {}
+        if out[0] != 0:
+            return [], (out[2] or out[1] or "nvidia-smi failed").strip()[-300:], {}
+        apps = self._nvidia_smi(["--query-compute-apps=pid,gpu_uuid,used_memory", "--format=csv,noheader,nounits"], timeout=GPU_TIMEOUT)
         gpus, by_uuid = [], {}
-        for line in out.stdout.splitlines():
+        for line in out[1].splitlines():
             f = [x.strip() for x in line.split(",")]
             if len(f) < len(GPU_FIELDS) or not f[0].isdigit():
                 continue
@@ -242,7 +274,7 @@ class Monitor:
             gpus.append(gpu)
             by_uuid[gpu["uuid"]] = gpu
         procs: dict[int, list[dict[str, Any]]] = {}
-        for line in apps.stdout.splitlines() if apps.returncode == 0 else []:
+        for line in apps[1].splitlines() if isinstance(apps, tuple) and apps[0] == 0 else []:
             f = [x.strip() for x in line.split(",")]
             if len(f) >= 3 and f[0].isdigit() and f[1] in by_uuid:
                 entry = {"pid": int(f[0]), "gpu": by_uuid[f[1]]["index"], "memory": _num(f[2])}
@@ -297,12 +329,8 @@ class Monitor:
             seen.add(device)
             mounts.append((device, mount, fstype))
         for device, mount, fstype in mounts:
-            if time.monotonic() - self._hung.get(mount, -1e9) < 300:
-                result.append({"mount": mount, "device": device, "type": fstype, "error": "not responding"})
-                continue
-            st = _statvfs(mount)
+            st = self._statvfs(mount)
             if st == "hung":
-                self._hung[mount] = time.monotonic()
                 result.append({"mount": mount, "device": device, "type": fstype, "error": "not responding"})
                 continue
             if st is None or not st.f_blocks:
@@ -319,6 +347,30 @@ class Monitor:
         result.sort(key=lambda fs: (not fs.get("roles"), fs["mount"]))
         self._filesystems_cache = (time.monotonic(), result)
         return result
+
+    def _statvfs(self, path: str, timeout: float = 2.0) -> os.statvfs_result | None | str:
+        """os.statvfs that gives up on a filesystem that does not answer (a stale NFS mount blocks forever).
+        A mount keeps at most one waiting thread: it is asked again once that one got its answer."""
+        waiting = self._statvfs_waiting.get(path)
+        if waiting is not None:
+            if waiting.is_alive():
+                return "hung"
+            del self._statvfs_waiting[path]
+        result: dict[str, Any] = {}
+
+        def run() -> None:
+            try:
+                result["value"] = os.statvfs(path)
+            except OSError:
+                result["value"] = None
+
+        thread = threading.Thread(target=run, name="cryoplug-statvfs", daemon=True)
+        thread.start()
+        thread.join(timeout)
+        if thread.is_alive():
+            self._statvfs_waiting[path] = thread
+            return "hung"
+        return result.get("value")
 
     def _project_dirs(self) -> dict[str, str]:
         checked, mapping = self._projects

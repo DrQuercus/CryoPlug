@@ -102,7 +102,7 @@ class Scheduler:
             if lane_cfg.type == "local" and lane_cfg.gpus and need > 0:
                 busy = self._busy_gpus(active)
                 wanted = [g for g in resources.get("gpu_ids") or [] if g in lane_cfg.gpus]
-                if wanted:  # GPUs chosen in the job's settings
+                if wanted and len(wanted) == need:  # GPUs chosen in the job's settings (and still those of the lane)
                     taken = [g for g in wanted if g in busy]
                     if taken:
                         self._message(job, "Waiting for " + ", ".join(f"GPU {g} (used by {busy[g]})" for g in taken))

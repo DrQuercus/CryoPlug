@@ -33,6 +33,8 @@ def fake_nvidia_smi(tmp_path) -> Path:
     path = tmp_path / "nvidia-smi"
     _script(path, f"""
 case "$1" in
+  --query-gpu=index,memory.used)
+    echo "0, 20480"; echo "1, 410";;
   --query-gpu=index,name,memory.total,uuid*)
     echo "0, NVIDIA RTX A6000, 49140, GPU-aaaa"; echo "1, NVIDIA RTX A6000, 49140, GPU-bbbb";;
   --query-gpu=*)
@@ -77,9 +79,15 @@ def test_lane_settings_are_checked():
     assert cluster.partitions == ["gpu", "gpu-long"] and cluster.sbatch_lines() == ["#SBATCH --constraint=a100", "#SBATCH --exclude=node12"]
     for bad, message in (({"name": "two words"}, "Lane name"), ({"type": "pbs"}, "type must be"), ({"gpus": [64]}, "from 0 to 63"),
                          ({"gpus": "a"}, "whole numbers"), ({"max_jobs": 0}, "between 1"), ({"partition": "gpu;rm"}, "invalid partition"),
-                         ({"time_limit": "2 days"}, "time limit"), ({"mem": "lots"}, "memory"), ({"colour": "red"}, "unknown setting")):
+                         ({"time_limit": "2 days"}, "time limit"), ({"time_limit": "١٢:00:00"}, "time limit"), ({"mem": "lots"}, "memory"),
+                         ({"mem": "1.5G"}, "memory"), ({"colour": "red"}, "unknown setting"),
+                         ({"type": "cluster", "submit_cmd": ""}, "submit command needs {script}"),
+                         ({"type": "cluster", "status_cmd": "squeue"}, "status command needs {cluster_job_id}"),
+                         ({"type": "cluster", "kill_cmd": " "}, "cancel command needs")):
         with pytest.raises(ValueError, match=message):
             LaneConfig.from_dict({"name": "x", **bad})
+    # the default partition is always allowed, before those users may pick
+    assert LaneConfig.from_dict({**SLURM, "partitions": ["gpu-long"]}).all_partitions == ["gpu", "gpu-long"]
 
 
 def test_slurm_script_written_from_the_settings(tmp_path):
@@ -100,6 +108,9 @@ def test_slurm_script_written_from_the_settings(tmp_path):
     own = LaneConfig.from_dict({**SLURM, "script_template": "#PBS -l ngpus={num_gpus}\necho ${PBS_JOBID} {partition}\n{worker_cmd}\n"})
     text = ClusterLane(own).render_script(job, tmp_path / "J7", {"num_gpus": 1, "num_cpus": 4})
     assert "#PBS -l ngpus=1" in text and "${PBS_JOBID} gpu" in text and "worker" in text
+    titled = LaneConfig.from_dict({**SLURM, "extra_sbatch": "--comment={job_title}"})
+    text = ClusterLane(titled).render_script({**job, "title": "x\ntouch /tmp/pwned; $(reboot)"}, tmp_path / "J7", {"num_gpus": 1, "num_cpus": 1})
+    assert "#SBATCH --comment=x_touch _tmp_pwned_ __reboot_" in text and "\ntouch" not in text
     assert generated_script(LaneConfig.from_dict({"name": "c", "type": "cluster", "time_limit": ""}), {
         "project_uid": "P1", "job_uid": "J1", "job_dir": "/x", "num_gpus": 0, "num_cpus": 1, "partition": "", "account": "",
         "qos": "", "time": "", "mem": "", "gres": "gpu", "setup": "", "worker_cmd": "w"}).count("#SBATCH") == 4
@@ -130,9 +141,13 @@ def test_lanes_edited_in_settings(manager, tmp_path):
     manager.db.update_job(p["uid"], job["uid"], status="killed")
     # back to config.toml; a job prepared for a lane that is gone runs on the default lane
     other = gpu_job(manager, p["uid"], lane="slurm")
+    prepared = gpu_job(manager, p["uid"], lane="slurm", requested={"partition": "gpu-long", "num_cpus": 2})
     manager.save_lanes(None)
     assert manager.lanes_source == "config" and list(manager.lanes) == ["local"]
     assert manager.queue_job(p["uid"], other["uid"])["lane"] == "local"
+    edited = manager.update_job(p["uid"], prepared["uid"], params={"command": "true", "use_gpu": True})
+    assert edited["requested"] == {"num_cpus": 2}  # the partition no longer applies
+    assert manager.clone_job(p["uid"], prepared["uid"])["lane"] in (None, "local")
 
 
 def test_compute_choices_of_a_job(manager):
@@ -166,6 +181,10 @@ def test_compute_choices_of_a_job(manager):
     assert drgn["resources"]["num_gpus"] == 2 and drgn["requested"]["gpu_ids"] == [0, 1]
     rsr = manager.create_job(puid, "phenix_real_space_refine", {"nproc": 12})
     assert rsr["resources"]["num_cpus"] == 12
+    with pytest.raises(ManagerError, match="takes its CPUs from the parameter 'Processors'"):
+        manager.create_job(puid, "phenix_real_space_refine", {"nproc": 12}, requested={"num_cpus": 2})
+    on_default = gpu_job(manager, puid, lane="slurm", requested={"partition": "gpu"})  # the default partition, named
+    assert on_default["requested"]["partition"] == "gpu"
 
 
 def test_scheduler_gives_the_chosen_or_least_loaded_gpu(manager):
@@ -189,6 +208,15 @@ def test_scheduler_gives_the_chosen_or_least_loaded_gpu(manager):
     assert waiting["status"] == "queued" and waiting["message"] == f"Waiting for GPU 1 (used by {puid}/{first['uid']})"
     manager.kill_job(puid, second["uid"])
     manager.db.update_job(puid, first["uid"], status="killed", gpus=[])
+
+    # chosen GPUs that are no longer all on the lane: the choice is dropped, not half applied
+    two = gpu_job(manager, puid, command="printenv CUDA_VISIBLE_DEVICES > gpus.txt")
+    manager.queue_job(puid, two["uid"])
+    manager.db.update_job(puid, two["uid"], resources={"num_gpus": 2, "num_cpus": 1, "gpu_ids": [0, 1]})
+    manager.save_lanes([{**manager.config.lanes[0].to_dict(), "gpus": [1, 2]}])
+    run_until_done(manager, puid, [two["uid"]])
+    assert (manager.job_dir(puid, two["uid"]) / "gpus.txt").read_text().strip() == "1,2"
+    manager.save_lanes(None)
 
     # automatic: the free GPU with the least memory in use (another program fills GPU 0)
     class FakeMonitor:
@@ -242,6 +270,27 @@ def test_monitor_reads_the_hardware(manager, fake_nvidia_smi, tmp_path):
         worker.wait()
 
 
+def test_gpu_memory_without_a_recent_sample(manager, fake_nvidia_smi):
+    manager.config.nvidia_smi = str(fake_nvidia_smi)
+    mon = Monitor(manager.config, manager)
+    assert mon.latest is None and mon.gpu_memory() == {0: 20480.0, 1: 410.0}
+
+
+def test_hung_nvidia_smi_does_not_block(manager, tmp_path, monkeypatch):
+    hung = tmp_path / "nvidia-smi"
+    _script(hung, "exec sleep 30\n")
+    manager.config.nvidia_smi = str(hung)
+    monkeypatch.setattr("cryoplug.monitor.GPU_TIMEOUT", 0.5)
+    mon = Monitor(manager.config, manager)
+    start = time.monotonic()
+    gpus, error, _ = mon._gpus()
+    assert gpus == [] and "did not answer" in error and time.monotonic() - start < 5
+    start = time.monotonic()
+    gpus, error, _ = mon._gpus()  # not asked again for a while
+    assert "trying again" in error and time.monotonic() - start < 0.5
+    assert mon.gpu_memory() == {} and detect_gpus(None) == []
+
+
 def test_monitor_without_gpus_or_with_a_broken_nvidia_smi(manager, tmp_path):
     manager.config.nvidia_smi = ""
     mon = Monitor(manager.config, manager)
@@ -284,6 +333,9 @@ def test_compute_api(manager, fake_nvidia_smi, fake_slurm):
         assert [(lane["name"], lane["partitions"], lane["time_limit"]) for lane in info["lanes"]] == [
             ("local", [], "48:00:00"), ("slurm", ["gpu", "gpu-long"], "24:00:00")]
         assert client.put("/api/lanes", json={"lanes": [{"name": "bad name"}]}).status_code == 400
+        for body in ({}, {"lanes": None}, {"lanes": "local"}):  # never a silent reset
+            assert client.put("/api/lanes", json=body).status_code == 400
+        assert client.get("/api/lanes").json()["source"] == "settings"
         hw = client.get("/api/hardware").json()
         assert [g["name"] for g in hw["gpus"]] == ["NVIDIA RTX A6000"] * 2 and hw["cpus"] == os.cpu_count()
         local = client.post("/api/lanes/test", json={"lane": {"name": "x", "gpus": [0, 3]}}).json()

@@ -62,8 +62,8 @@ class ToolConfig:
 
 LANE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
 SLURM_WORD_RE = re.compile(r"[A-Za-z0-9._,:+-]*")
-SLURM_TIME_RE = re.compile(r"(\d+-)?\d+(:\d{1,2}){0,2}|UNLIMITED|INFINITE", re.IGNORECASE)
-SLURM_MEM_RE = re.compile(r"\d+(\.\d+)?[KMGT]?B?", re.IGNORECASE)
+SLURM_TIME_RE = re.compile(r"(\d+-)?\d+(:\d{1,2}){0,2}|UNLIMITED|INFINITE", re.IGNORECASE | re.ASCII)
+SLURM_MEM_RE = re.compile(r"\d+[KMGT]?", re.IGNORECASE | re.ASCII)  # sbatch --mem: a whole number and a unit
 
 
 @dataclass
@@ -100,6 +100,11 @@ class LaneConfig:
     @property
     def custom_script(self) -> bool:
         return bool(self.script_template.strip()) and self.script_template.strip() != DEFAULT_SLURM_TEMPLATE.strip()
+
+    @property
+    def all_partitions(self) -> list[str]:
+        """The partitions jobs may use: the default one first, then those users may pick."""
+        return list(dict.fromkeys(p for p in [self.partition, *self.partitions] if p))
 
     def sbatch_lines(self) -> list[str]:
         """The extra #SBATCH lines, normalised (a bare option gets the #SBATCH prefix)."""
@@ -159,6 +164,11 @@ class LaneConfig:
             raise ValueError(f"Lane '{name}': time limit as SLURM writes it (48:00:00, 2-00:00:00...)")
         if lane.mem and not SLURM_MEM_RE.fullmatch(lane.mem):
             raise ValueError(f"Lane '{name}': memory as 64G, 128000M...")
+        if lane.type == "cluster":  # without them, jobs could not be submitted, followed or cancelled
+            for key, placeholder, what in (("submit_cmd", "{script}", "submit"), ("status_cmd", "{cluster_job_id}", "status"),
+                                           ("kill_cmd", "{cluster_job_id}", "cancel")):
+                if placeholder not in getattr(lane, key):
+                    raise ValueError(f"Lane '{name}': the {what} command needs {placeholder}")
         for line in lane.extra_sbatch.splitlines():
             line = line.strip()
             if line and not (line.startswith("#SBATCH") or line.startswith("-")):

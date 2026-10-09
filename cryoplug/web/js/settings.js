@@ -520,7 +520,7 @@ function laneDialog(lane, ctx, { type = 'local', copy = false } = {}) {
       field('Time limit per job', time, '--time; users can ask for another one.'),
       field('Memory per job', mem, '--mem; empty: the cluster default.'),
       field('Account', account, '--account (empty: none).'), field('QOS', qos, '--qos (empty: none).'),
-      field('GPU resource', gres, 'GPU jobs ask --gres=<this>:<number> (e.g. gpu or gpu:a100).')),
+      field('GPU resource', gres, 'GPU jobs ask --gres=<this>:<number> (e.g. gpu or gpu:a100). Empty: no --gres line.')),
     field('More #SBATCH options', extra, 'One per line, with or without “#SBATCH”.'),
     field('Before the job starts', setup, 'Shell lines run on the node before CryoPlug’s worker (modules, conda…).'), partList);
   const advanced = h('details', { class: 'help-details' }, h('summary', {}, 'Advanced'),

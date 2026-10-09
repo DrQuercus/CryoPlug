@@ -59,6 +59,7 @@ export function holderLabel(holder) {
 
 // Builder state: b.lane, b.requested ({ gpu_ids, num_cpus, partition, time, mem }), b.gpuMode ('auto' | 'choose').
 export function initCompute(b, editing) {
+  b.lane = laneOf(b.lane)?.name || ''; // a job prepared for a lane deleted since goes to the default one
   b.requested = { gpu_ids: [], num_cpus: '', partition: '', time: '', mem: '', ...(editing?.requested || {}) };
   b.gpuMode = (b.requested.gpu_ids || []).length ? 'choose' : 'auto';
 }
@@ -78,7 +79,7 @@ export function requestedBody(b, t) {
   const req = b.requested || {};
   const out = {};
   const cpus = String(req.num_cpus ?? '').trim();
-  if (cpus) out.num_cpus = Number(cpus);
+  if (cpus && !t.cpu_param) out.num_cpus = Number(cpus);
   const need = gpuNeed(t, b.params);
   if (managesGpus(lane) && need > 0 && b.gpuMode === 'choose') {
     const ids = (req.gpu_ids || []).filter((g) => lane.gpus.includes(g));
@@ -185,11 +186,14 @@ export function computeSection(b, t) {
     const laneInfo = [lane.description, `up to ${plural(lane.max_jobs, 'job')} at once`].filter(Boolean).join(' · ');
     const cpuDef = cpuDefault(t, b.params);
     const cpuParam = t.cpu_param ? t.params.find((x) => x.name === t.cpu_param) : null;
-    const cpus = h('div', { class: 'field' }, h('label', { for: 'b-cpus' }, 'CPU threads'),
-      h('input', { id: 'b-cpus', type: 'number', min: 1, max: 1024, step: 1, value: req.num_cpus || '', placeholder: String(cpuDef),
-        oninput: (e) => { req.num_cpus = e.target.value; } }),
-      h('div', { class: 'help' }, cpuParam ? `Default: ${cpuDef}, from “${cpuParam.label}”.` : `Default for this job: ${cpuDef}.`,
-        lane.type === 'cluster' ? ' Sent as --cpus-per-task.' : ' Sets the threads of the program (OMP_NUM_THREADS).'));
+    // a program started with N processes (Phenix nproc) gets N CPUs: set by its parameter, not here
+    const cpus = cpuParam ? h('div', { class: 'field' }, h('label', {}, 'CPU threads'), h('div', { class: 'compute-fixed' }, String(cpuDef)),
+      h('div', { class: 'help' }, `From “${cpuParam.label}” in the parameters${lane.type === 'cluster' ? ' (--cpus-per-task)' : ''}.`))
+      : h('div', { class: 'field' }, h('label', { for: 'b-cpus' }, 'CPU threads'),
+        h('input', { id: 'b-cpus', type: 'number', min: 1, max: 1024, step: 1, value: req.num_cpus || '', placeholder: String(cpuDef),
+          oninput: (e) => { req.num_cpus = e.target.value; } }),
+        h('div', { class: 'help' }, `Default for this job: ${cpuDef}.`,
+          lane.type === 'cluster' ? ' Sent as --cpus-per-task.' : ' Sets the threads of the program (OMP_NUM_THREADS).'));
     const parts = [h('div', { class: 'field' }, h('label', { for: 'b-lane' }, 'Lane'), laneSel,
       laneInfo ? h('div', { class: 'help' }, laneInfo) : null)];
     parts.push(gpuBlock(lane, need));
