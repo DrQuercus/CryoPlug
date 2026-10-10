@@ -80,6 +80,7 @@ def train(rest):
     for opt in ("--poses", "--ctf", "-o", "--ind", "--datadir", "--enc-dim", "--enc-layers", "--dec-dim", "--dec-layers",
                 "-b", "--beta", "--seed", "--load"):
         p.add_argument(opt)
+    p.add_argument("--domain", default="fourier", choices=["fourier", "hartley"])
     p.add_argument("--zdim", type=int)
     p.add_argument("-n", type=int)
     p.add_argument("--checkpoint", type=int, default=1)
@@ -89,6 +90,9 @@ def train(rest):
     a = p.parse_args(rest)
     if a.particles.endswith(".cs") and not a.datadir:
         sys.exit("Cannot find the images: give --datadir")
+    if a.do_pose_sgd and a.domain != "hartley":  # as train_vae.py of cryoDRGN 4.3.1
+        print('Traceback (most recent call last):\n    assert args.domain == "hartley", "Need to use --domain hartley if doing pose SGD"\nAssertionError: Need to use --domain hartley if doing pose SGD', flush=True)
+        sys.exit(1)
     if a.no_analysis and not ONE_BASED:
         sys.exit("train_vae: error: unrecognized arguments: --no-analysis")
     n = n_images(a.particles, a.ind)
@@ -184,6 +188,8 @@ def backproject(rest):
     for flag in ("--uninvert-data", "--lazy"):
         p.add_argument(flag, action="store_true")
     a = p.parse_args(rest)
+    if os.environ.get("FAKE_CRYODRGN_BACKPROJECT_FAIL"):
+        sys.exit("RuntimeError: cannot read the images")
     ctf = load_ctf(a.ctf)
     box = image_box(a.particles)
     apix = float(ctf[0, 1]) * float(ctf[0, 0]) / box
@@ -314,7 +320,7 @@ def main():
         with open(a.zfile, "rb") as fh:
             z = pickle.load(fh)
         path = []
-        for s, e in zip(a.anchors[:-1], a.anchors[1:]):
+        for s, e in zip(a.anchors[:-1], a.anchors[1:], strict=True):
             for t in np.linspace(0, 1, 15):
                 q = z[s] * (1 - t) + z[e] * t
                 i = int(np.argmin(((z - q) ** 2).sum(1)))

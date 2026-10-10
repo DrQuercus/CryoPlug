@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -416,6 +417,7 @@ class SelectParticles(JobType):
 
 # --------------------------------------------------------------- particle images
 _READERS: dict[tuple[str, float, str], Any] = {}
+_READERS_LOCK = threading.Lock()  # the API serves requests from several threads
 
 
 def _output_datadir(project_dir: Path, source: Path, outputs: list[dict[str, Any]]) -> str | None:
@@ -470,12 +472,12 @@ def particle_montage_png(project_dir: Path, output: dict[str, Any], ids: list[in
     """Contact sheet of particle images (low-pass filtered so the particles are visible) as PNG bytes."""
     from cryoplug import particles as pt
     from cryoplug.imaging import png_bytes
-    reader, rows = latent_image_reader(project_dir, output.get("meta") or {}, outputs or [])
-    n = int((output.get("meta") or {}).get("n_particles") or (len(rows) if rows is not None else reader.n))
-    tiles = []
-    for i in ids:
-        if not 0 <= i < n:
-            raise IndexError(f"particle {i} does not exist (0 to {n - 1})")
-        row = int(rows[i]) if rows is not None else i
-        tiles.append(pt.particle_tile(reader.image(row), size))
-    return png_bytes(pt.montage(tiles, per_row=per_row))
+    with _READERS_LOCK:  # readers are shared (and closed when evicted): one request at a time
+        reader, rows = latent_image_reader(project_dir, output.get("meta") or {}, outputs or [])
+        n = int((output.get("meta") or {}).get("n_particles") or (len(rows) if rows is not None else reader.n))
+        images = []
+        for i in ids:
+            if not 0 <= i < n:
+                raise IndexError(f"particle {i} does not exist (0 to {n - 1})")
+            images.append(reader.image(int(rows[i]) if rows is not None else i))
+    return png_bytes(pt.montage([pt.particle_tile(img, size) for img in images], per_row=per_row))

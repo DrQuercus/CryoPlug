@@ -13,10 +13,13 @@ from cryoplug.jobs.cryodrgn import (
     EPOCH_RE,
     assess_backprojection,
     covariate_r2,
+    crop_box,
     fmt_duration,
     loss_trend,
     model_preset,
     parse_losses,
+    projection_tiles,
+    training_failure_hint,
 )
 from cryoplug.mrc import MapVolume
 
@@ -334,6 +337,11 @@ def test_old_cryodrgn_versions(manager, drgn_project, monkeypatch):
                {"latent": {"job": train["uid"], "output": "latent"}})
     alog = log_of(manager, puid, ana["uid"])
     assert "--n-per-pc 4" not in alog and "needs 4.2" in alog and len(_outs(ana)["pc1"]["files"]) == 10
+    # epochs numbered from 0: a checkpoint every epoch, so that the last one (not weights.pkl only) is analysed
+    every = _run(manager, puid, "cryodrgn_train", {"box": 16, "zdim": 2, "epochs": 4, "checkpoint": 2, "ksample": 3,
+                                                   "check_inputs": "no check"}, {"particles": {"job": imp["uid"], "output": "particles"}})
+    elog = log_of(manager, puid, every["uid"])
+    assert "numbers the epochs from 0" in elog and "--checkpoint" not in elog and _outs(every)["latent"]["meta"]["epoch"] == 3
 
 
 def test_training_parameters(manager, drgn_project):
@@ -348,7 +356,7 @@ def test_training_parameters(manager, drgn_project):
                   "beta": "0.5", "pose_sgd": True, "seed": 7, "checkpoint": 2, "batch_size": 8},
                  {"particles": {"job": imp["uid"], "output": "particles"}})
     log = log_of(manager, puid, train["uid"])
-    for flag in ("--enc-dim 1024", "--beta 0.5", "--do-pose-sgd", "--seed 7", "--checkpoint 2", "-b 8"):
+    for flag in ("--enc-dim 1024", "--beta 0.5", "--do-pose-sgd --domain hartley", "--seed 7", "--checkpoint 2", "-b 8"):
         assert flag in log, flag
     workdir = manager.project_dir(puid) / _outs(train)["latent"]["meta"]["workdir"]
     assert sorted(p.name for p in workdir.glob("weights.*.pkl")) == ["weights.2.pkl", "weights.4.pkl"]
@@ -379,3 +387,65 @@ def test_particle_images_api(manager, trained, cs_particles):
     with TestClient(app, base_url="http://localhost:39500") as client:
         r = client.get(f"/api/projects/{p['uid']}/jobs/{va['uid']}/particle-images", params={"ids": "0,160"})
         assert r.status_code == 200, r.text
+
+
+def test_failure_hints_and_thumbnails(tmp_path):
+    class Ctx:
+        log_path = tmp_path / "job.log"
+    Ctx.log_path.write_text("$ cryodrgn downsample particles.cs -D 128\nDownsampling 1,000 images\n$ cryodrgn train_vae x\n"
+                            "Traceback (most recent call last):\nAssertionError: something else\n")
+    assert training_failure_hint(Ctx(), amp=False) == ""  # "amp" inside "downsample" is not mixed precision
+    assert "Mixed precision" in training_failure_hint(Ctx(), amp=True)
+    Ctx.log_path.write_text('$ cryodrgn train_vae x\n    assert args.domain == "hartley"\nAssertionError\n')
+    assert "hartley" in training_failure_hint(Ctx())
+    Ctx.log_path.write_text("$ cryodrgn train_vae x\ntorch.OutOfMemoryError: CUDA out of memory\n")
+    assert "batch size" in training_failure_hint(Ctx())
+    # a molecule against a face of the box: the crop stays a cube inside the box, tiles stay square
+    region = np.zeros((64, 64, 64), bool)
+    region[2:30, 40:62, 50:63] = True
+    crop = crop_box(region)
+    assert all(sl.stop - sl.start == crop[0].stop - crop[0].start and 0 <= sl.start and sl.stop <= 64 for sl in crop)
+    tiles = projection_tiles(np.random.default_rng(0).random((2, 64, 64, 64)).astype(np.float32), size=48, crop=crop)
+    assert {t.shape for row in tiles for t in row} == {(48, 48)}
+
+
+def test_preparation_reuse_rules(manager, drgn_project, monkeypatch):
+    puid, imp = drgn_project
+    bp = _run(manager, puid, "cryodrgn_backproject", {"box": 16, "images": 50}, {"particles": {"job": imp["uid"], "output": "particles"}})
+    prepared = {"particles": {"job": bp["uid"], "output": "particles_prepared"}}
+    # another image size from a prepared set: the poses are read from the original particle file, not the image stack
+    full = _run(manager, puid, "cryodrgn_train", {"box": 0, "zdim": 2, "epochs": 2, "ksample": 3, "check_inputs": "no check"}, prepared)
+    log = log_of(manager, puid, full["uid"])
+    assert "parse_pose_csparc" in log and "particles.cs" in log.split("parse_pose_csparc")[1].split("\n")[0]
+    assert _outs(full)["latent"]["meta"]["box"] == 32
+    # poses read another way: prepared again
+    het = _run(manager, puid, "cryodrgn_train", {"box": 16, "zdim": 2, "epochs": 2, "ksample": 3, "check_inputs": "no check",
+                                                 "pose_source": "heterogeneous refinement"}, prepared)
+    hlog = log_of(manager, puid, het["uid"])
+    assert "prepared again" in hlog and "--hetrefine" in hlog
+    assert _outs(het)["latent"]["meta"]["prepared"]["pose_source"] == "heterogeneous refinement"
+    # the input check cannot run: with "stop if it fails" the training does not start
+    monkeypatch.setenv("FAKE_CRYODRGN_BACKPROJECT_FAIL", "1")
+    stop = _run(manager, puid, "cryodrgn_train", {"box": 16, "zdim": 2, "epochs": 2, "check_inputs": "check, stop if it fails"},
+                prepared, ok=False)
+    assert stop["status"] == "failed" and "could not run" in stop["error"] and "train_vae" not in log_of(manager, puid, stop["uid"])
+
+
+def test_convergence_with_many_checkpoints_and_landscape_mask(manager, drgn_project, synthetic, tmp_path):
+    puid, imp = drgn_project
+    train = _run(manager, puid, "cryodrgn_train", {"box": 16, "zdim": 2, "epochs": 130, "ksample": 3, "check_inputs": "no check"},
+                 {"particles": {"job": imp["uid"], "output": "particles"}})
+    latent = {"latent": {"job": train["uid"], "output": "latent"}}
+    conv = _run(manager, puid, "cryodrgn_convergence", {"particles": 2, "epochs": "3, 50, 130"}, latent)
+    assert _outs(conv)["rep_1"]["meta"]["frame_labels"] == ["Epoch 3", "Epoch 50", "Epoch 130"]
+    # a mask of the original particles (32 px at 2 A) resampled to the 16 px volumes (4 A)
+    mask = tmp_path / "mask.mrc"
+    data = np.zeros((32, 32, 32), np.float32)
+    data[8:24, 8:24, 8:24] = 1
+    MapVolume(data=data, voxel=np.array([2.0] * 3)).write(mask)
+    imported = _run(manager, puid, "import_maps", {"mask": str(mask), "compute_fsc": False})
+    land = _run(manager, puid, "cryodrgn_landscape", {"sketch": 20, "states": 3, "box": 32},
+                {**latent, "mask": {"job": imported["uid"], "output": "mask"}})
+    written = MapVolume.read(manager.project_dir(puid) / land["uid"] / "landscape_mask.mrc")
+    assert written.data.shape == (16, 16, 16) and written.pixel_size == pytest.approx(4.0)
+    assert 300 < written.data.sum() < 700 and "--mask" in log_of(manager, puid, land["uid"])

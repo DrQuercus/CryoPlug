@@ -287,13 +287,19 @@ class TrainingMonitor:
 
 
 # --------------------------------------------------------- particle preparation
-def _prepared(ctx: JobContext, prep: dict, box: int) -> dict | None:
+def _prepared(ctx: JobContext, prep: dict, box: int, pose_source: str) -> dict | None:
+    """An earlier preparation that fits: same image size, poses read the same way, files still there."""
     if not prep or int(prep.get("box") or 0) != box:
+        return None
+    if prep.get("pose_source", POSE_SOURCES[0]) != pose_source:
+        ctx.log(f"The particles prepared at {box} px read the poses as '{prep.get('pose_source', POSE_SOURCES[0])}', not "
+                f"'{pose_source}': they are prepared again")
         return None
     paths = {k: ctx.abs(prep[k]) for k in ("stack", "poses", "ctf") if prep.get(k)}
     if len(paths) < 3 or not all(p.exists() for p in paths.values()):
         return None
-    return {**{k: str(v) for k, v in paths.items()}, "datadir": prep.get("datadir"), "box": box}
+    return {**{k: str(v) for k, v in paths.items()}, "datadir": prep.get("datadir"), "box": box,
+            "pose_source": pose_source}
 
 
 def prepare_particles(ctx: JobContext, particles: InputData, box: int, pose_source: str) -> dict[str, Any]:
@@ -311,11 +317,11 @@ def prepare_particles(ctx: JobContext, particles: InputData, box: int, pose_sour
     if box and box % 2:
         raise JobError(f"The image size must be even (got {box})")
     n_all = int(meta.get("n_particles") or 0)
-    found = _prepared(ctx, meta.get("cryodrgn") or {}, box)
+    found = _prepared(ctx, meta.get("cryodrgn") or {}, box, pose_source)
     if found:
         ctx.log(f"Reusing the particles prepared at {box} px: {found['stack']}")
         return {**found, "ind": None, "reused": True, "n": n_all}
-    parent = _prepared(ctx, meta.get("parent_cryodrgn") or {}, box)
+    parent = _prepared(ctx, meta.get("parent_cryodrgn") or {}, box, pose_source)
     if parent and meta.get("parent_indices"):
         ind_path = ctx.abs(meta["parent_indices"])
         try:
@@ -327,7 +333,10 @@ def prepare_particles(ctx: JobContext, particles: InputData, box: int, pose_sour
 
     exe = ctx.executable("cryodrgn")
     fmt = meta.get("format", "cs")
-    src = particles.files[0]
+    # the original metadata file (for a set prepared earlier at another size, files[0] is its image stack)
+    src = str(ctx.abs(meta["particles_file"])) if meta.get("particles_file") else particles.files[0]
+    if not Path(src).exists():
+        raise JobError(f"The particle file {src} is not available any more")
     datadir = meta.get("datadir")
     out = ctx.path("prepared")
     out.mkdir(exist_ok=True)
@@ -358,16 +367,18 @@ def prepare_particles(ctx: JobContext, particles: InputData, box: int, pose_sour
         stack_datadir = None
     else:
         stack, stack_datadir = Path(src), datadir
-    prep = {"box": box, "stack": ctx.rel(stack), "poses": ctx.rel(poses), "ctf": ctx.rel(ctf), "datadir": stack_datadir}
+    prep = {"box": box, "stack": ctx.rel(stack), "poses": ctx.rel(poses), "ctf": ctx.rel(ctf), "datadir": stack_datadir,
+            "pose_source": pose_source}
     ctx.add_output("particles_prepared", "particles", [stack, poses, ctf], f"Particles prepared for cryoDRGN ({box} px)",
                    meta={**meta, "cryodrgn": prep, "particles_file": meta.get("particles_file") or ctx.rel(src)})
     return {"stack": str(stack), "poses": str(poses), "ctf": str(ctf), "datadir": stack_datadir, "box": box, "ind": None,
-            "reused": False, "n": n_all}
+            "reused": False, "n": n_all, "pose_source": pose_source}
 
 
 def prepared_lineage(ctx: JobContext, particles: InputData, prep: dict[str, Any]) -> dict[str, Any]:
     """What a latent output records about its particles (to select them, reuse the images, show them)."""
-    prepared: dict[str, Any] = {"box": prep["box"], "datadir": prep.get("datadir")}
+    prepared: dict[str, Any] = {"box": prep["box"], "datadir": prep.get("datadir"),
+                                "pose_source": prep.get("pose_source", POSE_SOURCES[0])}
     for key in ("stack", "poses", "ctf", "ind"):
         if prep.get(key):
             prepared[key] = ctx.rel(prep[key])
@@ -531,7 +542,7 @@ def train_settings(params: dict[str, Any], model: dict[str, Any]) -> dict[str, A
 
 
 def train_args(settings: dict[str, Any], prep: dict[str, Any], version: tuple[int, int, int], lazy: bool, gpus: int,
-               poses: str | Path | None = None, seed: int = 0) -> list[str]:
+               poses: str | Path | None = None, seed: int = 0, warn=None) -> list[str]:
     """train_vae options (input files, network, training) for this cryoDRGN version."""
     args = [str(prep["stack"]), "--poses", str(poses or prep["poses"]), "--ctf", str(prep["ctf"]),
             "--zdim", str(settings["zdim"]), "--enc-dim", str(settings["enc_dim"]), "--enc-layers", str(settings["enc_layers"]),
@@ -548,12 +559,17 @@ def train_args(settings: dict[str, Any], prep: dict[str, Any], version: tuple[in
             args.append("--no-amp")
     elif version < (1, 0):
         args.append("--amp")
-    if settings.get("pose_sgd"):
-        args.append("--do-pose-sgd")
+    if settings.get("pose_sgd"):  # cryoDRGN refines the poses only with the Hartley representation
+        args += ["--do-pose-sgd", "--domain", "hartley"]
     if seed:
         args += ["--seed", str(seed)]
-    if int(settings.get("checkpoint") or 1) != 1:
-        args += ["--checkpoint", str(settings["checkpoint"])]
+    every = int(settings.get("checkpoint") or 1)
+    if every != 1:
+        if version >= (3, 5):
+            args += ["--checkpoint", str(every)]
+        elif warn:  # epochs numbered from 0: the last epoch would only be saved as weights.pkl
+            warn(f"cryoDRGN {version_text(version)} numbers the epochs from 0: a checkpoint is saved every epoch (not "
+                 f"every {every}) so that the last epoch can be analysed")
     if settings.get("uninvert"):
         args.append("--uninvert-data")
     if lazy:
@@ -579,7 +595,7 @@ def run_training(ctx: JobContext, args: list[str], workdir: Path, epochs: int, f
     try:
         ctx.run(cmd, tool="cryodrgn", on_line=monitor.on_line)
     except JobError as exc:
-        hint = training_failure_hint(ctx)
+        hint = training_failure_hint(ctx, amp="--no-amp" not in args)
         raise JobError(f"{exc}{': ' + hint if hint else ''}") from None
     saved = checkpoint_epochs(workdir)
     if not saved:
@@ -592,20 +608,25 @@ def run_training(ctx: JobContext, args: list[str], workdir: Path, epochs: int, f
     return saved[-1]
 
 
-def training_failure_hint(ctx: JobContext) -> str:
+def training_failure_hint(ctx: JobContext, amp: bool = True) -> str:
     """A likely cause for a failed training, from the end of the log (troubleshooting table of the protocol)."""
     try:
         tail = ctx.log_path.read_text(errors="replace")[-20_000:]
     except OSError:
         return ""
+    # the traceback of the training: what follows its last command line
+    tail = tail[tail.rfind("train_vae"):] if "train_vae" in tail else tail
     if "CUDA out of memory" in tail or "OutOfMemoryError" in tail:
         return ("the GPU ran out of memory: lower the batch size, use a smaller image size, or the small network")
-    if "MemoryError" in tail or "Killed" in tail or "Cannot allocate memory" in tail:
+    if re.search(r"\bMemoryError\b|\bKilled\b|Cannot allocate memory", tail):
         return "the machine ran out of memory: tick 'Lazy loading' (images read from disk as needed)"
-    if "AssertionError" in tail and ("amp" in tail.lower() or "scaler" in tail.lower() or "nan" in tail.lower()):
-        return "numerical instability with mixed precision: train again with 'Mixed precision' off"
     if "must be greater than" in tail and "epoch" in tail:
         return "the number of epochs must be larger than the epoch of the checkpoint the training continues from"
+    if re.search(r"domain\s*==\s*[\"']hartley", tail):
+        return "pose refinement needs the Hartley representation (--domain hartley)"
+    if "AssertionError" in tail and amp:
+        return ("an assertion failed, which with mixed precision usually means numerical instability: train again with "
+                "'Mixed precision' off")
     return ""
 
 
@@ -635,6 +656,9 @@ def run_analysis(ctx: JobContext, workdir: Path, epoch: int, outdir: Path, param
         else:
             ctx.warn(f"cryoDRGN {version_text(version)} generates 10 volumes per trajectory (--n-per-pc needs 4.2)")
     down = int(params.get("downsample") or 0)
+    if down and box and down >= box:
+        ctx.warn(f"Volume box {down} px is not smaller than the training images ({box} px): volumes at the training size")
+        down = 0
     apix = float(params.get("apix") or 0) or apix
     if apix:  # cryoDRGN writes downsampled volumes with the pixel size it is given: scale it here
         args += ["--Apix", f"{apix * (box / down if down and box else 1):.4f}".rstrip("0").rstrip(".")]
@@ -751,19 +775,29 @@ def covariate_r2(z: np.ndarray, targets: dict[str, np.ndarray], k: int = 15, sam
 
 
 def resize(img: np.ndarray, size: int) -> np.ndarray:
+    """A square size × size image (padded with its lowest value when it is not square)."""
     from scipy import ndimage
-    return ndimage.zoom(np.asarray(img, dtype=np.float32), size / max(img.shape), order=1)[:size, :size]
+    img = np.asarray(img, dtype=np.float32)
+    if img.shape[0] != img.shape[1]:
+        side = max(img.shape)
+        pad = [((side - n) // 2, side - n - (side - n) // 2) for n in img.shape]
+        img = np.pad(img, pad, constant_values=float(img.min()))
+    out = ndimage.zoom(img, size / img.shape[0], order=1)[:size, :size]
+    if out.shape != (size, size):
+        out = np.pad(out, [(0, size - out.shape[0]), (0, size - out.shape[1])], mode="edge")
+    return out
 
 
 def crop_box(region: np.ndarray, margin: int = 4) -> tuple[slice, slice, slice]:
-    """A cube around the molecule (same for every volume), so that thumbnails show it large."""
+    """A cube around the molecule, inside the box (same for every volume), so that thumbnails show it large."""
     idx = np.argwhere(region)
     if not len(idx):
         return (slice(None),) * 3
+    shape = np.array(region.shape)
     lo, hi = idx.min(0) - margin, idx.max(0) + margin + 1
-    centre, half = (lo + hi) / 2, max(8, int(np.ceil((hi - lo).max() / 2)))
-    start = np.clip(np.round(centre - half).astype(int), 0, None)
-    return tuple(slice(int(a), int(a) + 2 * half) for a in start)
+    side = int(min(shape.min(), max(16, int(np.ceil((hi - lo).max())))))
+    start = np.clip(np.round((lo + hi) / 2 - side / 2).astype(int), 0, shape - side)
+    return tuple(slice(int(a), int(a) + side) for a in start)
 
 
 def projection_tiles(stack: np.ndarray, size: int = 72, axes: tuple[int, ...] = (0, 1, 2),
@@ -1066,6 +1100,9 @@ def finish_analysis(ctx: JobContext, workdir: Path, epoch: int, analyze_dir: Pat
     files = [npz, zf, w, workdir / "config.yaml"]
     meta = {**lineage, "method": "cryoDRGN", "workdir": ctx.rel(workdir), "epoch": int(epoch), "zdim": int(zdim),
             "n_particles": int(n), "k": len(kfiles) or k, "apix": apix}
+    train_apix = training_apix(ctx, lineage.get("prepared") or {}, int(lineage.get("box") or 0))
+    if train_apix:
+        meta["train_apix"] = train_apix
     meta.setdefault("workdirs", [ctx.rel(workdir)])
     ctx.add_output("latent", "latent", [f for f in files if Path(f).exists()],
                    f"Latent space (cryoDRGN, {zdim}-D, epoch {epoch})", meta=meta)
@@ -1083,8 +1120,11 @@ def analysis_lineage(lat: InputData) -> dict[str, Any]:
 
 
 def analysis_apix(ctx: JobContext, lineage: dict[str, Any], lat_meta: dict[str, Any] | None = None) -> float | None:
+    """Pixel size of the training images: from the CTF parameters, else as recorded by the latent output (the pixel
+    size of its cluster volumes is the last resort: it is larger when they were downsampled)."""
     apix = training_apix(ctx, lineage.get("prepared") or {}, int(lineage.get("box") or 0))
-    return apix or (lat_meta or {}).get("apix")
+    meta = lat_meta or {}
+    return apix or meta.get("train_apix") or meta.get("apix")
 
 
 # ======================================================================= jobs
@@ -1250,6 +1290,9 @@ class CryodrgnTrain(JobType):
         lazy = decide_lazy(ctx, p["lazy"], prep["n"], prep["box"])
         if not p["check_inputs"].startswith("no"):
             check = backprojection_check(ctx, prep, p["uninvert"], lazy)
+            if "stop" in p["check_inputs"] and check is None:
+                raise JobError("The input check could not run (see the log), so the training was not started: cryoDRGN "
+                               "probably cannot read these particles. Set 'Input check' to 'check, then train' to try anyway.")
             if check and check["verdict"] == "bad" and "stop" in p["check_inputs"]:
                 raise JobError("The input check failed (see the report), so the training was not started. Fix the inputs, "
                                "or set 'Input check' to 'check, then train' to train anyway.")
@@ -1260,7 +1303,7 @@ class CryodrgnTrain(JobType):
                 f"{model['dec_dim']} × {model['dec_layers']}); latent space {p['zdim']}-D; {p['epochs']} epochs; "
                 f"{prep['box']} px images")
         workdir = ctx.path("train")
-        args = train_args(settings, prep, version, lazy, p["gpus"], seed=p["seed"])
+        args = train_args(settings, prep, version, lazy, p["gpus"], seed=p["seed"], warn=ctx.warn)
         epoch = run_training(ctx, args, workdir, p["epochs"], 1, version)
         lineage = prepared_lineage(ctx, particles, prep)
         lineage["train"] = {**settings, "epochs": p["epochs"], "version": version_text(version), "lazy": lazy}
@@ -1331,7 +1374,7 @@ class CryodrgnContinue(JobType):
             poses = last_dir / "pose.pkl" if (last_dir / "pose.pkl").exists() else (refined[-1] if refined else None)
         ctx.log(f"Continuing from {weights} (epoch {done}) until epoch {target}")
         workdir = ctx.path("train")
-        args = train_args(train, prep, version, lazy, p["gpus"], poses=poses)
+        args = train_args(train, prep, version, lazy, p["gpus"], poses=poses, warn=ctx.warn)
         epoch = run_training(ctx, args, workdir, target, done + 1, version, load=weights, history=chain_losses(chain))
         lineage = analysis_lineage(lat)
         lineage["train"] = {**train, "epochs": target, "version": version_text(version)}
@@ -1366,6 +1409,11 @@ class CryodrgnAnalyze(JobType):
               help="0 = training size. Smaller volumes are faster to generate and to view."),
     ]
     outputs = list(ANALYSIS_OUTPUTS)
+
+    @classmethod
+    def validate(cls, params, connected):
+        down = int(params.get("downsample") or 0)
+        return [f"The volume box must be even (got {down})"] if down % 2 else []
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
@@ -1744,9 +1792,11 @@ class CryodrgnConvergence(JobType):
         rng = np.random.default_rng(0)
         sample = np.sort(rng.choice(n, size=min(n, 2000), replace=False))
         nn_final = knn_sets(z_final[sample])
-        scanned = available if len(available) <= 120 else sorted({available[i] for i in np.round(np.linspace(0, len(available) - 1, 120)).astype(int)})
-        motion, prev_z, prev_nn, z_cache = [], None, None, {}
         vol_epochs = choose_epochs(p["epochs"], available)
+        scanned = available if len(available) <= 120 else sorted(
+            {available[i] for i in np.round(np.linspace(0, len(available) - 1, 120)).astype(int)})
+        scanned = sorted(set(scanned) | set(vol_epochs))  # the epochs whose volumes are compared are always read
+        motion, prev_z, prev_nn, z_cache = [], None, None, {}
         for j, e in enumerate(scanned):
             z = z_final if e == final else pt.load_array_pkl(folders[e] / f"z.{e}.pkl").astype(np.float32)
             if len(z) != n:
@@ -1801,6 +1851,9 @@ class CryodrgnConvergence(JobType):
                           colorings=stored_colorings(arrays) if len(arrays.get("z", [])) == n else None)
 
         volume_state, stable_from, overtrained = "not compared", None, None
+        vol_epochs = [e for e in vol_epochs if e in z_cache]  # epochs with another particle count were skipped
+        if p["volumes"] and len(vol_epochs) < 2:
+            ctx.warn("Fewer than two epochs to compare: the volumes are not compared")
         if p["volumes"] and len(vol_epochs) >= 2:
             volume_state, stable_from, overtrained = self._volumes(ctx, lat, folders, vol_epochs, z_cache, z_final)
         self._verdict(ctx, trend, latent_stable, volume_state, stable_from, overtrained, final, motion)
@@ -2012,9 +2065,21 @@ class CryodrgnLandscape(JobType):
 
         from cryoplug.mrc import MapVolume
         vol = MapVolume.read(path)
-        data = vol.data
-        if data.shape != (box, box, box):
-            data = ndimage.zoom(data, [box / s for s in data.shape], order=1)[:box, :box, :box]
+        factors = [float(v) / apix for v in vol.voxel[::-1]]  # (z, y, x) order of the data
+        data = ndimage.zoom(vol.data, factors, order=1) if any(abs(f - 1) > 1e-3 for f in factors) else vol.data
+        out_data = np.zeros((box, box, box), dtype=np.float32)
+        src, dst = [], []
+        for n in data.shape:  # centred crop or pad
+            if n >= box:
+                start = (n - box) // 2
+                src.append(slice(start, start + box))
+                dst.append(slice(0, box))
+            else:
+                start = (box - n) // 2
+                src.append(slice(0, n))
+                dst.append(slice(start, start + n))
+        out_data[tuple(dst)] = data[tuple(src)]
+        data = out_data
         out = ctx.path("landscape_mask.mrc")
         MapVolume(data=(data > 0.5).astype(np.float32), voxel=np.array([apix] * 3)).write(out)
         return out
