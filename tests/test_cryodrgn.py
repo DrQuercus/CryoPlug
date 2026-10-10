@@ -196,6 +196,9 @@ def test_analysis_trajectory_and_volumes(manager, trained):
     outs = _outs(ana)
     assert len(outs["kmeans"]["files"]) == 8 and len(outs["pc1"]["files"]) == 5 and outs["latent"]["meta"]["epoch"] == 2
     assert outs["latent"]["meta"]["train"]["model"] == "small"  # the lineage is kept
+    # volumes generated from that analysis are at the training size: training pixel size, not the downsampled one
+    from_ana = _run(manager, puid, "cryodrgn_volumes", {"particles": "5"}, {"latent": {"job": ana["uid"], "output": "latent"}})
+    assert "--Apix 4" in log_of(manager, puid, from_ana["uid"]) and "--Apix 8" not in log_of(manager, puid, from_ana["uid"])
     traj = _run(manager, puid, "cryodrgn_trajectory", {"clusters": "1, 6", "frames": 6, "loop": True}, latent)
     tout = _outs(traj)["trajectory"]
     assert tout["type"] == "volume_series" and 2 <= len(tout["files"]) <= 6 and tout["meta"]["particles"]

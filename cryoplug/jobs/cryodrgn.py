@@ -1460,7 +1460,8 @@ class CryodrgnTrajectory(JobType):
                    "populated regions (states the data contain). Straight line: may cross empty regions."),
         Param("loop", "bool", False, label="Back to the start", advanced=True,
               help="Returns to the first cluster at the end (a closed loop, for a cyclic motion)."),
-        Param("apix", "float", 0.0, label="Pixel size", unit="Å", min=0.0, advanced=True, help="0 = as the cluster volumes."),
+        Param("apix", "float", 0.0, label="Pixel size", unit="Å", min=0.0, advanced=True,
+              help="0 = the pixel size of the training images (from the CTF parameters)."),
         Param("flip", "bool", False, label="Flip handedness", advanced=True),
     ]
     outputs = [OutputDef("trajectory", "volume_series", "Trajectory")]
@@ -1518,7 +1519,9 @@ class CryodrgnTrajectory(JobType):
             i0 = np.minimum(np.floor(t).astype(int), len(pts) - 2)
             zsel = pts[i0] + (t - i0)[:, None] * (pts[i0 + 1] - pts[i0])
             ind = np.array([int(np.argmin(((z - q) ** 2).sum(1))) for q in zsel])  # nearest particles, for the maps
-        apix = p["apix"] or lat.meta.get("apix")
+        # eval_vol writes volumes at the training size: the pixel size of the training images, not the one of the
+        # cluster volumes (smaller when the analysis was downsampled)
+        apix = p["apix"] or analysis_apix(ctx, analysis_lineage(lat), lat.meta)
         files = eval_volumes(ctx, weights, workdir / "config.yaml", zsel, ctx.path("trajectory"), apix, p["flip"])
         labels = arrays.get("labels")
         frame_labels = [f"{j + 1}/{len(files)}" + (f" · cluster {int(labels[ind[j]]) + 1}" if labels is not None else "")
@@ -1553,7 +1556,8 @@ class CryodrgnVolumes(JobType):
         Param("volumes", "int", 1, label="Volumes in the region", min=1, max=50,
               help="1 = the volume of the particle at the centre of the region; more = k-means centres of the particles "
                    "inside it (on-data points, as cryoDRGN's own analysis)."),
-        Param("apix", "float", 0.0, label="Pixel size", unit="Å", min=0.0, advanced=True, help="0 = as the cluster volumes."),
+        Param("apix", "float", 0.0, label="Pixel size", unit="Å", min=0.0, advanced=True,
+              help="0 = the pixel size of the training images (from the CTF parameters)."),
         Param("flip", "bool", False, label="Flip handedness", advanced=True),
     ]
     outputs = [OutputDef("volume", "map", "Volume"), OutputDef("volumes", "volume_series", "Volumes")]
@@ -1599,7 +1603,7 @@ class CryodrgnVolumes(JobType):
         except ValueError as exc:
             raise JobError(str(exc)) from None
         weights, _zfile = weights_and_z(workdir, epoch)
-        apix = p["apix"] or lat.meta.get("apix")
+        apix = p["apix"] or analysis_apix(ctx, analysis_lineage(lat), lat.meta)
         files = eval_volumes(ctx, weights, workdir / "config.yaml", z[ind], ctx.path("volumes"), apix, p["flip"])
         labels = arrays.get("labels")
         if labels is not None:
