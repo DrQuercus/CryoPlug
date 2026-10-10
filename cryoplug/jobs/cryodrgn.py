@@ -902,7 +902,7 @@ def next_steps(box: int, model: str, flagged: dict[str, list[int]], counts: np.n
                r2: dict[str, tuple[float, float]], landscape: bool = False) -> str:
     """What to do with these results, following the protocol and what the analysis found."""
     lines = []
-    first_pass = box <= 128 or model == "small"
+    first_pass = model == "small" if model in ("small", "large") else box <= 128
     junk = sorted(set(flagged.get("weak", []) + flagged.get("noisy", []) + flagged.get("blurry", [])))
     if junk:
         share = 100.0 * sum(int(counts[i]) for i in junk if i < len(counts)) / max(1, n)
@@ -1896,6 +1896,9 @@ class CryodrgnConvergence(JobType):
         else:
             good = volume_state == "stable" and latent_stable
             bad = volume_state == "changing" or (not latent_stable and trend["state"] == "falling")
+        steep = trend["state"] == "falling" and trend.get("relative", 0.0) > 0.1
+        if good and steep:  # the network is still learning noticeably: not finished yet
+            good = False
         verdict = "converged" if good else ("not converged" if bad else "nearly converged")
         checks.append({"label": "Verdict", "value": verdict, "status": "good" if good else ("bad" if bad else "warn")})
         if trend["state"] == "falling":
@@ -1908,6 +1911,10 @@ class CryodrgnConvergence(JobType):
         elif bad:
             advice.append(f"The training has not converged: continue it to epoch {2 * final} (cryoDRGN continue training "
                           "on the latent space), then run this check again.")
+        elif steep:
+            advice.append(f"Almost converged: the volumes and the latent space are stable, but the loss still falls "
+                          f"noticeably, so the network is still learning. Continuing to epoch {2 * final} (cryoDRGN continue "
+                          "training) makes sure fine details no longer change.")
         else:
             advice.append(f"Almost converged: the overall picture is reliable, fine details may still change. Continuing to "
                           f"epoch {2 * final} makes sure.")

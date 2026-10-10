@@ -13,14 +13,15 @@ la page d'aide (et dans `docs/JOBS.md`).
 1. [Démarrer](#1-démarrer)
 2. [Quelle carte pour quoi ?](#2-quelle-carte-pour-quoi-)
 3. [Étape 1 — Évaluer et améliorer la carte](#3-étape-1--évaluer-et-améliorer-la-carte)
-4. [Étape 2 — Construire le modèle](#4-étape-2--construire-le-modèle)
-5. [Étape 3 — Corriger et affiner](#5-étape-3--corriger-et-affiner)
-6. [Étape 4 — Valider](#6-étape-4--valider)
-7. [Étape 5 — Déposer](#7-étape-5--déposer)
-8. [Recettes par situation](#8-recettes-par-situation)
-9. [Dépannage](#9-dépannage)
-10. [Bonnes pratiques](#10-bonnes-pratiques)
-11. [Glossaire](#11-glossaire)
+4. [Hétérogénéité avec cryoDRGN](#4-hétérogénéité-avec-cryodrgn)
+5. [Étape 2 — Construire le modèle](#5-étape-2--construire-le-modèle)
+6. [Étape 3 — Corriger et affiner](#6-étape-3--corriger-et-affiner)
+7. [Étape 4 — Valider](#7-étape-4--valider)
+8. [Étape 5 — Déposer](#8-étape-5--déposer)
+9. [Recettes par situation](#9-recettes-par-situation)
+10. [Dépannage](#10-dépannage)
+11. [Bonnes pratiques](#11-bonnes-pratiques)
+12. [Glossaire](#12-glossaire)
 
 ---
 
@@ -242,29 +243,18 @@ mélange d'états. Deux approches, qui se complètent :
 | Dans CryoPlug | *Import from CryoSPARC* du job 3DVA (coordonnées des particules) et *Import volume series* du job *3D Variability Display* | *Import from CryoSPARC* du raffinement consensus, puis *cryoDRGN training* (GPU) |
 | Coût | Déjà calculé dans CryoSPARC | Une à quelques heures de GPU selon le nombre de particules et la taille d'image |
 
-Le workflow *Conformational heterogeneity (cryoDRGN)* (ou *3D variability (CryoSPARC) → interpretation*) crée la chaîne
-en un clic.
+**cryoDRGN a son propre chapitre** (§4) : protocole en deux tours, contrôle des entrées, lecture des rapports,
+explorateur, nettoyage du junk, convergence, paysage des états et validation.
 
-**cryoDRGN, pas à pas**
+**3D Variability (CryoSPARC), pas à pas**
 
-1. **Import from CryoSPARC** du dossier du raffinement consensus (NU-refine ou homogeneous) : les cartes **et les
-   particules** (poses, CTF, emplacement des images) sont importées ; les fichiers `particles` et `passthrough` sont
-   fusionnés, les images restent dans le projet CryoSPARC. Pour un fichier `.cs` ou `.star` seul : **Import particles**.
-2. **cryoDRGN training** : premier passage à **128 px**, z = 8, 25 époques. Les images sont réduites une seule fois
-   (sortie *particles_prepared*, réutilisée par les entraînements suivants à la même taille). Le rapport montre les
-   courbes de perte (elles doivent se stabiliser), l'**explorateur de l'espace latent**, les volumes des 20 clusters
-   k-means et les trajectoires le long des deux premières composantes principales.
-3. **Explorateur** : chaque point est une particule (12 000 au plus sont affichées), en coordonnées **UMAP** ou
-   **PCA** (pour la 3DVA : les composantes). Des **îlots** séparés = des états ou des compositions distincts, ou du
-   junk ; une **bande** continue = un mouvement. Cliquez des clusters (sur le nuage ou leurs pastilles numérotées),
-   puis :
-   - **View / Play in 3D** : leurs volumes dans le visualiseur, joués comme un film dans l'ordre des clics ;
-     double-clic sur un cluster = son volume seul, dans sa couleur ;
-   - **Keep… / Remove…** : prépare *Select particles* avec ces numéros (retirer le junk, isoler un état) ;
-   - **Trajectory…** (cryoDRGN) : prépare *cryoDRGN trajectory* à travers ces clusters, dans l'ordre des clics ;
-   - **Extract map…** : prépare *Extract volume from series* pour obtenir la carte d'un état.
-4. **Volume series analysis** sur les volumes des clusters, une trajectoire ou une composante 3DVA, avec le modèle
-   ajusté dans la carte consensus :
+1. **Import from CryoSPARC** du job 3DVA : les coordonnées de chaque particule le long des composantes sont
+   importées comme un espace latent (explorateur, clusters k-means) ; **Import volume series** du job *3D Variability
+   Display* (dossier ou ZIP) donne une série de volumes par composante. Le workflow *3D variability (CryoSPARC) →
+   interpretation* crée cette chaîne en un clic.
+2. **Explorateur** : comme pour cryoDRGN (§4.6) — clusters, *Keep… / Remove…*, lasso, *Outliers*, images des particules.
+3. **Volume series analysis** sur une composante (ou sur des volumes cryoDRGN : clusters, états, trajectoire), avec le
+   modèle ajusté dans la carte consensus :
    - la **carte de variabilité** (écart-type entre volumes, en σ de la densité de la molécule) ; *View 3D* l'affiche
      en couleur sur la carte moyenne (bleu = stable, rouge = variable), et le menu *Colour* l'applique à n'importe
      quelle carte ou série ouverte ;
@@ -273,11 +263,7 @@ en un clic.
    - avec un modèle, la **densité de chaque chaîne dans chaque volume** (1 = aussi dense que le reste du modèle,
      0 = absente) et les chaînes les plus variables : une chaîne marquée *fades in some frames* est absente d'une
      partie des particules ou se déplace hors de sa place dans le modèle — la série jouée dans le visualiseur tranche.
-5. **Nettoyer et recommencer** : retirez les clusters de junk (*Remove…*), puis entraînez à nouveau sur la sélection
-   (les images réduites sont réutilisées automatiquement) ; passage final à **256 px**, et 50 époques pour vérifier
-   que les états ne changent plus.
-6. **Revenir à CryoSPARC** pour la carte d'un état : *Import Particle Stack* avec le fichier `.cs` de *Select
-   particles* (le rapport donne son chemin et le dossier des images), puis Homogeneous / NU refinement.
+4. **Extract volume from series** (ou *Extract map…* dans l'explorateur) : la carte d'un état pour y ajuster le modèle.
 
 **Lire une série dans le visualiseur 3D.** Le bouton *Play in 3D* d'une sortie *Volume series* charge tous les volumes
 (aperçus de 128 voxels de côté au plus) puis les joue : barre de lecture sur la vue (lecture/pause, volume précédent
@@ -291,9 +277,234 @@ les volumes de la série, et la coloration par variabilité ou résolution local
 
 ---
 
-## 4. Étape 2 — Construire le modèle
+## 4. Hétérogénéité avec cryoDRGN
 
-### 4.1 Choisir la stratégie
+cryoDRGN (Zhong et al. 2021) apprend, à partir des images de particules et des poses du raffinement consensus, un
+**espace latent** : chaque particule y reçoit des coordonnées, et deux particules proches ont des structures proches.
+Un réseau de neurones (le *décodeur*) génère le volume correspondant à n'importe quel point de cet espace. On y voit
+des **états discrets** (îlots), des **mouvements continus** (bandes), des **sous-unités absentes** d'une partie des
+particules, et surtout le **junk** qu'on n'avait pas su retirer.
+
+CryoPlug suit le protocole publié par les auteurs (Kinman et al. 2023, *Nature Protocols* 18, 319) et ajoute à chaque
+étape les contrôles et les explications qui permettent de savoir si le résultat est fiable.
+
+### 4.1 Le principe en bref
+
+- **Encodeur** : lit une image (et sa pose, son CTF) et la place dans l'espace latent (*z*, 8 dimensions par défaut).
+- **Décodeur** : à partir d'un point *z*, produit un volume 3D. L'entraînement ajuste les deux réseaux pour que les
+  projections des volumes générés ressemblent aux images.
+- **Époque** : un passage complet sur toutes les particules. Le protocole en fait 50, puis vérifie la convergence.
+- **UMAP / PCA** : projections en 2D de l'espace latent pour l'explorer. La PCA est linéaire (ses axes ont un sens) ;
+  l'UMAP sépare mieux les îlots mais **ses distances entre îlots ne se lisent pas**.
+- **Volumes « on-data »** : CryoPlug et cryoDRGN génèrent les volumes aux coordonnées de **vraies particules** (le
+  centre d'un cluster k-means est remplacé par la particule la plus proche), jamais dans des régions vides.
+
+> ⚠️ Les volumes cryoDRGN sont **générés** par un réseau : ce ne sont pas des reconstructions gold-standard. Ils
+> montrent les états ; une carte publiable d'un état vient d'une reconstruction de ses particules (§4.10).
+
+### 4.2 Le protocole en un coup d'œil
+
+| Étape | Job CryoPlug | Réglages | Ce qu'on vérifie |
+|---|---|---|---|
+| 1. Importer | *Import from CryoSPARC* (raffinement consensus) | — | Particules avec poses (`alignments3D`) et CTF |
+| 2. Contrôler les entrées | *cryoDRGN input check* (ou automatique dans l'entraînement) | 128 px, 10 000 images | Carte rétroprojetée semblable au consensus, densité positive |
+| 3. Tour 1 : nettoyage | *cryoDRGN training* | 128 px, petit réseau 256 × 3, z = 8, 50 époques | Courbes de perte, junk (galerie, outliers) |
+| 4. Retirer le junk | Explorateur → *Remove…* → *Select particles* | — | Classification 2D des particules écartées dans CryoSPARC |
+| 5. Tour 2 : états | *cryoDRGN training* sur la sélection | 256 px, grand réseau 1024 × 3 (auto), 50 époques | États, mouvements |
+| 6. Convergence | *cryoDRGN convergence check* → *continue training* si besoin | 100 époques au besoin | Volumes stables d'une époque à l'autre |
+| 7. Analyser | Explorateur, *analysis*, *trajectory*, *landscape*, *volumes at particles* | k = 50–100 pour les états rares | États, chemins soutenus par les données |
+| 8. Valider | *Keep…* → CryoSPARC (Import Particle Stack → NU refine) ; *Volume series analysis* | — | Une carte gold-standard par état |
+
+Le workflow *Conformational heterogeneity (cryoDRGN)* crée les étapes 1 à 3 et le contrôle de convergence en un clic.
+
+### 4.3 Préparer et contrôler les entrées
+
+**Quelles particules ?** Celles du **raffinement consensus** (NU-refine ou homogeneous) : leurs poses servent telles
+quelles. Évitez les classifications 2D/3D agressives avant cryoDRGN : elles retirent justement l'hétérogénéité qu'on
+cherche (le nettoyage se fait dans cryoDRGN, étape 4). Pour un raffinement hétérogène ou un ab initio, réglez
+*Poses from* (les décalages et les poses ne se lisent pas de la même façon).
+
+**Taille d'image.** Les images sont réduites par recadrage de Fourier : la résolution atteignable est limitée à deux
+fois la nouvelle taille de pixel (Nyquist). Exemple : particules de 400 px à 0,83 Å → 128 px à 2,6 Å/px (Nyquist
+5,2 Å, assez pour voir les états) ; 256 px à 1,3 Å/px pour le tour final. Les images réduites sont gardées en sortie
+(*particles_prepared*) et réutilisées par les jobs suivants à la même taille, y compris sur une sélection.
+
+**Le contrôle des entrées** (job *cryoDRGN input check*, ou paramètre *Input check* de l'entraînement) rétroprojette
+les 10 000 premières particules avec leurs poses et leur CTF. Le rapport donne :
+
+- la **FSC entre deux demi-lots** dans une sphère douce : elle doit montrer du signal bien au-delà des premières
+  coquilles (cible indiquée dans le tableau) ;
+- le **signe de la densité** : la molécule doit être **positive** (plus dense que le solvant) ;
+- un **verdict** et, si besoin, quoi faire ; la carte *backprojection* s'ouvre en 3D à côté de la carte consensus
+  (même forme, même main).
+
+Une densité négative veut dire que le contraste des images est l'inverse de ce qu'attend cryoDRGN : cochez *Do not
+invert the images*, sinon tous les volumes sortent creux. Une FSC qui s'effondre tout de suite veut dire des poses mal
+lues. Avec *check, stop if it fails*, l'entraînement ne démarre pas sur des entrées fausses (des heures de GPU
+économisées).
+
+### 4.4 Entraîner : les paramètres
+
+| Paramètre | Tour 1 (nettoyage) | Tour 2 (final) | Quand le changer |
+|---|---|---|---|
+| *Image size* | 128 px | 256 px | Plus petit pour une très grosse particule ou beaucoup de particules |
+| *Latent dimensions* (z) | 8 | 8 | 1–2 seulement pour un mouvement unique et simple ; au-delà de 10, rarement utile |
+| *Epochs* | 50 | 50 (→ 100 si non convergé) | Voir §4.8 |
+| *Network size* | auto → petit (256 × 3) | auto → grand (1024 × 3) | Le mode auto suit le protocole (grand réseau au-delà de 128 px ou sur une sélection) |
+| *Input check* | check, then train | no check (déjà fait) | *stop if it fails* pour un long job sans surveillance |
+| *Volumes sampled* | 20 | 20 | 50–100 (dans *cryoDRGN analysis*) pour chercher des états rares |
+| *GPUs* | 1 | 1–4 | Plusieurs GPU (`--multigpu`) surtout utiles à 256 px avec le grand réseau |
+| *Lazy loading* | auto | auto | Activé tout seul si les images ne tiennent pas en mémoire (disque rapide conseillé) |
+| *Batch size* | 16 | 16 | Plus bas si le GPU manque de mémoire |
+| *β (KL)* | 1/z | 1/z | Plus grand = espace latent plus lisse et moins détaillé |
+| *Mixed precision* | oui | oui | À décocher si l'entraînement s'arrête sur une erreur d'assertion |
+| *Refine the poses* | non | non | Poses de qualité moyenne (le protocole garde les poses consensus) |
+| *Checkpoint every* | 1 | 1 | Plus grand pour économiser le disque (le contrôle de convergence compare les points de sauvegarde) |
+
+Pendant l'entraînement, la carte du job affiche l'époque, le temps par époque et le **temps restant** ; les courbes de
+perte se dessinent dans le rapport à chaque époque. La version de cryoDRGN est lue au démarrage (les options et la
+numérotation des époques changent entre les versions 3.x et 4.x) ; en cas d'échec, le message propose la cause la
+plus probable (mémoire GPU, mémoire vive, précision mixte).
+
+### 4.5 Lire le rapport d'un entraînement
+
+- **Tuiles du haut** : contrôle des entrées, temps par époque, nombre de particules, dimension latente et nombre de
+  clusters, clusters signalés.
+- **Training loss** : l'erreur de reconstruction baisse vite puis se stabilise. **KL divergence** : monte pendant les
+  premières époques puis se stabilise.
+- **Explorateur** (§4.6) : le cœur du rapport.
+- **Cluster volumes** (galerie sous l'explorateur) : trois projections de chaque volume, à la même échelle de gris.
+  Signaux d'alerte : **weak** (peu de densité au seuil commun : morceaux manquants ou junk), **noisy** (densité
+  éparpillée hors de la molécule), **blurry** (aucun détail fin : agrégats, junk), **rare** (moins de 1 % des
+  particules). Ce sont des indices : regardez toujours le volume en 3D.
+- **Is the latent space structural?** : la part du **défocus**, de la **direction de vue** et du **décalage** que
+  l'espace latent permet de prédire (R²). Proche de 0 = l'espace latent reflète la structure, comme il se doit.
+  Au-delà de 0,3, une partie de l'hétérogénéité vient des images (CTF, glace, vues) et non des molécules : coloriez
+  l'explorateur par cette propriété pour voir où.
+- **Variance along the principal components** : une composante dominante = un mouvement ou un changement de
+  composition principal ; une variance étalée = plusieurs changements indépendants (ou du bruit).
+- **Viewing directions** : couverture des orientations ; une bande vide = des vues manquantes.
+- **Latent clusters** et **Similarity of the cluster volumes** : des blocs dans la matrice = des états distincts ; un
+  dégradé le long de la diagonale = un mouvement continu ; un volume isolé = un état rare ou du junk.
+- **What to do next** : la marche à suivre, rédigée d'après ce que l'analyse a trouvé (clusters suspects, outliers,
+  propriétés codées, tour 1 ou tour 2).
+
+### 4.6 Utiliser l'explorateur
+
+Chaque point est une particule (12 000 au plus sont affichées ; les sélections portent toujours sur **toutes** les
+particules). Les numéros sont les centres des clusters k-means.
+
+- **Choisir des clusters** : clic sur un centre, une pastille ou une vignette de la galerie ; **double-clic** = ouvrir
+  son volume en 3D. Puis :
+  - *View / Play in 3D* : les volumes dans le visualiseur, joués dans l'ordre des clics, au même seuil ;
+  - *Keep… / Remove…* : prépare *Select particles* (garder un état, retirer du junk) ;
+  - *Trajectory…* : prépare *cryoDRGN trajectory* à travers ces clusters, dans l'ordre des clics ;
+  - *Extract map…* : la carte d'un cluster pour ajuster un modèle ;
+  - *Particle images* : 24 particules du cluster tirées au hasard (filtrées passe-bas pour les rendre visibles ;
+    *Others* en tire d'autres) — le junk se reconnaît souvent sur les images.
+- **Colour by** : *Density* (régions peuplées), *‖z‖* (distance au centre : les particules isolées, souvent du
+  junk), *PC1–3*, *Defocus*, *Viewing tilt / azimuth*, *In-plane shift*. Une barre de couleurs et une note expliquent
+  chaque coloration. Des clusters qui suivent le défocus ou l'orientation sont rarement de vrais états.
+- **Lasso** (ou glisser en tenant **Maj**) : entourez une région de particules, puis *Keep region…*, *Remove region…*,
+  *Volume of the region…* (le volume au centre de la région, ou plusieurs répartis dedans) ou *Particle images*.
+- **Une particule** : un clic la marque ; *Volume of particle …* prépare le job qui génère son volume.
+- **Outliers** : montre en rouge les particules au-delà de ‖z‖ = moyenne + 2 écarts-types ; *Remove outliers…*
+  prépare leur retrait.
+- **UMAP / PCA** : basculer de projection ; le contrôle de convergence ajoute une projection par époque et le bouton
+  *Play the epochs*.
+
+### 4.7 Nettoyer les particules
+
+Le premier tour sert surtout à trouver le junk. Il se reconnaît à :
+
+- des volumes cassés, en blob, bruités ou sans détail (signalés dans la galerie) ;
+- des particules isolées loin des autres (outliers, ‖z‖ élevé) ;
+- des îlots qui suivent le défocus ou une orientation (tableau *Is the latent space structural?*) ;
+- des images de particules sans forme reconnaissable (*Particle images*).
+
+Retirez-les (*Remove…*, *Remove region…*, *Remove outliers…*), puis vérifiez dans CryoSPARC que les **particules
+écartées** (sortie *excluded*) sont bien du junk : une classification 2D rapide suffit. Ne nettoyez pas trop : un petit
+cluster au volume net est peut-être l'état rare que vous cherchez. Le tour 2 se lance sur la sélection (*cryoDRGN
+training* sur la sortie de *Select particles*) : les images déjà réduites sont réutilisées et le grand réseau est
+choisi automatiquement. Un second nettoyage est possible si le tour 2 montre encore du junk.
+
+### 4.8 Vérifier la convergence
+
+Un entraînement trop court mélange les états ; trop long, il apprend le bruit des images (volumes de plus en plus
+bruités : sur-apprentissage). Le job *cryoDRGN convergence check* compare les points de sauvegarde de l'entraînement :
+
+- la **courbe de perte** ;
+- le **déplacement des particules** dans l'espace latent d'une époque à l'autre (il baisse puis plafonne au niveau du
+  bruit de l'optimisation) ;
+- la **stabilité des voisinages** (part des 15 voisins de chaque particule conservée d'une époque à l'autre) ;
+- les **volumes de particules représentatives** générés à plusieurs époques et leur corrélation (planche *Representative
+  particles* et sorties *Particle … across epochs* à jouer en 3D).
+
+Le **verdict** est en tête du rapport : *converged* (les résultats de la dernière époque sont utilisables),
+*nearly converged* ou *not converged* (prolongez avec *cryoDRGN continue training*, par exemple de 50 à 100 époques,
+puis refaites le contrôle). Si les volumes deviennent plus bruités aux dernières époques, analysez l'époque indiquée
+(*cryoDRGN analysis* avec *Epoch*). Une perte qui baisse encore un peu n'empêche pas la convergence : ce sont les volumes
+et l'organisation de l'espace latent qui décident.
+
+### 4.9 Explorer les états et les mouvements
+
+- **cryoDRGN analysis** : plus de volumes (50–100) pour voir des états rares, une autre époque, la main inversée
+  (*Flip handedness*) si la consensus avait la mauvaise main.
+- **Trajectoires** (*cryoDRGN trajectory*) : *through the particles* suit le graphe des plus proches voisins et reste
+  dans les régions peuplées (états que les données contiennent) ; *straight line* peut traverser des régions vides.
+  *Back to the start* ferme la boucle ; on peut relier deux particules précises plutôt que deux clusters. Les
+  trajectoires le long des composantes principales (PC1, PC2) montrent les axes de variation, **pas** forcément un
+  chemin biologique.
+- **Volumes at particles** : le volume d'une particule ou d'une région dessinée au lasso.
+- **Landscape analysis** (*cryodrgn analyze_landscape*) : 1000 volumes générés dans tout l'espace latent sont comparés
+  par ACP (dans un masque, facultatif) et regroupés en **états** (10 par défaut). Des particules éloignées dans l'UMAP
+  mais au même volume se retrouvent ensemble. Résultats : les volumes des états, les trajectoires le long des
+  composantes des volumes, et un espace latent où les états remplacent les clusters (explorateur, *Keep…*).
+- **Volume series analysis** sur les volumes des clusters, des états ou d'une trajectoire, avec le modèle : carte de
+  variabilité et chaînes qui bougent ou disparaissent (§3.7).
+
+### 4.10 Valider et publier
+
+- Pour chaque état d'intérêt : *Keep…* dans l'explorateur, puis dans CryoSPARC *Import Particle Stack* avec le fichier
+  `.cs` produit (le rapport donne le chemin et le dossier des images) et *Homogeneous / NU refinement* : demi-cartes
+  indépendantes, FSC, résolution à déposer.
+- Dans l'article : version de cryoDRGN (dans le log et les paramètres du job), taille d'image, dimension latente,
+  réseau, nombre d'époques, époque analysée, preuve de convergence, nombre de particules par état, critères de
+  nettoyage.
+- Ne déposez pas la « résolution » d'un volume cryoDRGN : elle n'existe pas au sens gold-standard.
+
+### 4.11 Pièges fréquents
+
+| Symptôme | Cause probable | Solution |
+|---|---|---|
+| Volumes creux ou « à l'envers » | Contraste des images inversé par rapport à ce qu'attend cryoDRGN | Contrôle des entrées (densité négative) → *Do not invert the images* |
+| Tous les volumes ressemblent à du junk | Seuil d'affichage trop bas, ou poses / CTF mal lus | Monter le seuil ; contrôle des entrées ; *Poses from* |
+| Tous les volumes sont identiques | Particules trop filtrées en amont, ou peu d'hétérogénéité | Repartir de particules moins filtrées ; grand réseau au tour 2 |
+| L'espace latent suit le défocus | Erreurs de CTF, épaisseur de glace | Ce n'est pas structural : retirez les particules en cause ou ignorez cet axe |
+| Les clusters correspondent à des vues | Erreurs de poses, orientation préférentielle, junk vu sous un angle | Carte des directions de vue ; colorier par *Viewing tilt / azimuth* |
+| `CUDA out of memory` | Batch trop gros pour le GPU | *Batch size* 8 ; taille d'image plus petite ; petit réseau |
+| Le job est tué, `MemoryError` | Images trop grosses pour la mémoire vive | *Lazy loading* (automatique si détecté) ; demander plus de mémoire au lane |
+| `AssertionError` pendant l'entraînement | Instabilité numérique de la précision mixte | Décocher *Mixed precision* |
+| « must be greater than … » en continuant | Le nombre d'époques final est plus petit que celui du point de sauvegarde | *Train until epoch* plus grand |
+| Volumes de plus en plus bruités | Sur-apprentissage | Analyser une époque antérieure (contrôle de convergence) |
+| « Cannot find file … under datadir » | Projet CryoSPARC déplacé | *Import particles* avec *Image folder* |
+| Options refusées par cryodrgn | Version ancienne | CryoPlug s'adapte aux versions 3.x et 4.x ; mettez à jour (`pip install -U cryodrgn`) |
+
+### 4.12 Mémo
+
+- **Tour 1** : *cryoDRGN training* sur les particules du raffinement consensus, 128 px, réglages par défaut. Lire :
+  contrôle des entrées, galerie, outliers, tableau des propriétés codées. Retirer le junk.
+- **Tour 2** : *cryoDRGN training* sur la sélection, 256 px (grand réseau automatique), 50 époques. Puis
+  *cryoDRGN convergence check* → *continue training* jusqu'à convergence.
+- **Analyse** : explorateur (couleurs, lasso, images), *analysis* avec plus de volumes, *trajectory* à travers les
+  particules, *landscape analysis* pour des états, *Volume series analysis* avec le modèle.
+- **Validation** : une reconstruction CryoSPARC par état, avant toute interprétation fine.
+
+---
+
+## 5. Étape 2 — Construire le modèle
+
+### 5.1 Choisir la stratégie
 
 | Situation | Stratégie | Jobs |
 |---|---|---|
@@ -303,7 +514,7 @@ les volumes de la série, et la coloration par variabilité ou résolution local
 | 4–8 Å ou régions mal résolues | Modèle prédit puis ajustement | AlphaFold DB / ColabFold / Boltz-2 → Process predicted model → Rigid-body fit ou Dock in map → Real-space refinement (morphing) |
 | Ligand, cofacteur, médicament | Pose initiale + restreintes | Boltz-2 (pose) + Ligand restraints (eLBOW) → affinement → vérification Fo-Fc (Servalcat) |
 
-### 4.2 Contrôler une construction automatique
+### 5.2 Contrôler une construction automatique
 
 Ouvrez le job et vérifiez :
 
@@ -328,16 +539,16 @@ l'ajustement comme dans Coot ou ChimeraX :
 `help` dans la ligne de commande liste les commandes (`level`, `style`, `color`, `view`, `zone`, `volume`,
 `bg`, `slab`, `save`…), **?** les gestes souris et les touches.
 
-### 4.3 Assembler
+### 5.3 Assembler
 
 Des domaines ou sous-unités dockés séparément se combinent avec **Merge models** (les identifiants de
 chaîne en conflit sont renommés). **Model operations** renomme les chaînes comme dans l'article.
 
 ---
 
-## 5. Étape 3 — Corriger et affiner
+## 6. Étape 3 — Corriger et affiner
 
-### 5.1 La boucle typique
+### 6.1 La boucle typique
 
 ```
 construction auto / docking → Real-space refinement → ISOLDE (ou Coot) → Real-space refinement final → validation
@@ -348,7 +559,7 @@ construction auto / docking → Real-space refinement → ISOLDE (ou Coot) → R
 Les workflows *De novo* et *Predicted model* créent exactement cette boucle ; l'étape ISOLDE met la
 chaîne en pause jusqu'à ce que vous ayez fini.
 
-### 5.2 ISOLDE ou Coot ?
+### 6.2 ISOLDE ou Coot ?
 
 | | ISOLDE | Coot |
 |---|---|---|
@@ -356,7 +567,7 @@ chaîne en pause jusqu'à ce que vous ayez fini.
 | Idéal pour | Corriger un modèle entier (registre, rotamères, boucles, géométrie), 2,5–4,5 Å | Boucles manquantes, ligands, glycanes, eaux, retouches ponctuelles |
 | Point fort | Géométrie physiquement réaliste, outliers éliminés interactivement | Contrôle fin, outils de validation intégrés |
 
-### 5.3 Phenix ou Servalcat ?
+### 6.3 Phenix ou Servalcat ?
 
 | | Phenix real_space_refine | Servalcat |
 |---|---|---|
@@ -366,7 +577,7 @@ chaîne en pause jusqu'à ce que vous ayez fini.
 
 On peut utiliser les deux : Phenix pendant la construction, Servalcat pour l'affinement final et ses cartes de différence.
 
-### 5.4 Ligands et eaux
+### 6.4 Ligands et eaux
 
 1. **Ligand restraints (eLBOW)** à partir du code CCD (ou d'un SMILES) → sortie *restraints*.
 2. Placez le ligand (Boltz-2, Coot, ISOLDE), fusionnez si besoin (**Merge models**).
@@ -374,7 +585,7 @@ On peut utiliser les deux : Phenix pendant la construction, Servalcat pour l'aff
 4. Vérifiez la carte Fo-Fc de Servalcat : pas de pic négatif fort sur le ligand.
 5. Sous ~2,5–3 Å : **Add waters (phenix.douse)**, puis inspection et réaffinement.
 
-### 5.5 Sessions interactives en pratique
+### 6.5 Sessions interactives en pratique
 
 - **Open on server** ouvre ISOLDE/Coot sur l'écran configuré (`[interactive] display`, par exemple un bureau TurboVNC).
 - **Download session bundle** (la bonne option depuis un portable) : un zip prêt à lancer sur votre poste (`chimerax isolde_session.py` ou `./run_coot.sh`) ;
@@ -384,9 +595,9 @@ On peut utiliser les deux : Phenix pendant la construction, Servalcat pour l'aff
 
 ---
 
-## 6. Étape 4 — Valider
+## 7. Étape 4 — Valider
 
-### 6.1 Quels jobs ?
+### 7.1 Quels jobs ?
 
 - **Map-model validation (Q-score, FSC)** : toujours (intégré, rapide). Repère les résidus mal soutenus.
 - **Comprehensive validation (Phenix)** : géométrie MolProbity + accord carte–modèle, comme le rapport wwPDB.
@@ -398,7 +609,7 @@ On peut utiliser les deux : Phenix pendant la construction, Servalcat pour l'aff
   modèle et de la carte primaire, avec les centiles par rapport à toutes les entrées de la PDB. À lancer sur le
   modèle final ; le modèle et la carte sont envoyés au wwPDB.
 
-### 6.2 Valeurs de référence
+### 7.2 Valeurs de référence
 
 Elles dépendent de la résolution ; ce sont des ordres de grandeur pour un modèle bien affiné.
 
@@ -425,7 +636,7 @@ Elles dépendent de la résolution ; ce sont des ordres de grandeur pour un mod�
 Un Q-score moyen proche de la valeur attendue indique un bon accord global ; les résidus avec Q < 0,3
 sont à revoir (ou situés dans des régions de basse résolution locale).
 
-### 6.3 Signaux d'alerte
+### 7.3 Signaux d'alerte
 
 | Symptôme | Cause probable | Action |
 |---|---|---|
@@ -439,21 +650,21 @@ sont à revoir (ou situés dans des régions de basse résolution locale).
 
 ---
 
-## 7. Étape 5 — Déposer
+## 8. Étape 5 — Déposer
 
-### 7.1 Pre-deposition checks
+### 8.1 Pre-deposition checks
 
 Le job vérifie automatiquement : cohérence cartes / demi-cartes / masque (boîte, pixel, origine),
 atomes dans la boîte, CC et inclusion au contour suggéré, identifiants de chaîne, résidus inconnus,
 occupations nulles, B-factors non affinés ou de type pLDDT, chevauchements sévères, ruptures de chaîne,
 identité avec la séquence. **Corrigez chaque FAIL** ; chaque WARN doit être compris.
 
-### 7.2 Deposition package
+### 8.2 Deposition package
 
 Le paquet contient `model.cif`, `primary_map.mrc`, `half_map_1/2.mrc`, `mask.mrc`, `fsc.xml`, les rapports
 de validation, `CHECKLIST.md`, `methods_draft.md` et `table1_draft.md`.
 
-### 7.3 OneDep pas à pas
+### 8.3 OneDep pas à pas
 
 1. Lancez d'abord le job **wwPDB validation report** (ou le serveur validate.wwpdb.org) avec le modèle et la carte primaire.
 2. Dans OneDep (deposit.wwpdb.org) : déposez le modèle (mmCIF), la carte primaire, les deux demi-cartes,
@@ -462,7 +673,7 @@ de validation, `CHECKLIST.md`, `methods_draft.md` et `table1_draft.md`.
 4. Les cartes LocScale, de modification de densité ou spIsoNet peuvent être ajoutées comme **cartes additionnelles**, avec leur description.
 5. La liste des logiciels et leurs versions se trouve dans `methods_draft.md` et dans les logs (`commands.sh` de chaque job).
 
-### 7.4 Pour l'article
+### 8.4 Pour l'article
 
 `methods_draft.md` contient un paragraphe *Méthodes* et les citations générés à partir de l'historique
 des jobs ; `table1_draft.md` pré-remplit le tableau de statistiques cryo-EM. Complétez les données de
@@ -470,7 +681,7 @@ collecte (tension, dose, défocus, nombre de particules) et relisez tout.
 
 ---
 
-## 8. Recettes par situation
+## 9. Recettes par situation
 
 ### A. Protéine membranaire à 3 Å, séquence connue
 
@@ -539,17 +750,19 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 ### H. Domaine flexible ou sous-unité partiellement présente
 
 1. Import CryoSPARC du raffinement consensus (cartes et particules) ; Local resolution pour localiser la région floue
-2. Workflow *Conformational heterogeneity (cryoDRGN)* avec le modèle ajusté dans la consensus (128 px, z = 8)
-3. Explorateur : repérer les îlots de junk → *Remove…* → nouvel entraînement sur la sélection (256 px)
-4. Volume series analysis des clusters avec le modèle : chaînes qui bougent ou qui disparaissent ; *Trajectory…* entre
-   deux états pour la figure ou la vidéo
-5. *Keep…* pour chaque état, retour à CryoSPARC (Import Particle Stack → NU refinement) : une carte gold-standard par
+2. Workflow *Conformational heterogeneity (cryoDRGN)* : contrôle des entrées, tour 1 à 128 px (petit réseau)
+3. Galerie et explorateur : repérer le junk (volumes *weak / noisy / blurry*, outliers, images des particules) →
+   *Remove…* → tour 2 sur la sélection à 256 px (grand réseau automatique)
+4. *cryoDRGN convergence check* ; *continue training* jusqu'à 100 époques si besoin
+5. Volume series analysis des clusters avec le modèle : chaînes qui bougent ou qui disparaissent ; *Trajectory…* entre
+   deux états pour la figure ou la vidéo ; *landscape analysis* pour définir des états
+6. *Keep…* pour chaque état, retour à CryoSPARC (Import Particle Stack → NU refinement) : une carte gold-standard par
    état, puis la suite du pipeline (construction, affinement, validation) pour chacune
-6. Si la 3DVA est déjà calculée : workflow *3D variability (CryoSPARC) → interpretation* pour comparer
+7. Si la 3DVA est déjà calculée : workflow *3D variability (CryoSPARC) → interpretation* pour comparer
 
 ---
 
-## 9. Dépannage
+## 10. Dépannage
 
 | Symptôme | Cause probable | Solution |
 |---|---|---|
@@ -575,6 +788,7 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | Create mask : « Masks need SciPy » | SciPy absent de l'environnement de CryoPlug | `pip install scipy` (installé avec CryoPlug depuis cette version) |
 | wwPDB validation : « wwPDB validation server: … » | Serveur indisponible, pas d'accès internet depuis le serveur, fichier refusé | Vérifier l'accès internet (proxy) du serveur, relancer plus tard ; le message du serveur est dans le log |
 | checkMySequence : « needs HMMER » | `hmmsearch` absent de son environnement | `conda install -c bioconda hmmer` dans l'environnement de checkMySequence |
+| cryoDRGN : volumes creux, junk partout, mémoire, convergence… | — | Tableau des pièges de cryoDRGN : §4.11 |
 | cryoDRGN : « Cannot find file … under datadir » | Le projet CryoSPARC a été déplacé, ou les chemins des images ne sont pas relatifs au dossier du projet | *Import particles* avec *Image folder* = le dossier du projet CryoSPARC qui contient les images |
 | « These particles have no poses » | Particules d'une extraction ou d'une classification 2D | Importez le job de **raffinement** (champs `alignments3D`) |
 | « … uses CryoSPARC's compressed format » | Fichiers `.cs` compressés des versions récentes de CryoSPARC | `pip install cryosparc-tools` dans l'environnement de CryoPlug |
@@ -587,7 +801,7 @@ Après correction : **Clear** remet le job en préparation, **Clone** crée une 
 
 ---
 
-## 10. Bonnes pratiques
+## 11. Bonnes pratiques
 
 - Un projet par structure ; donnez des **titres** parlants aux jobs et utilisez les **notes**.
 - Ne supprimez pas un job utilisé par d'autres (CryoPlug le signale) ; préférez *Clone* pour essayer une variante.
@@ -598,7 +812,7 @@ Après correction : **Clear** remet le job en préparation, **Clone** crée une 
 
 ---
 
-## 11. Glossaire
+## 12. Glossaire
 
 | Terme | Définition |
 |---|---|
@@ -614,6 +828,15 @@ Après correction : **Clear** remet le job en préparation, **Clone** crée une 
 | Fo-Fc | Carte de différence entre observation et modèle : pics positifs = densité non modélisée, négatifs = atomes en trop. |
 | OneDep | Système de dépôt commun wwPDB / EMDB. |
 | Espace latent | Coordonnées apprises par cryoDRGN pour chaque particule : des particules proches ont des structures proches. |
+| Époque | Un passage complet de l'entraînement sur toutes les particules. |
+| z, dimension latente | Nombre de coordonnées latentes par particule (8 par défaut dans cryoDRGN). |
+| β, divergence KL | Terme qui régularise l'espace latent ; β (1/z par défaut) règle son poids. |
+| Rétroprojection | Reconstruction directe des images avec leurs poses, sans affinement : sert à contrôler les entrées. |
+| Convergence | État d'un entraînement dont les volumes et l'espace latent ne changent plus d'une époque à l'autre. |
+| Sur-apprentissage | Le réseau apprend le bruit des images : volumes de plus en plus bruités aux dernières époques. |
+| Junk | Particules sans intérêt (agrégats, glace, particules cassées ou mal centrées) à retirer. |
+| Volumes « on-data » | Volumes générés aux coordonnées de vraies particules, jamais dans des régions vides de l'espace latent. |
+| Paysage (landscape) | Analyse de cryoDRGN qui regroupe en états des centaines de volumes générés, comparés entre eux. |
 | UMAP | Projection en 2D d'un espace à plusieurs dimensions qui préserve les voisinages (les distances entre îlots ne se lisent pas). |
 | 3DVA | *3D Variability Analysis* de CryoSPARC : composantes linéaires de la variabilité et coordonnée de chaque particule le long de chacune. |
 | Série de volumes | Volumes ordonnés (clusters, trajectoire, frames de 3DVA) superposés, joués comme un film. |

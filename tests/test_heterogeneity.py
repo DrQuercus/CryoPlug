@@ -203,7 +203,9 @@ def test_heterogeneity_workflows(manager, cs_particles):
     res = manager.instantiate_workflow(p["uid"], "heterogeneity_cryodrgn",
                                        overrides={"import": {"job_dir": str(cs_particles["refine"])}}, queue=False)
     by_type = {j["type"]: j for j in res["jobs"]}
-    assert set(by_type) == {"import_cryosparc", "cryodrgn_train", "series_analysis"}  # model and PC1 off by default
+    assert set(by_type) == {"import_cryosparc", "cryodrgn_train", "cryodrgn_convergence", "series_analysis"}  # model, PC1 off
+    assert by_type["cryodrgn_train"]["params"]["epochs"] == 50
+    assert by_type["cryodrgn_convergence"]["inputs"] == {"latent": {"job": by_type["cryodrgn_train"]["uid"], "output": "latent"}}
     assert by_type["cryodrgn_train"]["inputs"]["particles"]["job"] == by_type["import_cryosparc"]["uid"]
     assert by_type["series_analysis"]["inputs"] == {"series": {"job": by_type["cryodrgn_train"]["uid"], "output": "kmeans"}}
     res = manager.instantiate_workflow(p["uid"], "variability_3dva", include=["model"],

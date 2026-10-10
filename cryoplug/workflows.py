@@ -149,18 +149,21 @@ WORKFLOWS: list[dict[str, Any]] = [
     {
         "id": "heterogeneity_cryodrgn",
         "title": "Conformational heterogeneity (cryoDRGN)",
-        "description": ("Particles of the CryoSPARC consensus refinement → cryoDRGN training (latent space, volumes of "
-                        "the clusters, trajectories along the main components) → variability of the cluster volumes "
-                        "(with a model: the chains that move or come and go). Then pick clusters in the latent space "
-                        "explorer to remove junk, isolate a state or follow a transition."),
+        "description": ("First round of the cryoDRGN protocol (Kinman et al. 2023): particles of the CryoSPARC consensus "
+                        "refinement → input check and training at 128 px with the small network (latent space, cluster "
+                        "volumes with junk warnings, trajectories) → convergence check → variability of the cluster "
+                        "volumes (with a model: the chains that move or come and go). Then remove the junk in the latent "
+                        "space explorer and train again on the selection at 256 px (second round)."),
         "nodes": [
             {"id": "import", "type": "import_cryosparc", "title": "Import consensus refinement (particles)",
              "ask": ["job_dir", "symmetry"]},
             {"id": "model", "type": "import_model", "title": "Model fitted in the consensus map", "ask": ["path"],
              "optional": True, "default": False},
-            {"id": "train", "type": "cryodrgn_train", "title": "cryoDRGN training (128 px)",
-             "params": {"box": 128, "zdim": 8, "epochs": 25}, "ask": ["box", "zdim", "epochs", "gpus"],
+            {"id": "train", "type": "cryodrgn_train", "title": "cryoDRGN round 1 (128 px, small network)",
+             "params": {"box": 128, "zdim": 8, "epochs": 50}, "ask": ["box", "zdim", "epochs", "gpus", "check_inputs"],
              "inputs": {"particles": ["import", "particles"]}},
+            {"id": "convergence", "type": "cryodrgn_convergence", "title": "Convergence of round 1",
+             "inputs": {"latent": ["train", "latent"]}, "optional": True},
             {"id": "clusters", "type": "series_analysis", "title": "Variability of the cluster volumes",
              "inputs": {"series": ["train", "kmeans"], "model": ["model", "model"]}},
             {"id": "pc1", "type": "series_analysis", "title": "Motion along PC1",
