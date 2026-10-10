@@ -100,7 +100,7 @@ HELP: dict[str, dict[str, Any]] = {
             "« Import from CryoSPARC » importe déjà les particules du job en même temps que les cartes.",
             "Si les chemins des images sont cassés, indiquez le dossier des images (Image folder).",
         ],
-        "next": ["cryodrgn_train"],
+        "next": ["cryodrgn_backproject", "cryodrgn_train"],
     },
     "import_volume_series": {
         "purpose": "Importe des séries de volumes : 3D Variability Display et 3D Flex Generate de CryoSPARC, cryoDRGN, "
@@ -351,11 +351,36 @@ HELP: dict[str, dict[str, Any]] = {
     },
     # ----------------------------------------------------------- Model building
     # ----------------------------------------------------------- Heterogeneity
+    "cryodrgn_backproject": {
+        "purpose": "Vérifie que cryoDRGN lit correctement les particules avant un long entraînement (contrôle du protocole de "
+                   "Kinman et al. 2023) : conversion des poses et du CTF, réduction des images, puis rétroprojection des "
+                   "10 000 premières particules en une carte à comparer au raffinement consensus.",
+        "when": [
+            "Avant le premier entraînement sur un nouveau jeu de particules (quelques minutes).",
+            "Des volumes cryoDRGN creux, bruités ou sans rapport avec la carte consensus : vérifier les entrées.",
+            "Particules venant d'un .star ou d'un job inhabituel (raffinement hétérogène, ab initio).",
+        ],
+        "avoid": ["Juger la qualité des données sur cette carte : c'est une simple rétroprojection de quelques milliers "
+                  "d'images, pas une reconstruction raffinée."],
+        "inputs": "Les particules d'un raffinement consensus (Import from CryoSPARC, Import particles, ou une sélection).",
+        "tips": [
+            "Verdict « inputs read correctly » : la carte ressemble au consensus (même forme, même main) et la FSC entre "
+            "demi-lots montre du signal au-delà des premières coquilles.",
+            "Densité « negative » : le contraste est l'inverse de ce qu'attend cryoDRGN. Cochez « Do not invert the images » "
+            "pour l'entraînement, sinon les volumes sortent creux.",
+            "Résolution très mauvaise : poses mal lues. Vérifiez « Poses from » (refinement, heterogeneous refinement, ab "
+            "initio) et que les particules viennent bien du raffinement consensus.",
+            "L'entraînement cryoDRGN fait ce contrôle tout seul (paramètre « Input check ») : ce job sert à le faire à part, "
+            "ou à tester l'autre convention de contraste.",
+            "Les particules préparées (images réduites, poses, CTF) sont réutilisées par un entraînement à la même taille.",
+        ],
+        "next": ["cryodrgn_train"],
+    },
     "cryodrgn_train": {
-        "purpose": "Reconstruction hétérogène avec cryoDRGN : un réseau de neurones apprend un espace latent des "
-                   "conformations et compositions présentes dans les particules (poses du raffinement consensus), puis génère "
-                   "des volumes dans tout cet espace. Résultats : explorateur interactif de l'espace latent, volumes de chaque "
-                   "cluster et trajectoires le long des composantes principales.",
+        "purpose": "Reconstruction hétérogène avec cryoDRGN : un réseau de neurones apprend un espace latent des conformations "
+                   "et compositions des particules (poses du raffinement consensus). Le job contrôle d'abord les entrées, "
+                   "suit les pertes en direct, puis analyse l'espace latent : explorateur interactif, volumes des clusters "
+                   "avec alertes « junk », trajectoires, diagnostics et conseils pour la suite.",
         "when": [
             "La carte consensus a des régions floues qui pourraient bouger ou être partiellement occupées.",
             "Chercher des états minoritaires, des sous-unités absentes d'une partie des particules, des mouvements continus.",
@@ -363,63 +388,169 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "avoid": [
             "Particules sans poses fiables : faites d'abord un bon raffinement consensus (NU-refine).",
-            "Lire les volumes cryoDRGN comme des cartes haute résolution : ils servent à voir les états, pas à affiner un modèle fin.",
+            "Particules déjà très filtrées (classifications 2D/3D agressives) : l'hétérogénéité cherchée a pu disparaître.",
+            "Lire les volumes cryoDRGN comme des cartes haute résolution : ils montrent les états, ils ne servent pas à "
+            "affiner un modèle fin.",
         ],
-        "inputs": "Les particules d'un raffinement consensus (Import from CryoSPARC les importe avec les cartes).",
+        "inputs": "Les particules d'un raffinement consensus (Import from CryoSPARC les importe avec les cartes), ou une "
+                  "sélection faite dans un espace latent précédent.",
         "tips": [
-            "Premier passage à 128 px et 25 époques, z = 8 ; passage final à 256 px après nettoyage des particules.",
-            "Vérifiez la convergence : les courbes de perte doivent se stabiliser ; refaire à 50 époques ne doit pas changer les états.",
-            "Les images réduites sont gardées en sortie (particles_prepared) et réutilisées par un nouvel entraînement à la même taille.",
-            "Plusieurs GPU (--multigpu) surtout utiles à 256 px.",
-            "Explorateur : cliquez des clusters (sur le nuage ou leurs pastilles) pour jouer leurs volumes en 3D, les garder ou les "
-            "retirer (Keep… / Remove… préparent le job de sélection), ou suivre la transition (Trajectory…) ; double-clic = ouvrir "
-            "le volume d'un cluster.",
+            "Protocole en deux tours (Kinman et al. 2023) : 1) 128 px, petit réseau (256 × 3), z = 8, 50 époques, sur toutes "
+            "les particules, pour repérer le junk ; 2) 256 px, grand réseau (1024 × 3), sur les particules nettoyées. "
+            "« Network size » en mode auto suit ce protocole (grand réseau pour une sélection d'un espace latent précédent).",
+            "Courbes de perte en direct : la perte de reconstruction baisse puis se stabilise. La carte du job affiche le "
+            "temps par époque et le temps restant.",
+            "Galerie des volumes : les clusters marqués weak, noisy ou blurry sont souvent du junk. Regardez-les en 3D "
+            "(double-clic) avant de les retirer.",
+            "Tableau « Is the latent space structural? » : si le défocus ou l'orientation sont fortement codés (R² > 0,3), "
+            "une partie de l'espace latent reflète les images et non la structure.",
+            "Explorateur : « Colour by » (densité, ‖z‖, défocus, orientation…), lasso pour une région, clic sur une particule "
+            "pour son volume, « Particle images » pour voir les images d'un cluster.",
+            "Le chargement paresseux (--lazy) s'active seul si les images ne tiennent pas en mémoire. Plusieurs GPU "
+            "(--multigpu) : utile à 256 px avec le grand réseau.",
+            "CUDA out of memory : baissez le batch size. Erreur d'assertion pendant l'entraînement : décochez « Mixed precision ».",
         ],
-        "next": ["series_analysis", "select_particles", "cryodrgn_trajectory", "cryodrgn_analyze"],
+        "next": ["cryodrgn_convergence", "select_particles", "cryodrgn_continue", "cryodrgn_analyze", "cryodrgn_landscape",
+                 "cryodrgn_trajectory", "series_analysis"],
+    },
+    "cryodrgn_continue": {
+        "purpose": "Poursuit l'entraînement d'un modèle cryoDRGN depuis son dernier point de sauvegarde (même réseau, mêmes "
+                   "particules), puis l'analyse à nouveau.",
+        "when": [
+            "Le contrôle de convergence répond « not converged » ou « nearly converged » : le protocole passe de 50 à 100 époques.",
+            "Les volumes changent encore d'une époque à l'autre.",
+        ],
+        "avoid": [
+            "Changer de taille d'image, de réseau ou de particules : lancez un nouvel entraînement.",
+            "Prolonger un entraînement déjà convergé : risque de sur-apprentissage (volumes plus bruités).",
+        ],
+        "inputs": "L'espace latent d'un entraînement cryoDRGN (ou d'une continuation précédente).",
+        "tips": [
+            "« Train until epoch » = nombre total d'époques à la fin (0 = le double).",
+            "Les époques précédentes restent dans le dossier du premier job : les courbes et le contrôle de convergence "
+            "couvrent tout l'entraînement.",
+        ],
+        "next": ["cryodrgn_convergence", "select_particles", "cryodrgn_landscape"],
     },
     "cryodrgn_analyze": {
         "purpose": "Analyse à nouveau un modèle cryoDRGN entraîné : autre époque, plus de clusters, trajectoires plus longues, "
-                   "main inversée… Espace latent, volumes des clusters et trajectoires le long des composantes principales.",
+                   "main inversée… Même explorateur, mêmes volumes et diagnostics que l'entraînement.",
         "when": [
-            "Échantillonner plus finement l'espace latent (k plus grand) pour voir des états rares.",
-            "Comparer deux époques pour juger la convergence.",
+            "Échantillonner plus finement l'espace latent (50 à 100 volumes) pour voir des états rares.",
+            "Les dernières époques donnent des volumes bruités (sur-apprentissage) : analysez l'époque indiquée par le "
+            "contrôle de convergence.",
         ],
         "avoid": ["Relancer un entraînement complet pour seulement changer le nombre de volumes."],
         "inputs": "L'espace latent d'un entraînement cryoDRGN.",
-        "tips": ["Epoch = 0 reprend l'époque de l'entrée (la dernière de l'entraînement)."],
-        "next": ["series_analysis", "select_particles", "cryodrgn_trajectory"],
+        "tips": [
+            "Epoch = 0 reprend l'époque de l'entrée (la dernière de l'entraînement).",
+            "Volume box : volumes plus petits, plus rapides à générer et à visualiser ; la taille de pixel est corrigée.",
+        ],
+        "next": ["select_particles", "cryodrgn_trajectory", "cryodrgn_landscape", "series_analysis"],
+    },
+    "cryodrgn_convergence": {
+        "purpose": "Dit si un entraînement cryoDRGN a convergé, comme le recommande le protocole de Kinman et al. (2023) : "
+                   "courbe de perte, déplacement des particules dans l'espace latent d'une époque à l'autre, stabilité de "
+                   "leurs voisins, et évolution des volumes de particules représentatives au fil des époques. Donne l'époque "
+                   "à partir de laquelle les résultats sont stables, ou conseille de prolonger.",
+        "when": [
+            "Après l'entraînement final, avant d'interpréter des détails.",
+            "Choisir l'époque à analyser quand les dernières époques semblent sur-apprises.",
+        ],
+        "avoid": ["Entraînement avec un seul point de sauvegarde (« Checkpoint every » trop grand)."],
+        "inputs": "L'espace latent d'un entraînement cryoDRGN (après une continuation, toutes les époques sont comparées).",
+        "tips": [
+            "Verdict en tête du rapport (converged, nearly converged, not converged) avec la marche à suivre.",
+            "Les sorties « Particle … across epochs » se jouent en 3D : un entraînement convergé montre le même volume à "
+            "chaque époque.",
+            "L'explorateur montre l'espace latent aux époques comparées, aligné sur la dernière ; « Play the epochs » anime "
+            "la mise en place des états.",
+            "Une perte qui baisse encore lentement n'empêche pas la convergence : ce sont les volumes et l'organisation de "
+            "l'espace latent qui décident.",
+        ],
+        "next": ["cryodrgn_continue", "cryodrgn_analyze", "select_particles", "cryodrgn_landscape"],
+    },
+    "cryodrgn_landscape": {
+        "purpose": "Cartographie le paysage conformationnel à partir des volumes plutôt que de l'espace latent (cryodrgn "
+                   "analyze_landscape) : un grand nombre de volumes générés dans tout l'espace latent sont comparés par ACP "
+                   "dans un masque, puis regroupés en états par classification hiérarchique.",
+        "when": [
+            "Après un entraînement final convergé : définir des états discrets et leurs particules.",
+            "L'UMAP est difficile à lire : des particules éloignées dans l'espace latent peuvent avoir le même volume.",
+            "Avec un masque sur un domaine mobile : décrire précisément son mouvement.",
+        ],
+        "avoid": [
+            "Premier passage de nettoyage (128 px) : inutilement coûteux.",
+            "Particules où le junk n'a pas été retiré : il forme des états à part.",
+        ],
+        "inputs": "L'espace latent d'un entraînement cryoDRGN ; un masque facultatif (zone à comparer).",
+        "tips": [
+            "1000 volumes et 10 états (valeurs du protocole) ; moins de volumes pour un essai rapide.",
+            "La sortie « latent » porte les états à la place des clusters : l'explorateur (Keep…) ou « Select particles » "
+            "prennent les particules d'un état, à raffiner dans CryoSPARC.",
+            "Trajectoires « Volume PC » : les principales façons dont les volumes diffèrent dans le masque.",
+        ],
+        "next": ["select_particles", "series_analysis", "extract_volume", "cryodrgn_trajectory"],
     },
     "cryodrgn_trajectory": {
-        "purpose": "Génère les volumes le long d'un chemin de l'espace latent entre des clusters choisis (à travers les "
-                   "particules, ou en ligne droite) : un film de la transition à jouer dans le visualiseur.",
+        "purpose": "Génère les volumes le long d'un chemin de l'espace latent entre des clusters (ou des particules) choisis : "
+                   "à travers les particules (chemin soutenu par les données, cryodrgn graph_traversal) ou en ligne droite. "
+                   "Un film de la transition à jouer dans le visualiseur.",
         "when": [
             "Visualiser le passage d'un état à un autre repéré dans l'explorateur latent.",
             "Préparer une figure ou une vidéo de mouvement pour l'article.",
         ],
-        "avoid": ["Interpréter un chemin en ligne droite qui traverse des régions vides de particules : préférez le chemin à travers les particules."],
+        "avoid": ["Interpréter un chemin en ligne droite qui traverse des régions vides de particules : préférez le chemin "
+                  "à travers les particules. Un chemin n'est pas forcément un chemin biologique."],
         "inputs": "L'espace latent d'un entraînement ou d'une analyse cryoDRGN, et les numéros de clusters à relier.",
         "tips": [
             "Dans l'explorateur, cliquez les clusters dans l'ordre du chemin puis « Trajectory… » : le job est préparé.",
-            "Le chemin est tracé sur l'explorateur latent du rapport.",
+            "Particules au lieu de clusters (paramètre avancé) : relier deux particules précises (numéros affichés par "
+            "l'explorateur). « Back to the start » ferme la boucle (mouvement cyclique).",
+            "Si le graphe des voisins est coupé entre les deux points, la ligne droite est utilisée (avertissement dans le log).",
             "Volume series analysis sur la trajectoire montre où la densité change.",
         ],
         "next": ["series_analysis", "extract_volume"],
     },
-    "select_particles": {
-        "purpose": "Garde ou retire les particules de clusters latents choisis (cryoDRGN ou 3D variability) : pour éliminer "
-                   "le « junk » ou isoler un état. Écrit un fichier .cs pour CryoSPARC et des indices pour cryoDRGN.",
+    "cryodrgn_volumes": {
+        "purpose": "Génère le volume de particules choisies (à partir de leurs coordonnées latentes), ou d'une région dessinée "
+                   "au lasso dans l'explorateur : le volume au centre de la région, ou plusieurs volumes répartis dedans.",
         "when": [
-            "Des clusters ont des volumes aberrants (junk, particules cassées) : retirez-les puis réentraînez.",
-            "Un état intéressant : gardez ses particules et raffinez-les dans CryoSPARC pour une carte à haute résolution.",
+            "Une zone de l'espace latent intrigue mais n'a pas de centre de cluster.",
+            "Voir à quoi ressemblent les particules d'une région avant de la garder ou de la retirer.",
         ],
-        "avoid": ["Sélectionner sur un modèle non convergé : les clusters peuvent changer."],
-        "inputs": "Un espace latent avec ses clusters (numéros affichés dans l'explorateur).",
+        "avoid": ["Générer des centaines de volumes : utilisez « cryoDRGN analysis » (k-means) ou « landscape analysis »."],
+        "inputs": "L'espace latent d'un entraînement ou d'une analyse cryoDRGN.",
         "tips": [
-            "Le plus simple : dans l'explorateur, cliquez les clusters puis « Keep… » ou « Remove… » (le job est préparé avec leurs numéros).",
-            "Un nouvel entraînement cryoDRGN sur la sélection réutilise les images déjà réduites (pas de nouveau sous-échantillonnage).",
-            "Dans CryoSPARC : Import Particle Stack avec le fichier .cs produit, puis Homogeneous / NU refinement.",
+            "Depuis l'explorateur : cliquez une particule puis « Volume of particle … », ou dessinez une région au lasso puis "
+            "« Volume of the region… ».",
+            "Plusieurs volumes dans une région = centres k-means de ses particules (points sur les données, comme cryoDRGN).",
         ],
-        "next": ["cryodrgn_train"],
+        "next": ["series_analysis", "extract_volume"],
+    },
+    "select_particles": {
+        "purpose": "Garde ou retire des particules choisies dans un espace latent (cryoDRGN ou 3D variability) : des clusters "
+                   "entiers, une région dessinée au lasso, ou les particules aberrantes, loin des autres. Écrit la sélection "
+                   "et les particules écartées (.cs pour CryoSPARC ou .star pour RELION, et les indices pour cryoDRGN).",
+        "when": [
+            "Des clusters ont des volumes de junk (weak, noisy, blurry dans la galerie) : retirez-les puis réentraînez.",
+            "Une région de l'espace latent ou un état intéressant : gardez ses particules et raffinez-les dans CryoSPARC.",
+            "Des particules aberrantes (‖z‖ très grand) : retirez-les.",
+        ],
+        "avoid": ["Sélectionner sur un modèle non convergé : les clusters peuvent encore changer."],
+        "inputs": "Un espace latent (cryoDRGN ou 3D variability).",
+        "tips": [
+            "Le plus simple : depuis l'explorateur, « Keep… » / « Remove… » (clusters), « Keep region… » / « Remove region… » "
+            "(lasso) ou « Remove outliers… » préparent le job.",
+            "Les particules écartées sont aussi en sortie (excluded) : une classification 2D dans CryoSPARC confirme qu'il "
+            "s'agit bien de junk.",
+            "Un nouvel entraînement cryoDRGN sur la sélection réutilise les images déjà réduites ; en mode auto il prend le "
+            "grand réseau (second tour du protocole).",
+            "Outliers : ‖z‖ au-delà de la moyenne + 2 écarts-types (« Outlier threshold »).",
+            "Dans CryoSPARC : Import Particle Stack avec le fichier .cs produit, puis Homogeneous / NU refinement pour valider "
+            "un état.",
+        ],
+        "next": ["cryodrgn_train", "cryodrgn_backproject"],
     },
     "series_analysis": {
         "purpose": "Interprète une série de volumes (frames de 3D variability, clusters ou trajectoire cryoDRGN) : carte de "

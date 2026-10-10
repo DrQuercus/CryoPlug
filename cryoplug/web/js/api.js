@@ -91,6 +91,7 @@ export const api = {
   instantiate: (p, wid, body) => request('POST', `/api/projects/${p}/workflows/${wid}`, body),
 
   fileUrl: (p, path, download = false) => `/api/projects/${p}/file?path=${enc(path)}${download ? '&download=true' : ''}`,
+  particleImagesUrl: (p, j, ids, size = 96) => `/api/projects/${p}/jobs/${j}/particle-images?ids=${ids.join(',')}&size=${size}`,
   previewUrl: (p, path, maxBox) => `/api/projects/${p}/preview?path=${enc(path)}${maxBox ? `&max_box=${maxBox}` : ''}`,
   zoneUrl: (p, map, model, radius, maxBox) => `/api/projects/${p}/zone?map=${enc(map)}&model=${enc(model)}&radius=${radius}&max_box=${maxBox}`,
   bundleUrl: (p, j) => `/api/projects/${p}/jobs/${j}/interactive/bundle`,

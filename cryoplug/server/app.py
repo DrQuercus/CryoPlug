@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from cryoplug import __version__
@@ -467,6 +467,27 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
                 raise HTTPException(400, "The model has no atoms")
             zone_map(bin_map(MapVolume.read(mp), factor), xyz, radius).write(out)
         return FileResponse(out, media_type="application/octet-stream")
+
+    @app.get("/api/projects/{puid}/jobs/{juid}/particle-images")
+    def particle_images(puid: str, juid: str, ids: str, output: str = "latent", size: int = 96, per_row: int = 8) -> Response:
+        """Contact sheet of the images of some particles of a latent output (for the latent explorer)."""
+        from cryoplug.jobs.heterogeneity import particle_montage_png
+        job = manager.job(puid, juid)
+        out = next((o for o in job.get("outputs") or [] if o.get("name") == output), None)
+        if out is None or out.get("type") != "latent":
+            raise HTTPException(404, f"{juid} has no latent output '{output}'")
+        try:
+            wanted = [int(x) for x in ids.split(",") if x.strip()][:64]
+        except ValueError:
+            raise HTTPException(400, "ids must be particle numbers separated by commas") from None
+        if not wanted:
+            raise HTTPException(400, "No particle given")
+        try:
+            png = particle_montage_png(manager.project_dir(puid), out, wanted, max(32, min(size, 192)),
+                                       outputs=job.get("outputs") or [], per_row=max(1, min(per_row, 16)))
+        except (ValueError, OSError, IndexError, KeyError) as exc:
+            raise HTTPException(400, f"Particle images not available: {exc}") from None
+        return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
     def _view_factor(p: Path, max_box: int) -> int:
         from cryoplug.mrc import MapVolume, preview_factor

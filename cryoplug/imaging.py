@@ -15,6 +15,13 @@ CHAIN_COLORS = [
 
 def write_png(path: str | Path, image: np.ndarray) -> Path:
     """Write a (H, W) grayscale, (H, W, 3) RGB or (H, W, 4) RGBA uint8 image."""
+    path = Path(path)
+    path.write_bytes(png_bytes(image))
+    return path
+
+
+def png_bytes(image: np.ndarray) -> bytes:
+    """PNG encoding of a (H, W) grayscale, (H, W, 3) RGB or (H, W, 4) RGBA uint8 image."""
     img = np.ascontiguousarray(image, dtype=np.uint8)
     if img.ndim == 2:
         color_type = 0
@@ -32,9 +39,7 @@ def write_png(path: str | Path, image: np.ndarray) -> Path:
     png += chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, color_type, 0, 0, 0))
     png += chunk(b"IDAT", zlib.compress(raw, 6))
     png += chunk(b"IEND", b"")
-    path = Path(path)
-    path.write_bytes(png)
-    return path
+    return png
 
 
 # Local resolution colour scale, best (blue) to worst (red); the 3D viewer uses the same stops.

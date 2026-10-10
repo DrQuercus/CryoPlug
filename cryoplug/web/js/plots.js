@@ -207,7 +207,8 @@ export function heatmap(section) {
   const bin = (v) => Math.min(RAMP_STEPS - 1, Math.max(0, Math.floor((v - vmin) / step)));
   const unit = section.unit ? ` ${section.unit}` : '';
   const fmt = (v) => (Number.isFinite(v) ? `${v.toFixed(2)}${unit}` : '–');
-  const W = 560, m = { l: 46, r: 8, t: 6, b: 40 };
+  const longest = Math.max(0, ...ys.map((y) => String(y).length));
+  const W = 560, m = { l: Math.max(46, Math.round(longest * 6.4) + (section.y_label ? 24 : 10)), r: 8, t: 6, b: 40 };
   const cw = (W - m.l - m.r) / Math.max(1, xs.length);
   const ch = 22;
   const H = m.t + ch * ys.length + m.b;

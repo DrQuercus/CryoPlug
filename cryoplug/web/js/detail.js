@@ -435,16 +435,19 @@ function reportSection(sec, puid, job) {
       newJob: latent && job.status === 'completed' ? (type, params) => continueWith(job, type, params) : null,
       method: latent?.meta?.method,
       extract: (job.outputs || []).some((o) => o.name === 'kmeans'),
+      fileUrl: (path) => api.fileUrl(puid, path),
+      particleImages: latent && latent.name === 'latent' ? (ids) => api.particleImagesUrl(puid, job.uid, ids) : null,
     }));
     return wrap;
   }
+  const note = sec.note && sec.kind !== 'heatmap' ? h('div', { class: 'muted small sec-note' }, sec.note) : null;
   if (sec.kind === 'metrics') {
     wrap.append(h('h4', {}, sec.title), h('div', { class: 'box' }, h('table', { class: 'data' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Metric'), h('th', {}, 'Value'), h('th', {}, 'Assessment'), h('th', {}, 'Target'))),
       h('tbody', {}, sec.metrics.map((m) => h('tr', {}, h('td', {}, m.label), h('td', {}, h('b', {}, String(m.value))),
         h('td', {}, statusMark(m.status) || ''), h('td', { class: 'muted' }, m.target || '')))))));
   } else if (sec.kind === 'plot') {
-    wrap.append(h('div', { class: 'box' }, lineChart(sec)));
+    wrap.append(h('div', { class: 'box' }, lineChart(sec), note));
   } else if (sec.kind === 'heatmap') {
     wrap.append(h('div', { class: 'box' }, heatmap(sec)));
   } else if (sec.kind === 'table') {
@@ -452,7 +455,7 @@ function reportSection(sec, puid, job) {
     wrap.append(h('h4', {}, sec.title), h('div', { class: 'box table-scroll' }, h('table', { class: 'data' },
       h('thead', {}, h('tr', {}, sec.columns.map((c) => h('th', {}, c)))),
       h('tbody', {}, sec.rows.map((r) => h('tr', {}, r.map((cell, i) => h('td', {},
-        i === statusCol ? statusMark(String(cell).toLowerCase()) : String(cell)))))))));
+        i === statusCol ? statusMark(String(cell).toLowerCase()) : String(cell))))))), note));
   } else if (sec.kind === 'text') {
     wrap.append(h('h4', {}, sec.title), h('div', { class: sec.mono ? 'box mono' : 'box', style: { whiteSpace: 'pre-wrap', overflowX: 'auto' } }, sec.text));
   } else if (sec.kind === 'image') {

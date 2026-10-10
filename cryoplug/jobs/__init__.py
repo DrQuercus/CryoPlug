@@ -42,6 +42,7 @@ def _load() -> None:
     # Importing the modules registers their job types.
     from cryoplug.jobs import (  # noqa: F401
         building,
+        cryodrgn,
         deposition,
         heterogeneity,
         imports,

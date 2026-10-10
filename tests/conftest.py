@@ -106,6 +106,7 @@ def cs_particles(tmp_path_factory) -> dict[str, Path]:
     main = np.zeros(n, dtype=main_dtype)
     main["uid"] = uid
     main["alignments3D/pose"] = rng.normal(0, 1, (n, 3))
+    main["alignments3D/shift"] = np.random.default_rng(7).normal(0, 2, (n, 2))
     main["blob/path"] = [b">J2/imported/stack_A.mrcs" if i < n_per else b"J2/imported/stack_B.mrcs" for i in range(n)]
     main["blob/idx"] = np.arange(n) % n_per
     main["blob/shape"] = box

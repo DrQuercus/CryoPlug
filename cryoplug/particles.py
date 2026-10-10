@@ -150,10 +150,15 @@ class _ArrayUnpickler(pickle.Unpickler):
         raise pickle.UnpicklingError(f"{module}.{name} is not allowed in a data .pkl file")
 
 
+def load_pkl(path: str | Path) -> Any:
+    """First object of a .pkl file made of NumPy arrays and plain containers (pose.pkl: (rotations, shifts))."""
+    with open(path, "rb") as fh:
+        return _ArrayUnpickler(fh).load()
+
+
 def load_array_pkl(path: str | Path) -> np.ndarray:
     """First object of a .pkl file, which must be a NumPy array (z.N.pkl holds z_mu then z_logvar)."""
-    with open(path, "rb") as fh:
-        return np.asarray(_ArrayUnpickler(fh).load())
+    return np.asarray(load_pkl(path))
 
 
 def save_array_pkl(array: np.ndarray, path: str | Path) -> Path:
@@ -220,3 +225,202 @@ def nearest_indices(z: np.ndarray, centres: np.ndarray) -> np.ndarray:
     """Index of the particle closest to each centre."""
     z = np.asarray(z, dtype=np.float64)
     return np.array([int(np.argmin(((z - c) ** 2).sum(-1))) for c in np.asarray(centres, dtype=np.float64)])
+
+
+def pca_components(z: np.ndarray, n: int = 10) -> tuple[np.ndarray, np.ndarray, list[float]]:
+    """Mean, first ``n`` principal axes (n, d) and the variance (%) each one explains."""
+    z = np.asarray(z, dtype=np.float64)
+    if z.ndim == 1:
+        z = z[:, None]
+    mean = z.mean(axis=0)
+    sample = (z - mean)[:: max(1, len(z) // 200_000)]
+    _u, s, vt = np.linalg.svd(sample, full_matrices=False)
+    n = max(1, min(n, len(vt)))
+    var = (s ** 2) / max(float((s ** 2).sum()), 1e-12) * 100
+    return mean, vt[:n], [round(float(v), 2) for v in var[:n]]
+
+
+def points_in_polygon(points: np.ndarray, polygon: np.ndarray) -> np.ndarray:
+    """Which of the points (N, 2) lie inside the polygon (M, 2) (even-odd rule, as a lasso)."""
+    pts = np.asarray(points, dtype=np.float64)
+    poly = np.asarray(polygon, dtype=np.float64)
+    x, y = pts[:, 0], pts[:, 1]
+    inside = np.zeros(len(pts), dtype=bool)
+    j = len(poly) - 1
+    for i in range(len(poly)):
+        xi, yi = poly[i]
+        xj, yj = poly[j]
+        if yi != yj:
+            crosses = ((yi > y) != (yj > y)) & (x < (xj - xi) * (y - yi) / (yj - yi) + xi)
+            inside ^= crosses
+        j = i
+    return inside
+
+
+# ------------------------------------------------------------------- .star files
+def _star_table(path: str | Path) -> tuple[list[str], list[str], list[str], list[str]]:
+    """A RELION .star file split around its particle table: (lines before the rows, column labels, rows,
+    lines after). The particle table is the loop of the ``data_particles`` block (RELION 3.1+), or the
+    loop holding ``_rlnImageName`` in older files."""
+    lines = Path(path).read_text(errors="replace").splitlines()
+    loops = []  # (block, labels, first row line, end line)
+    block, i = "", 0
+    while i < len(lines):
+        s = lines[i].strip()
+        if s.startswith("data_"):
+            block = s[5:]
+        elif s.startswith("loop_"):
+            j = i + 1
+            labels = []
+            while j < len(lines) and lines[j].strip().startswith("_"):
+                labels.append(lines[j].split()[0])
+                j += 1
+            k = j
+            while k < len(lines) and not lines[k].strip().startswith(("data_", "loop_", "_")):
+                k += 1
+            loops.append((block, labels, j, k))
+            i = k
+            continue
+        i += 1
+    chosen = next((lp for lp in loops if lp[0] == "particles"), None) or next(
+        (lp for lp in loops if "_rlnImageName" in lp[1]), None)
+    if chosen is None:
+        raise ValueError(f"No particle table in {Path(path).name}")
+    _block, labels, start, end = chosen
+    rows = [ln for ln in lines[start:end] if ln.strip() and not ln.strip().startswith("#")]
+    return lines[:start], labels, rows, lines[end:]
+
+
+def star_column(path: str | Path, label: str) -> list[str]:
+    """Values of one column of the particle table of a .star file."""
+    _head, labels, rows, _tail = _star_table(path)
+    if label not in labels:
+        raise ValueError(f"{Path(path).name} has no {label} column")
+    col = labels.index(label)
+    return [row.split()[col] for row in rows]
+
+
+def star_count(path: str | Path) -> int:
+    return len(_star_table(path)[2])
+
+
+def filter_star(src: str | Path, dst: str | Path, ind: np.ndarray) -> Path:
+    """Copy of a .star file keeping only the particle rows ``ind`` (optics table and other blocks unchanged)."""
+    head, _labels, rows, tail = _star_table(src)
+    kept = [rows[int(i)] for i in np.asarray(ind, dtype=np.int64)]
+    dst = Path(dst)
+    dst.write_text("\n".join(head + kept + [""] + tail).rstrip("\n") + "\n")
+    return dst
+
+
+# --------------------------------------------------------------- particle images
+class ParticleImages:
+    """Particle images read by index: from an image stack (.mrcs), a list of stacks (.txt, written by
+    ``cryodrgn downsample --chunk``), or the image references of a CryoSPARC .cs or RELION .star file
+    (paths relative to ``datadir``)."""
+
+    def __init__(self, source: str | Path, datadir: str | Path | None = None):
+        import mrcfile  # noqa: F401 - fail early when missing
+        self.source = Path(source)
+        self.datadir = Path(datadir) if datadir else None
+        self._maps: dict[Path, Any] = {}
+        suffix = self.source.suffix.lower()
+        self._refs: tuple[list[Path], np.ndarray] | None = None
+        self._stacks: list[Path] = []
+        self._offsets = np.zeros(1, dtype=np.int64)
+        if suffix in (".mrcs", ".mrc", ".st"):
+            self._stacks = [self.source]
+        elif suffix == ".txt":
+            self._stacks = [self._resolve(line.strip(), self.source.parent)
+                            for line in self.source.read_text().splitlines() if line.strip()]
+        elif suffix == ".cs":
+            data = read_cs(self.source)
+            if "blob/path" not in (data.dtype.names or ()):
+                raise ValueError(f"{self.source.name} has no image locations (blob/path)")
+            names = {}
+            paths = []
+            for raw in data["blob/path"]:
+                key = raw.decode() if isinstance(raw, bytes) else str(raw)
+                if key not in names:
+                    names[key] = self._resolve(key.lstrip(">"), self.source.parent)
+                paths.append(names[key])
+            self._refs = (paths, np.asarray(data["blob/idx"], dtype=np.int64))
+        elif suffix == ".star":
+            paths, idx, cache = [], [], {}
+            for value in star_column(self.source, "_rlnImageName"):
+                number, _at, rel = value.partition("@")
+                if rel not in cache:
+                    cache[rel] = self._resolve(rel, self.source.parent)
+                paths.append(cache[rel])
+                idx.append(int(number) - 1)
+            self._refs = (paths, np.asarray(idx, dtype=np.int64))
+        else:
+            raise ValueError(f"Cannot read particle images from {self.source.name}")
+        if self._refs is None:
+            counts = [self._stack(p).shape[0] for p in self._stacks]
+            self._offsets = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
+            self.n = int(self._offsets[-1])
+        else:
+            self.n = len(self._refs[1])
+
+    def _resolve(self, rel: str, base: Path) -> Path:
+        p = Path(rel)
+        if p.is_absolute():
+            return p
+        for root in (self.datadir, base):
+            if root is not None and (root / p).exists():
+                return root / p
+        return (self.datadir or base) / p
+
+    def _stack(self, path: Path) -> np.ndarray:
+        if path not in self._maps:
+            import mrcfile
+            if len(self._maps) > 32:
+                for mm in self._maps.values():
+                    mm.close()
+                self._maps.clear()
+            self._maps[path] = mrcfile.mmap(str(path), mode="r", permissive=True)
+        data = self._maps[path].data
+        return data if data.ndim == 3 else data[np.newaxis]
+
+    def image(self, i: int) -> np.ndarray:
+        if not 0 <= i < self.n:
+            raise IndexError(f"Particle {i} does not exist (0 to {self.n - 1})")
+        if self._refs is not None:
+            path, idx = self._refs[0][i], int(self._refs[1][i])
+        else:
+            k = int(np.searchsorted(self._offsets, i, side="right") - 1)
+            path, idx = self._stacks[k], i - int(self._offsets[k])
+        return np.asarray(self._stack(path)[idx], dtype=np.float32)
+
+    def close(self) -> None:
+        for mm in self._maps.values():
+            mm.close()
+        self._maps.clear()
+
+
+def particle_tile(image: np.ndarray, size: int = 96) -> np.ndarray:
+    """A noisy particle image made readable: low-pass filtered, contrast-stretched, resized (uint8)."""
+    from scipy import ndimage
+    img = np.asarray(image, dtype=np.float32)
+    img = ndimage.gaussian_filter(img, sigma=max(0.8, img.shape[0] / 64))
+    lo, hi = np.percentile(img, [1, 99])
+    img = np.clip((img - lo) / ((hi - lo) or 1.0), 0, 1)
+    img = ndimage.zoom(img, size / img.shape[0], order=1)[:size, :size]
+    return (img[::-1] * 255).astype(np.uint8)  # y up, as the maps
+
+
+def montage(tiles: list[np.ndarray], per_row: int = 6, gap: int = 3) -> np.ndarray:
+    """Tiles side by side on a transparent background (RGBA)."""
+    if not tiles:
+        return np.zeros((1, 1, 4), dtype=np.uint8)
+    size = tiles[0].shape[0]
+    cols = min(per_row, len(tiles))
+    rows = int(np.ceil(len(tiles) / cols))
+    sheet = np.zeros((rows * (size + gap) - gap, cols * (size + gap) - gap, 4), dtype=np.uint8)
+    for i, t in enumerate(tiles):
+        r, c = divmod(i, cols)
+        y, x = r * (size + gap), c * (size + gap)
+        sheet[y:y + size, x:x + size, :3] = t[..., None]
+        sheet[y:y + size, x:x + size, 3] = 255
+    return sheet

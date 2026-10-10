@@ -361,11 +361,13 @@ class JobContext:
             tmp.write_text(json.dumps(self.state, indent=1, default=str))
             os.replace(tmp, self.state_path)
 
-    def progress(self, fraction: float, message: str | None = None) -> None:
+    def progress(self, fraction: float, message: str | None = None, log: bool = True) -> None:
+        """Progress shown on the job card; ``log=False`` for frequent updates (they would flood the log)."""
         fields: dict[str, Any] = {"progress": max(0.0, min(1.0, float(fraction))), "heartbeat": time.time()}
         if message is not None:
             fields["message"] = message
-            self.log(message)
+            if log:
+                self.log(message)
         self.write_state(**fields)
 
     # -------------------------------------------------------------- paths
@@ -578,35 +580,46 @@ class JobContext:
         self.write_state()
 
     # -------------------------------------------------------------- report
-    def _section(self, kind: str, title: str, **data: Any) -> None:
-        self.report.setdefault("sections", []).append({"kind": kind, "title": title, **data})
+    def _section(self, kind: str, title: str, key: str | None = None, **data: Any) -> None:
+        """Append a report section; a section with the same ``key`` is replaced in place instead (a plot
+        redrawn while the job runs, e.g. the losses of a training after each epoch)."""
+        section = {"kind": kind, "title": title, **({"key": key} if key else {}), **data}
+        sections = self.report.setdefault("sections", [])
+        for i, old in enumerate(sections):
+            if key and old.get("key") == key:
+                sections[i] = section
+                break
+        else:
+            sections.append(section)
         self.save_report()
 
-    def add_metrics(self, title: str, metrics: list[dict[str, Any]]) -> None:
+    def add_metrics(self, title: str, metrics: list[dict[str, Any]], key: str | None = None) -> None:
         """metrics: [{label, value, status: good|warn|bad|None, target}]"""
-        self._section("metrics", title, metrics=metrics)
+        self._section("metrics", title, key=key, metrics=metrics)
 
     def add_plot(self, title: str, series: list[dict[str, Any]], x_label: str = "", y_label: str = "",
-                 x_kind: str = "linear", hlines: list[dict[str, Any]] | None = None, y_range: list[float] | None = None) -> None:
+                 x_kind: str = "linear", hlines: list[dict[str, Any]] | None = None, y_range: list[float] | None = None,
+                 key: str | None = None, note: str = "") -> None:
         """series: [{name, x: [...], y: [...]}]; x_kind 'resolution' labels 1/A axes in A."""
-        self._section("plot", title, series=series, x_label=x_label, y_label=y_label, x_kind=x_kind,
-                      hlines=hlines or [], y_range=y_range)
+        self._section("plot", title, key=key, series=series, x_label=x_label, y_label=y_label, x_kind=x_kind,
+                      hlines=hlines or [], y_range=y_range, **({"note": note} if note else {}))
 
     def add_heatmap(self, title: str, x_labels: list[str], y_labels: list[str], values: list[list[float]],
-                    unit: str = "", x_label: str = "", y_label: str = "", note: str = "") -> None:
+                    unit: str = "", x_label: str = "", y_label: str = "", note: str = "", key: str | None = None) -> None:
         """Grid of values (rows follow y_labels) drawn with a sequential colour ramp."""
-        self._section("heatmap", title, x_labels=x_labels, y_labels=y_labels, values=values, unit=unit,
+        self._section("heatmap", title, key=key, x_labels=x_labels, y_labels=y_labels, values=values, unit=unit,
                       x_label=x_label, y_label=y_label, note=note)
 
-    def add_table(self, title: str, columns: list[str], rows: list[list[Any]]) -> None:
-        self._section("table", title, columns=columns, rows=rows)
+    def add_table(self, title: str, columns: list[str], rows: list[list[Any]], key: str | None = None,
+                  note: str = "") -> None:
+        self._section("table", title, key=key, columns=columns, rows=rows, **({"note": note} if note else {}))
 
-    def add_text(self, title: str, text: str, mono: bool = False) -> None:
+    def add_text(self, title: str, text: str, mono: bool = False, key: str | None = None) -> None:
         """Free text; ``mono`` for aligned content (sequence alignments)."""
-        self._section("text", title, text=text, **({"mono": True} if mono else {}))
+        self._section("text", title, key=key, text=text, **({"mono": True} if mono else {}))
 
-    def add_image(self, title: str, path: str | Path) -> None:
-        self._section("image", title, path=self.rel(path))
+    def add_image(self, title: str, path: str | Path, key: str | None = None) -> None:
+        self._section("image", title, key=key, path=self.rel(path))
 
     def add_latent(self, title: str, path: str | Path) -> None:
         """Interactive latent space explorer reading the JSON file at ``path`` (see jobs.heterogeneity)."""
