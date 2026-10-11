@@ -47,6 +47,7 @@ from cryoplug.jobs.cryodrgn import (
     POSE_SOURCES,
     analysis_params,
     backprojection_check,
+    crop_box,
     cryodrgn_version,
     decide_lazy,
     finish_analysis,
@@ -204,7 +205,7 @@ class AbinitMonitor:
         self.history = list(history or [])
         self.rows: list[dict[str, Any]] = []
         self.on_epoch = on_epoch
-        self.started = self.epoch_started = time.time()
+        self.epoch_started = time.time()
         self.updated = 0.0
 
     def phase(self, epoch: int) -> str:
@@ -264,7 +265,8 @@ class AbinitMonitor:
             msg += f" · {fmt_duration(rate * self.images(epoch))} per epoch"
         if left is not None and left > 0:
             msg += f" · {'roughly' if rough else 'about'} {fmt_duration(left)} left"
-        spent = time.time() - self.started
+        # time spent, in the same units as the estimate: the durations cryoDRGN logged, plus the current epoch
+        spent = sum(r["seconds"] for r in self.rows) + (0.0 if finished else time.time() - self.epoch_started)
         if left is not None and spent + left > 0:
             done = spent / (spent + left)
         else:
@@ -364,11 +366,14 @@ def image_contrast(ctx: JobContext, prep: dict[str, Any], sample: int = 3000, se
 
 def report_contrast(ctx: JobContext, result: dict[str, Any], uninvert: bool) -> None:
     word = {"dark": "darker than the solvent", "bright": "brighter than the solvent", "unclear": "unclear"}[result["status"]]
+    if result["status"] != "unclear":
+        word += " (clear)" if abs(result["score"]) > 10 else " (weak)"
     expected = "bright" if uninvert else "dark"
     status = "good" if result["status"] == expected else ("warn" if result["status"] == "unclear" else "bad")
     ctx.add_metrics(f"Input check: average of {result['n']:,} particle images", [
-        {"label": "Particles in the raw images", "value": f"{word} ({result['score']:+.1f} SD)", "status": status,
-         "target": "darker (cryoDRGN inverts the images)" if not uninvert else "brighter (images used as they are)"},
+        {"label": "Particles in the raw images", "value": word, "status": status,
+         "target": ("darker (cryoDRGN inverts the images)" if not uninvert else "brighter (images used as they are)")
+                   + f"; contrast score {result['score']:+.0f}, decisive beyond ±3"},
         {"label": "Images", "value": "used as they are (--uninvert-data)" if uninvert else "inverted (cryoDRGN default)",
          "status": None, "target": ""}], key="contrast")
     ctx.add_image("Average of the particle images (low-passed)", result["image"], key="contrast_image")
@@ -775,9 +780,10 @@ def finish_abinit(ctx: JobContext, *, source: Path, source_meta: dict[str, Any],
         if len(files) > 1:
             add_series(ctx, "reconstructions", files, f"cryoDRGN-AI {what} across epochs",
                        [f"Epoch {e}" for e in shown], {"kind": "abinit_epochs"})
-            from cryoplug.jobs.series import load_frames
+            from cryoplug.jobs.series import load_frames, molecule_region
             vols, _f = load_frames(files, max_box=64)
-            tiles = projection_tiles(np.stack([v.data for v in vols]), size=64, axes=(0,))
+            stack = np.stack([v.data for v in vols])
+            tiles = projection_tiles(stack, size=64, axes=(0,), crop=crop_box(molecule_region(stack[-1])))
             ctx.add_image(f"Reconstruction at epochs {', '.join(map(str, shown))} (projections)",
                           strip_png(ctx.path("reconstructions.png"), [t[0] for t in tiles]))
 

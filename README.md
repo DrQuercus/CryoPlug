@@ -60,6 +60,12 @@ local :
 | **Volumes de particules représentatives au fil des époques** (corrélation entre époques, planche) | **Paysage des volumes** : états définis à partir de centaines de volumes générés |
 | ![](docs/images/cryodrgn_convergence_volumes.png) | ![](docs/images/cryodrgn_landscape.png) |
 
+| **cryoDRGN-AI en direct** (ab initio, sans consensus) : phase (recherche de poses ou SGD), temps restant, pertes par phase, stabilité des poses | **Comparaison avec les poses consensus** : main (ici le modèle était le miroir du consensus, corrigé), écart par particule |
+|---|---|
+| ![](docs/images/cryodrgn_ai_live.png) | ![](docs/images/cryodrgn_ai_comparison.png) |
+| **Explorateur colorié par l'écart au consensus** : le junk (en haut) n'a pas de pose stable | **Reconstruction au fil des époques** et **validation** : rétroprojection avec les poses apprises |
+| ![](docs/images/cryodrgn_ai_explorer.png) | ![](docs/images/cryodrgn_ai_validation.png) |
+
 | **Comptes utilisateurs** (Settings › Users) : rôle, dossier des projets, dossiers lisibles, statut | **Ajout d'un utilisateur** : mot de passe généré ou choisi, dossiers autorisés |
 |---|---|
 | ![](docs/images/accounts_users.png) | ![](docs/images/accounts_add_user.png) |

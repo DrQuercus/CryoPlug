@@ -39,7 +39,7 @@ export function lineChart(section) {
   const series = all.slice(0, MAX_SERIES);
   const folded = all.length - series.length;
   const W = 560, H = 270, m = { l: 46, r: 40, t: 12, b: 40 };
-  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const ih = H - m.t - m.b;
 
   let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
   for (const sr of series) {
@@ -53,6 +53,11 @@ export function lineChart(section) {
   if (isRes) xmin = 0;
   if (section.y_range) [ymin, ymax] = section.y_range;
   else { const pad = (ymax - ymin) * 0.06 || 1; ymin -= pad; ymax += pad; }
+  // room for the longest tick label, and for the axis title beside it
+  const yticks = niceTicks(ymin, ymax, 5);
+  const longest = Math.max(1, ...yticks.map((t) => String(+t.toFixed(3)).length));
+  m.l = Math.max(46, Math.round(longest * 6.4) + (section.y_label ? 26 : 12));
+  const iw = W - m.l - m.r;
   const X = (x) => m.l + ((x - xmin) / (xmax - xmin || 1)) * iw;
   const Y = (y) => m.t + (1 - (y - ymin) / (ymax - ymin || 1)) * ih;
   const xLabel = (x) => (isRes ? (x > 0 ? `${(1 / x).toFixed(2)} Å` : '∞') : `${section.x_label || 'x'} ${Number.isInteger(x) ? x : x.toFixed(2)}`);
@@ -60,7 +65,7 @@ export function lineChart(section) {
   const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': section.title || 'Chart' });
   const grid = s('g', { class: 'grid' });
   const axis = s('g', { class: 'axis' });
-  for (const t of niceTicks(ymin, ymax, 5)) {
+  for (const t of yticks) {
     grid.appendChild(s('line', { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t) }));
     axis.appendChild(s('text', { x: m.l - 6, y: Y(t) + 4, 'text-anchor': 'end' }, +t.toFixed(3)));
   }
