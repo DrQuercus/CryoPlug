@@ -22,8 +22,9 @@ CryoPlug adds what makes the results usable and trustworthy:
 
 cryoDRGN's own tools need care with these models (handled here and in :mod:`cryoplug.jobs.cryodrgn`): shifts are
 saved in pixels (not fractions of the box), ``analyze`` writes into the training folder and ignores flip, low-pass
-and downsampling, ``eval_vol`` reads these models from version 4.3 only, ``analyze_landscape`` inverts the sign of
-their volumes and writes them with a pixel size of 1 Å.
+and downsampling, ``eval_vol`` reads these models from version 4.3 only, ``analyze_landscape`` inverts their volumes
+when the images were inverted for training (then zeroes negative density before comparing them: the molecule),
+writes them with a pixel size of 1 Å and wraps them on a smaller box instead of downsampling them.
 """
 from __future__ import annotations
 
@@ -409,9 +410,9 @@ def report_validation(ctx: JobContext, result: dict[str, Any], full: Path, used:
 
 
 # --------------------------------------------------------------- comparison
-def report_comparison(ctx: JobContext, cmp: dict[str, Any], extent: float | None) -> dict[str, Any]:
-    """Pose comparison with the consensus: metrics, distribution, what it means. Returns the summary kept in the
-    metadata of the outputs."""
+def report_comparison(ctx: JobContext, cmp: dict[str, Any], extent: float | None, applied: bool = True) -> dict[str, Any]:
+    """Pose comparison with the consensus: metrics, distribution, what it means (``applied``: the results were
+    brought into the frame of the consensus). Returns the summary kept in the metadata of the outputs."""
     n = len(cmp["angle"])
     hand = {"clear": "certain", "weak": "probable", "none": "uncertain"}[cmp["hand_confidence"]]
     med_view = float(np.median(cmp["view_angle"]))
@@ -463,16 +464,19 @@ def report_comparison(ctx: JobContext, cmp: dict[str, Any], extent: float | None
                       "consensus aligned the largest part.")
     if cmp["mirror"] and cmp["hand_confidence"] != "none":
         advice.append("The cryoDRGN-AI model came out as the mirror image of the consensus (an ab initio reconstruction cannot "
-                      "tell the hands apart). Its volumes and poses are flipped back here: nothing to do.")
+                      "tell the hands apart). " + ("Its volumes and poses are flipped back here: nothing to do." if applied else
+                      "The results were left in the frame of the model ('Put the results in the consensus frame' off): "
+                      "flip them, or run again with that option on."))
     ctx.add_text("Comparison with the consensus: what it means", "\n\n".join(advice), key="comparison_advice")
-    ctx.add_highlight("Hand", "mirrored, corrected" if cmp["mirror"] else "as consensus",
-                      {"clear": "good", "weak": "warn", "none": "bad"}[cmp["hand_confidence"]])
+    hand = ("mirrored, corrected" if applied else "mirrored, not corrected") if cmp["mirror"] else "as consensus"
+    ctx.add_highlight("Hand", hand, {"clear": "good", "weak": "warn", "none": "bad"}[cmp["hand_confidence"]]
+                      if applied or not cmp["mirror"] else "warn")
     ctx.add_highlight("Poses within 10°", f"{100 * within10:.0f} %", agree)
     return {"median": round(cmp["median"], 2), "within10": round(within10, 4), "within30": round(within30, 4),
             "mirror": cmp["mirror"], "hand_confidence": cmp["hand_confidence"], "symmetry": cmp["symmetry"]}
 
 
-def report_map_alignment(ctx: JobContext, result: dict[str, Any], name: str) -> None:
+def report_map_alignment(ctx: JobContext, result: dict[str, Any], name: str, applied: bool = True) -> None:
     hand = {"clear": "certain", "weak": "probable", "none": "uncertain"}[result["hand_confidence"]]
     ctx.add_metrics(f"Alignment on the reference map ({name})", [
         {"label": "Hand of the cryoDRGN-AI model", "value": ("mirror image of the reference" if result["mirror"] else
@@ -482,8 +486,9 @@ def report_map_alignment(ctx: JobContext, result: dict[str, Any], name: str) -> 
         {"label": "Correlation after alignment (low-passed)", "value": f"{result['score']:.3f}",
          "status": "good" if result["score"] > 0.8 else ("warn" if result["score"] > 0.5 else "bad"),
          "target": f"at {2 * result['pixel']:.0f} Å"}], key="map_alignment")
-    ctx.add_highlight("Hand", "mirrored, corrected" if result["mirror"] else "as reference",
-                      {"clear": "good", "weak": "warn", "none": "bad"}[result["hand_confidence"]])
+    hand = ("mirrored, corrected" if applied else "mirrored, not corrected") if result["mirror"] else "as reference"
+    ctx.add_highlight("Hand", hand, {"clear": "good", "weak": "warn", "none": "bad"}[result["hand_confidence"]]
+                      if applied or not result["mirror"] else "warn")
 
 
 # ----------------------------------------------------------------- outputs
@@ -510,6 +515,71 @@ def write_learned_particles(ctx: JobContext, source: Path, rot: np.ndarray, tran
     except (OSError, ValueError, KeyError) as exc:
         ctx.warn(f"The particles with their learned poses could not be written: {exc}")
         return None
+
+
+def write_learned_outputs(ctx: JobContext, *, rot: np.ndarray, trans: np.ndarray | None, ind: np.ndarray | None,
+                          source: Path, source_meta: dict[str, Any], frame: dict[str, Any] | None,
+                          prepared: dict[str, Any]) -> tuple[dict[str, Any], Path | None]:
+    """The learned poses of a model (already in its final frame) as cryoDRGN reads them (rows of the prepared image
+    stack: all of them, the selected rows filled in, when the model was trained on a subset with --ind), and the
+    particle file rewritten with them, as a "particles" output. Returns the prepared images record that points to
+    these poses, and the particle file."""
+    from cryoplug import particles as pt
+    if ind is not None:
+        full_rot = np.repeat(np.eye(3)[None], int(ind.max()) + 1, axis=0)
+        full_trans = np.zeros((len(full_rot), 2))
+        full_rot[ind] = rot
+        if trans is not None:
+            full_trans[ind] = trans
+        poses_pkl = save_poses(ctx.path("poses_learned.pkl"), full_rot, full_trans)
+    else:
+        poses_pkl = save_poses(ctx.path("poses_learned.pkl"), rot, trans)
+    prepared = {**prepared, "pose_source": "refinement", "poses": ctx.rel(poses_pkl)}
+    particles_file = write_learned_particles(ctx, source, rot, trans, source_meta)
+    if particles_file is not None:
+        n = len(rot)
+        pmeta: dict[str, Any] = {k: source_meta[k] for k in ("format", "datadir", "symmetry", "resolution", "pixel_size",
+                                                             "box") if k in source_meta}
+        if particles_file.suffix == ".cs":
+            pmeta.update(pt.summary(pt.read_cs(particles_file)))
+        else:
+            pmeta.update({"n_particles": n, "has_images": True, "has_ctf": True})
+        pmeta.update({"has_poses": True, "poses_from": "cryoDRGN-AI",
+                      "pose_frame": (frame or {}).get("source", "cryoDRGN-AI model"), "abinit_job": ctx.uid})
+        own = {k: v for k, v in prepared.items() if k not in ("consensus_poses", "consensus_pose_source")}
+        if ind is None:
+            pmeta["cryodrgn"] = own
+        else:
+            pmeta["parent_cryodrgn"] = {k: v for k, v in own.items() if k != "ind"}
+            pmeta["parent_indices"] = prepared["ind"]
+        ctx.add_output("particles", "particles", particles_file, f"Particles with their learned poses ({n:,})", meta=pmeta)
+    return prepared, particles_file
+
+
+def rewrite_learned_poses(ctx: JobContext, lat_meta: dict[str, Any], lineage: dict[str, Any], workdir: Path,
+                          epoch: int) -> dict[str, Any]:
+    """The learned poses of another epoch, or in another frame (a change of hand asked in an analysis), written
+    again so that selections and trainings from the new latent space use the poses of its volumes."""
+    from cryoplug import particles as pt
+    from cryoplug.jobs.heterogeneity import output_meta_of
+    prepared = dict(lineage.get("prepared") or {})
+    box = int(lineage.get("box") or prepared.get("box") or 0)
+    if not box or not (Path(workdir) / f"pose.{epoch}.pkl").exists():
+        ctx.warn("The learned poses of this epoch are not available: selections keep those of the training")
+        return lineage
+    rot, trans = learned_poses(workdir, epoch, box)
+    frame = lineage.get("frame")
+    if frame:
+        rot, trans = ps.apply_frame(rot, trans, frame)
+    source = ctx.abs(lineage["particles"])
+    ind = pt.load_array_pkl(ctx.abs(prepared["ind"])).astype(np.int64) if prepared.get("ind") else None
+    source_meta = {"format": "star" if source.suffix == ".star" else "cs", **output_meta_of(ctx, source)}
+    prepared, particles_file = write_learned_outputs(ctx, rot=rot, trans=trans, ind=ind, source=source,
+                                                     source_meta=source_meta, frame=frame, prepared=prepared)
+    out = {**lineage, "prepared": prepared}
+    if particles_file is not None:
+        out["particles"] = ctx.rel(particles_file)
+    return out
 
 
 def finish_volumes(files: list[Path], frame: dict[str, Any] | None, lowpass: float = 0.0, apix: float | None = None,
@@ -657,9 +727,10 @@ def finish_abinit(ctx: JobContext, *, source: Path, source_meta: dict[str, Any],
                   settings: dict[str, Any], chain: list[Path], epoch: int, params: dict[str, Any],
                   version: tuple[int, int, int], lazy: bool, consensus: str | None, consensus_source: str | None,
                   pose_source: str, stability: PoseStability, validate: bool = False, reference: InputData | None = None,
-                  validate_images: int = 0, previous_frame: dict[str, Any] | None = None) -> None:
+                  validate_images: int = 0, previous_frame: dict[str, Any] | None = None,
+                  inherit_frame: bool = False) -> None:
     """Poses, frame and hand, particles with their learned poses, reconstructions, validation and analysis of a
-    cryoDRGN-AI model (after a training or a continuation)."""
+    cryoDRGN-AI model (after a training or, with ``inherit_frame``, a continuation that keeps ``previous_frame``)."""
     from cryoplug import particles as pt
     from cryoplug.mrc import MapVolume
     workdir, box = chain[-1], int(prep["box"])
@@ -669,95 +740,72 @@ def finish_abinit(ctx: JobContext, *, source: Path, source_meta: dict[str, Any],
     n = len(rot)
     stability.update()
 
-    # frame and hand: from the consensus poses, else from a reference map
+    # frame and hand: from the consensus poses, else from a reference map; a continuation keeps the frame of the
+    # training it continues (its alignment, hand and any flip), the comparison is only measured again
     ctx.progress(0.81, "Comparing the learned poses with the consensus" if consensus else "Learned poses")
-    frame, summary = None, None
     cons = consensus_poses(ctx, consensus, ind, n) if consensus else None
     extent = apix * box if apix else None
+    cmp = result = None
     if cons is not None:
         symmetry = str(params.get("symmetry") or "").strip() or str(source_meta.get("symmetry") or "C1")
         cmp = ps.compare_poses(rot, trans, cons[0], cons[1], symmetry=symmetry)
         if cmp["symmetry"] != symmetry.upper() and symmetry.upper() != "C1":
             ctx.warn(f"Symmetry {symmetry} is not handled by the pose comparison (C and D groups are): compared as C1")
-        summary = report_comparison(ctx, cmp, extent)
         arrays = {"angle": cmp["angle"].astype(np.float32), "view_angle": cmp["view_angle"].astype(np.float32)}
         if cmp["shift_error"] is not None and extent:
             arrays["shift_error"] = (cmp["shift_error"] * extent).astype(np.float32)
         np.savez(ctx.path("pose_comparison.npz"), **arrays)
-        if cmp["hand_confidence"] != "none":
-            frame = ps.frame_dict(cmp["rotation"], cmp["mirror"], cmp["shift"], source="consensus poses",
-                                  confidence=cmp["hand_confidence"])
-    elif reference is not None:
-        last_map = workdir / f"reconstruct.{epoch}.mrc"
+    elif reference is not None and not inherit_frame:
         try:
             ref = MapVolume.read(ctx.abs(reference.files[0]))
-            mine = MapVolume.read(last_map)
+            mine = MapVolume.read(workdir / f"reconstruct.{epoch}.mrc")
             ctx.progress(0.82, "Aligning the reconstruction on the reference map (both hands)")
             size = min(32, max(16, mine.data.shape[0]))
             result = ps.align_maps(mine.data, apix or mine.pixel_size, ref.data, ref.pixel_size, size=size,
                                    n_rotations=3000 if size >= 32 else 1200)
-            report_map_alignment(ctx, result, reference.label or Path(reference.files[0]).name)
-            if result["hand_confidence"] != "none" and result["score"] > 0.5:
-                frame = ps.frame_dict(result["rotation"], result["mirror"], result["shift"], source="reference map",
-                                      confidence=result["hand_confidence"])
-            else:
-                ctx.warn("The reconstruction does not match the reference map well enough to set the frame and the hand")
         except Exception as exc:  # noqa: BLE001 - optional step
             ctx.warn(f"Alignment on the reference map failed: {exc}")
-    elif previous_frame is not None:  # a continuation keeps the frame found for the earlier epochs
+    frame = None
+    inherited = inherit_frame and previous_frame is not None
+    if inherited:
         frame = previous_frame
         ctx.log(f"Frame of the earlier training kept ({previous_frame.get('source', 'reference')})")
-    if frame is not None and not params.get("align", True):
+    elif cmp is not None and cmp["hand_confidence"] != "none":
+        frame = ps.frame_dict(cmp["rotation"], cmp["mirror"], cmp["shift"], source="consensus poses",
+                              confidence=cmp["hand_confidence"])
+    elif result is not None:
+        if result["hand_confidence"] != "none" and result["score"] > 0.5:
+            frame = ps.frame_dict(result["rotation"], result["mirror"], result["shift"], source="reference map",
+                                  confidence=result["hand_confidence"])
+        else:
+            ctx.warn("The reconstruction does not match the reference map well enough to set the frame and the hand")
+    if frame is not None and not inherited and not params.get("align", True):
         ctx.log("The results stay in the frame of the cryoDRGN-AI model ('Put the results in the consensus frame' is off)")
         frame = None
+    applied = frame is not None
     if params.get("flip"):
         frame = ps.flipped_frame(frame)
         ctx.log("Volumes and poses flipped (change of hand)")
+    summary = report_comparison(ctx, cmp, extent, applied) if cmp is not None else None
+    if result is not None:
+        report_map_alignment(ctx, result, reference.label or Path(reference.files[0]).name, applied)
     if frame is not None:
         rot, trans = ps.apply_frame(rot, trans, frame)
 
-    # learned poses: cryoDRGN format (rows of the prepared images) and the particle file with them
-    if ind is not None:  # rows of the prepared image stack, as cryoDRGN reads them with --ind
-        full_rot = np.repeat(np.eye(3)[None], int(ind.max()) + 1, axis=0)
-        full_trans = np.zeros((len(full_rot), 2))
-        full_rot[ind] = rot
-        if trans is not None:
-            full_trans[ind] = trans
-        poses_pkl = save_poses(ctx.path("poses_learned.pkl"), full_rot, full_trans)
-    else:
-        poses_pkl = save_poses(ctx.path("poses_learned.pkl"), rot, trans)
-    particles_file = write_learned_particles(ctx, source, rot, trans, source_meta)
-    prepared = {"box": box, "stack": ctx.rel(prep["stack"]), "ctf": ctx.rel(prep["ctf"]), "datadir": prep.get("datadir"),
-                "pose_source": "refinement", "poses": ctx.rel(poses_pkl)}
-    if prep.get("ind"):
-        prepared["ind"] = ctx.rel(prep["ind"])
-    if consensus:  # already relative to the project
-        prepared["consensus_poses"] = consensus
-        prepared["consensus_pose_source"] = pose_source
+    # learned poses (cryoDRGN format) and the particle file with them
+    prepared, particles_file = write_learned_outputs(
+        ctx, rot=rot, trans=trans, ind=ind, source=source, source_meta=source_meta, frame=frame,
+        prepared={"box": box, "stack": ctx.rel(prep["stack"]), "ctf": ctx.rel(prep["ctf"]), "datadir": prep.get("datadir"),
+                  **({"ind": ctx.rel(prep["ind"])} if prep.get("ind") else {}),
+                  **({"consensus_poses": consensus, "consensus_pose_source": pose_source} if consensus else {})})
     lineage: dict[str, Any] = {"particles": ctx.rel(particles_file or source), "box": box, "prepared": prepared,
                                "abinit": {**settings, "epochs": int(epoch), "version": version_text(version),
-                                          "lazy": bool(lazy)},
+                                          "lazy": bool(lazy), "align": bool(params.get("align", True))},
                                "frame": frame, "workdirs": [ctx.rel(d) for d in chain]}
     if consensus_source:
         lineage["consensus_particles"] = consensus_source
     if summary:
         lineage["pose_comparison"] = summary
-    if particles_file is not None:
-        pmeta: dict[str, Any] = {k: source_meta[k] for k in ("format", "datadir", "symmetry", "resolution", "pixel_size",
-                                                             "box") if k in source_meta}
-        if particles_file.suffix == ".cs":
-            pmeta.update(pt.summary(pt.read_cs(particles_file)))
-        else:
-            pmeta.update({"n_particles": n, "has_images": True, "has_poses": True, "has_ctf": True})
-        pmeta.update({"has_poses": True, "poses_from": "cryoDRGN-AI",
-                      "pose_frame": (frame or {}).get("source", "cryoDRGN-AI model"), "abinit_job": ctx.uid})
-        if ind is None:
-            pmeta["cryodrgn"] = {k: v for k, v in prepared.items() if k not in ("consensus_poses", "consensus_pose_source")}
-        else:
-            pmeta["parent_cryodrgn"] = {k: v for k, v in prepared.items()
-                                        if k not in ("ind", "consensus_poses", "consensus_pose_source")}
-            pmeta["parent_indices"] = prepared["ind"]
-        ctx.add_output("particles", "particles", particles_file, f"Particles with their learned poses ({n:,})", meta=pmeta)
 
     # reconstructions across epochs (volume at the centre of the latent space), in the reference frame
     found: dict[int, Path] = {}
@@ -789,7 +837,7 @@ def finish_abinit(ctx: JobContext, *, source: Path, source_meta: dict[str, Any],
 
     if validate:
         ctx.progress(0.84, "Validation: backprojection with the learned poses")
-        vprep = {**prep, "poses": str(poses_pkl), "n": n if ind is None else len(ind)}
+        vprep = {**prep, "poses": str(ctx.abs(prepared["poses"])), "n": n if ind is None else len(ind)}
         backprojection_check(ctx, vprep, bool(settings.get("uninvert")), lazy, first=int(validate_images or 0),
                              span=(0.84, 0.87), folder="validation", report=report_validation)
 
@@ -935,7 +983,8 @@ class CryodrgnAbinit(JobType):
         consensus = ctx.rel(prep["poses"]) if prep.get("poses") else None
         finish_abinit(ctx, source=source, source_meta=meta, prep=prep, settings=settings, chain=[workdir], epoch=epoch,
                       params=p, version=version, lazy=lazy, consensus=consensus,
-                      consensus_source=ctx.rel(source) if consensus else None, pose_source=p["pose_source"],
+                      consensus_source=ctx.rel(source) if consensus else None,
+                      pose_source=prep.get("pose_source") or p["pose_source"],
                       stability=stability, validate=p["validate"], reference=ctx.input("reference"),
                       validate_images=p["validate_images"])
 
@@ -1016,11 +1065,12 @@ def continue_abinit(ctx: JobContext, lat: InputData, p: dict[str, Any], version:
     from cryoplug.jobs.heterogeneity import output_meta_of
     source_meta.update(output_meta_of(ctx, source))
     consensus = prepared.get("consensus_poses")
+    symmetry = (lat.meta.get("pose_comparison") or {}).get("symmetry") or ""
     finish_abinit(ctx, source=source, source_meta=source_meta, prep=prep, settings=settings, chain=chain, epoch=epoch,
-                  params={**p, "align": True}, version=version, lazy=lazy, consensus=consensus,
-                  consensus_source=lat.meta.get("consensus_particles"),
+                  params={**p, "align": bool(settings.get("align", True)), "symmetry": symmetry}, version=version,
+                  lazy=lazy, consensus=consensus, consensus_source=lat.meta.get("consensus_particles"),
                   pose_source=prepared.get("consensus_pose_source") or "refinement", stability=stability,
-                  previous_frame=lat.meta.get("frame"))
+                  previous_frame=lat.meta.get("frame"), inherit_frame=True)
 
 
 # ------------------------------------------------- analysis of these models
@@ -1040,6 +1090,7 @@ def abinit_analysis(ctx: JobContext, workdir: Path, epoch: int, params: dict[str
                     os.symlink(src.resolve(), dst)
                 except OSError:
                     dst.write_bytes(src.read_bytes())
+    apix = float(params.get("apix") or 0) or apix
     args = [ctx.executable("cryodrgn"), "analyze", target, str(epoch), "--ksample", str(params["ksample"]),
             "--pc", str(params.get("pcs", 2))]
     n_per_pc = int(params.get("n_per_pc", 10))

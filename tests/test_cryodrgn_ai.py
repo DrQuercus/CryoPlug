@@ -296,11 +296,16 @@ def test_jobs_on_abinit_models(manager, abinit_mirror):
                 {"latent": {"job": cont["uid"], "output": "latent"}})
     verdict = {m["label"]: m for m in _section(manager, puid, conv, "verdict")["metrics"]}
     assert "Poses (cryoDRGN-AI)" in verdict and "epoch_000" not in str(_outs(conv))
-    # landscape: own mask (cryoDRGN's would come from inverted volumes), volumes put back to positive density
+    # landscape: on a copy of the model that cryoDRGN does not invert (it would zero the molecule before clustering)
     land = _run(manager, puid, "cryodrgn_landscape", {"sketch": 20, "states": 3, "box": 32}, latent)
-    assert "--mask" in log_of(manager, puid, land["uid"])
+    llog = log_of(manager, puid, land["uid"])
+    model = manager.project_dir(puid) / land["uid"] / "model"
+    assert f"{land['uid']}/model 8" in llog and "invert_data: false" in (model / "config.yaml").read_text()
     state = MapVolume.read(manager.project_dir(puid) / _outs(land)["states"]["files"][0])
     assert state.data.max() > -state.data.min() and abs(state.pixel_size - 4.0) < 1e-3
+    with np.load(manager.project_dir(puid) / _outs(land)["latent"]["path"]) as arrays:
+        states, z = arrays["labels"], arrays["z"]
+    assert np.all(np.diff(states[np.argsort(z[:, 0], kind="stable")]) >= 0)  # the states follow the structure
 
 
 def test_selections_and_training_with_learned_poses(manager, abinit_mirror):
@@ -405,3 +410,50 @@ def test_cryodrgn_ai_workflow(manager, cs_particles):
                                                   "reference": {"map": "/tmp/ref.mrc"}}, queue=False)
     ab = next(j for j in res["jobs"] if j["type"] == "cryodrgn_abinit")
     assert set(ab["inputs"]) == {"particles", "reference"}
+
+
+def test_hand_frame_through_continuation_analysis_and_options(manager, drgn_project, monkeypatch):
+    """A change of hand asked for, and alignment turned off, are kept by continuations, analyses and selections."""
+    puid, imp = drgn_project
+    particles = {"particles": {"job": imp["uid"], "output": "particles"}}
+    monkeypatch.setenv("FAKE_CRYODRGN_MIRROR", "1")
+    flipped = _run(manager, puid, "cryodrgn_abinit", {**ABINIT, "flip": True, "symmetry": "C4", "validate": False}, particles)
+    fmeta = _outs(flipped)["latent"]["meta"]
+    assert fmeta["frame"]["mirror"] is False and fmeta["pose_comparison"]["symmetry"] == "C4"
+    cont = _run(manager, puid, "cryodrgn_continue", {"epochs": 10, "ksample": 4},
+                {"latent": {"job": flipped["uid"], "output": "latent"}})
+    cmeta = _outs(cont)["latent"]["meta"]
+    assert cmeta["frame"] == fmeta["frame"] and cmeta["pose_comparison"]["symmetry"] == "C4"
+    assert "Frame of the earlier training kept" in log_of(manager, puid, cont["uid"])
+    # alignment off: the hand is reported, not corrected, and a continuation does not align either
+    raw = _run(manager, puid, "cryodrgn_abinit", {**ABINIT, "align": False, "validate": False}, particles)
+    assert _outs(raw)["latent"]["meta"]["frame"] is None
+    assert _highlights(raw)["Hand"]["value"] == "mirrored, not corrected"
+    rcont = _run(manager, puid, "cryodrgn_continue", {"epochs": 10, "ksample": 4}, {"latent": {"job": raw["uid"], "output": "latent"}})
+    assert _outs(rcont)["latent"]["meta"]["frame"] is None
+    monkeypatch.delenv("FAKE_CRYODRGN_MIRROR")
+    # a flip in an analysis rewrites the learned poses, so selections and trainings follow the new hand
+    ana = _run(manager, puid, "cryodrgn_analyze", {"ksample": 4, "flip": True}, {"latent": {"job": raw["uid"], "output": "latent"}})
+    ameta = _outs(ana)["latent"]["meta"]
+    assert ameta["frame"]["mirror"] is True and ameta["prepared"]["poses"].startswith(ana["uid"])
+    assert ameta["particles"] == _outs(ana)["particles"]["path"]
+    root = manager.project_dir(puid)
+    before = pt.read_cs(root / _outs(raw)["particles"]["path"])
+    after = pt.read_cs(root / _outs(ana)["particles"]["path"])
+    rb, _ = ps.cryosparc_to_cryodrgn(before["alignments3D/pose"], before["alignments3D/shift"], 32)
+    ra, _ = ps.cryosparc_to_cryodrgn(after["alignments3D/pose"], after["alignments3D/shift"], 32)
+    assert np.median(ps.pose_change(ps.MIRROR @ rb @ ps.MIRROR, ra)) < 0.01  # the same poses, other hand
+    sel = _run(manager, puid, "select_particles", {"clusters": "1-2"}, {"latent": {"job": ana["uid"], "output": "latent"}})
+    assert _outs(sel)["particles"]["meta"]["parent_cryodrgn"]["poses"] == ameta["prepared"]["poses"]
+
+
+def test_consensus_poses_read_another_way_are_kept(manager, drgn_project):
+    puid, imp = drgn_project
+    bp = _run(manager, puid, "cryodrgn_backproject", {"box": 16, "images": 50, "pose_source": "heterogeneous refinement"},
+              {"particles": {"job": imp["uid"], "output": "particles"}})
+    job = _run(manager, puid, "cryodrgn_abinit", {**ABINIT, "epochs": 4, "validate": False},
+               {"particles": {"job": bp["uid"], "output": "particles_prepared"}})
+    log = log_of(manager, puid, job["uid"])
+    assert "read as 'heterogeneous refinement': kept for the comparison" in log and "parse_pose_csparc" not in log
+    meta = _outs(job)["latent"]["meta"]
+    assert meta["prepared"]["consensus_pose_source"] == "heterogeneous refinement" and "pose_comparison" in meta

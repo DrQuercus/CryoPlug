@@ -730,7 +730,7 @@ Cartographie le paysage conformationnel à partir des volumes plutôt que de l'e
 - 1000 volumes et 10 états (valeurs par défaut de cryoDRGN) ; moins de volumes pour un essai rapide.
 - La sortie « latent » porte les états à la place des clusters : l'explorateur (Keep…) ou « Select particles » prennent les particules d'un état, à raffiner dans CryoSPARC.
 - Trajectoires « Volume PC » : les principales façons dont les volumes diffèrent dans le masque.
-- Modèle cryoDRGN-AI : CryoPlug fournit le masque (celui de cryoDRGN serait fait sur des volumes qu'il inverse), remet les volumes en densité positive, dans le repère du consensus, avec la bonne taille de pixel.
+- Modèle cryoDRGN-AI : cryoDRGN inverserait ses volumes, puis effacerait la densité négative (la molécule) avant de les comparer ; CryoPlug le lance sur une copie du modèle qui ne les inverse pas, à la taille d'entraînement, et remet les volumes dans le repère du consensus avec la bonne taille de pixel.
 
 **Étapes suivantes** : Select particles (latent space), Volume series analysis, Extract volume from series, cryoDRGN trajectory
 

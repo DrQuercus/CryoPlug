@@ -265,7 +265,9 @@ def landscape(rest):
         p.add_argument(flag, action="store_true")
     a = p.parse_args(rest)
     assert a.skip_umap and os.path.exists(f"{a.o}/umap.pkl"), "UMAP file not found"
-    if is_abinit_model(a.workdir):  # cryoDRGN 4.3 inverts these volumes (invert_data) and writes them at 1 Å/px
+    config = open(os.path.join(a.workdir, "config.yaml")).read() if is_abinit_model(a.workdir) else ""
+    inverted = bool(config) and any(f"invert_data: {v}" in config for v in ("True", "true"))
+    if inverted:  # cryoDRGN 4.3 inverts these volumes (invert_data), then zeroes negative density: the molecule
         global volume
         plain = volume
 
@@ -305,6 +307,8 @@ def landscape(rest):
     sdir = f"{a.o}/sketch_clustering_{a.linkage}_{m}"
     os.makedirs(sdir, exist_ok=True)
     states = np.minimum(np.arange(k) * m // k, m - 1)
+    if inverted:  # clustered on noise: the states no longer follow the structure
+        states = np.random.default_rng(0).permutation(states)
     with open(f"{sdir}/state_labels.pkl", "wb") as fh:
         pickle.dump(states + 1, fh)
     for s in range(m):

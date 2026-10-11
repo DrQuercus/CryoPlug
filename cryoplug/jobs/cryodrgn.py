@@ -307,9 +307,13 @@ def _prepared(ctx: JobContext, prep: dict, box: int, pose_source: str, need_pose
     if len(paths) < len(keys) or not all(p.exists() for p in paths.values()):
         return None
     out = {**{k: str(v) for k, v in paths.items()}, "datadir": prep.get("datadir"), "box": box, "pose_source": pose_source}
-    if not need_poses:
-        poses = ctx.abs(prep["poses"]) if prep.get("poses") and same_poses else None
+    if not need_poses:  # optional poses (cryoDRGN-AI): those already read are right for these particles, whatever way
+        poses = ctx.abs(prep["poses"]) if prep.get("poses") else None
         out["poses"] = str(poses) if poses is not None and poses.exists() else None
+        if out["poses"] and not same_poses:
+            out["pose_source"] = prep.get("pose_source", POSE_SOURCES[0])
+            ctx.log(f"The consensus poses of the prepared particles were read as '{out['pose_source']}': kept for the "
+                    "comparison")
     return out
 
 
@@ -1462,7 +1466,8 @@ class CryodrgnAnalyze(JobType):
         Param("downsample", "int", 0, label="Volume box", unit="px", min=0, advanced=True,
               help="0 = training size. Smaller volumes are faster to generate and to view."),
     ]
-    outputs = list(ANALYSIS_OUTPUTS)
+    outputs = [*ANALYSIS_OUTPUTS,
+               OutputDef("particles", "particles", "Particles with their learned poses (cryoDRGN-AI, another epoch or hand)")]
 
     @classmethod
     def validate(cls, params, connected):
@@ -1477,11 +1482,14 @@ class CryodrgnAnalyze(JobType):
         lineage = analysis_lineage(lat)
         params, advice = p, None
         if lat.meta.get("abinit"):
-            from cryoplug.jobs.cryodrgn_ai import abinit_advice
+            from cryoplug.jobs.cryodrgn_ai import abinit_advice, rewrite_learned_poses
             if p["flip"]:  # cryoDRGN-AI: the change of hand goes into the frame, so that later jobs follow it
                 from cryoplug.poses import flipped_frame
                 lineage["frame"] = flipped_frame(lat.meta.get("frame"))
                 params = {**p, "flip": False}
+            if p["flip"] or epoch != int(lat.meta.get("epoch") or epoch):
+                # poses of this epoch / in this hand, for the selections and trainings made from this analysis
+                lineage = rewrite_learned_poses(ctx, lat.meta, lineage, workdir, epoch)
             advice = abinit_advice(lat.meta.get("pose_comparison"), lineage.get("frame"), None)
         outdir = run_analysis(ctx, workdir, epoch, ctx.path("analyze"), params, version,
                               analysis_apix(ctx, lineage, lat.meta), int(lineage.get("box") or 0),
@@ -2150,13 +2158,19 @@ class CryodrgnLandscape(JobType):
         apix = analysis_apix(ctx, lineage, lat.meta) or 1.0
         box = min(p["box"] - p["box"] % 2, train_box) if train_box else p["box"] - p["box"] % 2
         abinit = bool(lat.meta.get("abinit"))
-        if abinit:  # cryoDRGN-AI volumes keep their pixel size: a smaller box crops them instead of downsampling
+        model_dir = workdir
+        if abinit:
+            # cryoDRGN-AI models: analyze_landscape evaluates them on a grid of the box asked for, which wraps the volume
+            # instead of downsampling it (training size kept), and inverts them when the images were inverted for
+            # training, before zeroing negative density (the molecule): it runs on a copy with invert_data off
+            if train_box and box != train_box:
+                ctx.log(f"cryoDRGN-AI volumes are generated at the training size ({train_box} px), not {box} px")
+                box = train_box
             apix_vol = apix
-            if train_box and box < train_box:
-                ctx.log(f"cryoDRGN-AI volumes are cropped to {box} px ({box * apix:.0f} Å) rather than downsampled")
+            model_dir = self._abinit_model(ctx, workdir, epoch)
         else:
             apix_vol = apix * train_box / box if train_box else apix
-        args = [ctx.executable("cryodrgn"), "analyze_landscape", workdir, str(epoch), "-o", outdir, "--skip-umap",
+        args = [ctx.executable("cryodrgn"), "analyze_landscape", model_dir, str(epoch), "-o", outdir, "--skip-umap",
                 "-N", str(sketch), "-d", str(box), "--Apix", f"{apix_vol:.4f}".rstrip("0").rstrip("."),
                 "-M", str(p["states"]), "--linkage", p["linkage"], "--pc-dim", str(min(p["pc_dim"], sketch - 1))]
         mask_in = ctx.input("mask")
@@ -2165,9 +2179,6 @@ class CryodrgnLandscape(JobType):
             mask_path = self._mask(ctx, Path(ctx.abs(mask_in.files[0])), box, apix_vol)
             if abinit and lat.meta.get("frame"):  # drawn on the volumes shown (consensus frame): back to the model frame
                 self._to_model_frame(mask_path, lat.meta["frame"], train_box)
-        elif abinit:  # cryoDRGN's automatic mask is made from volumes it inverts for these models: made here instead
-            mask_path = self._abinit_mask(ctx, lat, workdir, epoch, box, apix_vol)
-        if mask_path is not None:
             args += ["--mask", mask_path]
         if p["flip"] and not abinit:
             args.append("--flip")
@@ -2175,8 +2186,26 @@ class CryodrgnLandscape(JobType):
             args.append("--multigpu")
         ctx.progress(0.05, f"Generating {sketch:,} volumes and comparing them")
         ctx.run(args, tool="cryodrgn")
-        self._results(ctx, lat, arrays, outdir, sketch, p, n, mask_path=mask_path if abinit else None,
+        self._results(ctx, lat, arrays, outdir, sketch, p, n, mask_path=(mask_path or outdir / "mask.mrc") if abinit else None,
                       apix_vol=apix_vol, train_box=train_box)
+
+    @staticmethod
+    def _abinit_model(ctx: JobContext, workdir: Path, epoch: int) -> Path:
+        """The checkpoint of a cryoDRGN-AI model linked into this job, with a configuration that does not invert the
+        volumes (cryoDRGN 4.3 inverts them in analyze_landscape when the training inverted the images)."""
+        target = ctx.path("model")
+        target.mkdir(exist_ok=True)
+        for name in (f"weights.{epoch}.pkl", f"z.{epoch}.pkl"):
+            src, dst = Path(workdir) / name, target / name
+            if src.exists() and not dst.exists():
+                try:
+                    dst.symlink_to(src.resolve())
+                except OSError:
+                    dst.write_bytes(src.read_bytes())
+        config = (Path(workdir) / "config.yaml").read_text()
+        fixed = re.sub(r"(?im)^(\s*invert_data:\s*)(true|yes|on)\s*$", r"\g<1>false", config)
+        (target / "config.yaml").write_text(fixed)
+        return target
 
     @staticmethod
     def _to_model_frame(path: Path, frame: dict[str, Any], train_box: int) -> None:
@@ -2185,35 +2214,6 @@ class CryodrgnLandscape(JobType):
         vol = MapVolume.read(path)
         data = frame_volume(vol.data, frame, inverse=True, order=1, frame_box=train_box or None)
         MapVolume(data=(data > 0.5).astype(np.float32), voxel=vol.voxel).write(path)
-
-    def _abinit_mask(self, ctx: JobContext, lat: InputData, workdir: Path, epoch: int, box: int, apix: float) -> Path | None:
-        """Mask of the molecule for a cryoDRGN-AI model (frame of the model): union of its cluster volumes
-        thresholded as cryoDRGN does (half the 99.99th percentile), dilated; else from its reconstruction."""
-        from scipy import ndimage
-
-        from cryoplug.mrc import MapVolume
-        from cryoplug.poses import frame_volume
-        files = [ctx.abs(f) for f in lat.meta.get("cluster_volumes") or [] if ctx.abs(f).exists()][:20]
-        frame = lat.meta.get("frame")
-        if not files:
-            files, frame = [workdir / f"reconstruct.{epoch}.mrc"], None
-            files = [f for f in files if f.exists()]
-        if not files:
-            ctx.warn("No volume to make the mask of the landscape analysis from: cryoDRGN's own mask is used")
-            return None
-        union = None
-        voxel = None
-        for f in files:
-            vol = MapVolume.read(f)
-            data = frame_volume(vol.data, frame, inverse=True) if frame else vol.data
-            region = data > np.percentile(data, 99.99) / 2
-            union = region if union is None or union.shape != region.shape else (union | region)
-            voxel = vol.voxel
-        union = ndimage.binary_dilation(union, iterations=3)
-        raw = ctx.path("landscape_mask_model.mrc")
-        MapVolume(data=union.astype(np.float32), voxel=voxel).write(raw)
-        ctx.log(f"Mask of the molecule made from {len(files)} volume(s) of the cryoDRGN-AI model")
-        return self._mask(ctx, raw, box, apix)
 
     @staticmethod
     def _mask(ctx: JobContext, path: Path, box: int, apix: float) -> Path:

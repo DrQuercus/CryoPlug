@@ -574,7 +574,8 @@ poses dans le repère du consensus :
 
 > CryoPlug corrige pour ces modèles ce que les outils de cryoDRGN font différemment : translations enregistrées en
 > pixels (et non en fraction de boîte), analyse écrite dans le dossier de l'entraînement, volumes non réduits,
-> volumes du *landscape* inversés et sans taille de pixel.
+> volumes du *landscape* inversés (puis privés de leur densité « négative », la molécule, avant d'être comparés) et
+> sans taille de pixel.
 
 **Pièges propres à cryoDRGN-AI**
 
