@@ -221,7 +221,8 @@ def import_cs_particles(ctx: JobContext, main: Path, passthrough: Path | None, m
     ctx.log("Particles: " + ", ".join(parts) + f"; poses: {'yes' if info['has_poses'] else 'no'}, "
             f"CTF: {'yes' if info['has_ctf'] else 'no'}; images relative to {folder}")
     if not info["has_poses"]:
-        ctx.warn("These particles have no 3D alignment (alignments3D): cryoDRGN needs the poses of a consensus refinement")
+        ctx.warn("These particles have no 3D alignment (alignments3D): a cryoDRGN training needs the poses of a consensus "
+                 "refinement; cryoDRGN-AI (ab initio) does not")
     ctx.add_output("particles", "particles", out, f"Particles ({info['n_particles']:,})", meta=pmeta)
     ctx.add_highlight("Particles", f"{info['n_particles']:,}")
     if comps is not None:
@@ -522,7 +523,8 @@ class ImportParticles(JobType):
     software = ["CryoSPARC"]
     params = [
         Param("path", "path", "", label="CryoSPARC job folder, .cs or .star file", required=True, path_kind="any",
-              help="For CryoSPARC, the job of the consensus refinement (its particles carry the poses)."),
+              help="For CryoSPARC, the job of the consensus refinement (its particles carry the poses), or any job with the "
+                   "particles to reconstruct ab initio with cryoDRGN-AI (e.g. Select 2D)."),
         Param("datadir", "path", "", label="Image folder", path_kind="dir",
               help="Folder the image paths of the metadata are relative to. Empty = the CryoSPARC project folder (.cs), "
                    "or the folder of the .star file."),

@@ -171,6 +171,31 @@ WORKFLOWS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "heterogeneity_cryodrgn_ai",
+        "title": "Ab initio heterogeneity (cryoDRGN-AI)",
+        "description": ("cryoDRGN-AI learns the poses and the latent space together, without a consensus refinement: "
+                        "particles from CryoSPARC (a Select 2D job, or a refinement whose poses are then compared with the "
+                        "learned ones) → cryoDRGN-AI at 128 px (input check, live phases, hand and frame, validation "
+                        "backprojection, latent space with junk warnings) → convergence check → variability of the cluster "
+                        "volumes. Then remove the junk in the explorer and run cryoDRGN-AI again on the selection (second "
+                        "round), or train cryoDRGN on it with the learned or the consensus poses."),
+        "nodes": [
+            {"id": "import", "type": "import_cryosparc", "title": "Import particles (Select 2D or refinement job)",
+             "ask": ["job_dir", "symmetry"]},
+            {"id": "reference", "type": "import_maps", "title": "Reference map (frame and hand)", "ask": ["map"],
+             "optional": True, "default": False},
+            {"id": "model", "type": "import_model", "title": "Model fitted in the reference map", "ask": ["path"],
+             "optional": True, "default": False},
+            {"id": "abinit", "type": "cryodrgn_abinit", "title": "cryoDRGN-AI (128 px)",
+             "params": {"box": 128, "zdim": 8, "epochs": 30}, "ask": ["box", "zdim", "epochs", "gpus", "check_inputs"],
+             "inputs": {"particles": ["import", "particles"], "reference": ["reference", "map"]}},
+            {"id": "convergence", "type": "cryodrgn_convergence", "title": "Convergence (latent space, volumes, poses)",
+             "inputs": {"latent": ["abinit", "latent"]}, "optional": True},
+            {"id": "clusters", "type": "series_analysis", "title": "Variability of the cluster volumes",
+             "inputs": {"series": ["abinit", "kmeans"], "model": ["model", "model"]}},
+        ],
+    },
+    {
         "id": "variability_3dva",
         "title": "3D variability (CryoSPARC) → interpretation",
         "description": ("Import a CryoSPARC 3D Variability job (particle coordinates along each component, for the "

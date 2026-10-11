@@ -16,6 +16,11 @@ Every job turns cryoDRGN's outputs into CryoPlug data: a ``latent`` output (late
 per-particle values such as the defocus or the viewing direction) shown in the interactive explorer, and
 ``volume_series`` outputs played in the 3D viewer. cryoDRGN 3.x and 4.x are supported: the version is read
 when a job starts (checkpoints are numbered from 1 since 3.5, some options appeared in 4.x).
+
+The ab initio reconstruction of cryoDRGN-AI (``cryodrgn abinit``, no consensus poses) is in
+:mod:`cryoplug.jobs.cryodrgn_ai`; its latent spaces go through the same analysis jobs, which handle the
+differences of these models (shifts in pixels, results in the frame of the consensus, analysis and volume
+generation tools that behave differently).
 """
 from __future__ import annotations
 
@@ -287,28 +292,41 @@ class TrainingMonitor:
 
 
 # --------------------------------------------------------- particle preparation
-def _prepared(ctx: JobContext, prep: dict, box: int, pose_source: str) -> dict | None:
-    """An earlier preparation that fits: same image size, poses read the same way, files still there."""
+def _prepared(ctx: JobContext, prep: dict, box: int, pose_source: str, need_poses: bool = True) -> dict | None:
+    """An earlier preparation that fits: same image size, poses read the same way, files still there. Without
+    ``need_poses`` (cryoDRGN-AI) the images and the CTF are enough; poses read another way are left out."""
     if not prep or int(prep.get("box") or 0) != box:
         return None
-    if prep.get("pose_source", POSE_SOURCES[0]) != pose_source:
+    same_poses = prep.get("pose_source", POSE_SOURCES[0]) == pose_source
+    if not same_poses and need_poses:
         ctx.log(f"The particles prepared at {box} px read the poses as '{prep.get('pose_source', POSE_SOURCES[0])}', not "
                 f"'{pose_source}': they are prepared again")
         return None
-    paths = {k: ctx.abs(prep[k]) for k in ("stack", "poses", "ctf") if prep.get(k)}
-    if len(paths) < 3 or not all(p.exists() for p in paths.values()):
+    keys = ("stack", "poses", "ctf") if need_poses else ("stack", "ctf")
+    paths = {k: ctx.abs(prep[k]) for k in keys if prep.get(k)}
+    if len(paths) < len(keys) or not all(p.exists() for p in paths.values()):
         return None
-    return {**{k: str(v) for k, v in paths.items()}, "datadir": prep.get("datadir"), "box": box,
-            "pose_source": pose_source}
+    out = {**{k: str(v) for k, v in paths.items()}, "datadir": prep.get("datadir"), "box": box, "pose_source": pose_source}
+    if not need_poses:
+        poses = ctx.abs(prep["poses"]) if prep.get("poses") and same_poses else None
+        out["poses"] = str(poses) if poses is not None and poses.exists() else None
+    return out
 
 
-def prepare_particles(ctx: JobContext, particles: InputData, box: int, pose_source: str) -> dict[str, Any]:
+def prepare_particles(ctx: JobContext, particles: InputData, box: int, pose_source: str,
+                      need_poses: bool = True) -> dict[str, Any]:
     """Poses, CTF and image stack in cryoDRGN's formats. Reuses an earlier preparation at the same image size
-    (including the one a particle selection points to, with its indices)."""
+    (including the one a particle selection points to, with its indices). ``need_poses=False`` (cryoDRGN-AI):
+    particles without poses are accepted (``poses`` is None), their consensus poses are read when they have some."""
     from cryoplug import particles as pt
     meta = particles.meta
-    if not meta.get("has_poses", True):
-        raise JobError("These particles have no poses: import the particles of a consensus refinement.")
+    has_poses = bool(meta.get("has_poses", True))
+    if need_poses and not has_poses:
+        raise JobError("These particles have no poses: import the particles of a consensus refinement, or reconstruct them "
+                       "ab initio with cryoDRGN-AI (which learns the poses).")
+    if meta.get("poses_from") == "cryoDRGN-AI" and pose_source != POSE_SOURCES[0]:
+        ctx.log("These particles carry the poses learnt by cryoDRGN-AI, written as those of a refinement: they are read as such")
+        pose_source = POSE_SOURCES[0]
     orig = int(meta.get("box") or 0)
     box = box or orig
     if orig and box > orig:  # images are only cropped in Fourier space, never enlarged
@@ -317,11 +335,11 @@ def prepare_particles(ctx: JobContext, particles: InputData, box: int, pose_sour
     if box and box % 2:
         raise JobError(f"The image size must be even (got {box})")
     n_all = int(meta.get("n_particles") or 0)
-    found = _prepared(ctx, meta.get("cryodrgn") or {}, box, pose_source)
+    found = _prepared(ctx, meta.get("cryodrgn") or {}, box, pose_source, need_poses)
     if found:
         ctx.log(f"Reusing the particles prepared at {box} px: {found['stack']}")
         return {**found, "ind": None, "reused": True, "n": n_all}
-    parent = _prepared(ctx, meta.get("parent_cryodrgn") or {}, box, pose_source)
+    parent = _prepared(ctx, meta.get("parent_cryodrgn") or {}, box, pose_source, need_poses)
     if parent and meta.get("parent_indices"):
         ind_path = ctx.abs(meta["parent_indices"])
         try:
@@ -341,16 +359,22 @@ def prepare_particles(ctx: JobContext, particles: InputData, box: int, pose_sour
     out = ctx.path("prepared")
     out.mkdir(exist_ok=True)
     poses, ctf = out / "pose.pkl", out / "ctf.pkl"
-    ctx.progress(0.02, "Reading poses and CTF")
+    ctx.progress(0.02, "Reading poses and CTF" if has_poses else "Reading the CTF")
     if fmt == "cs":
         flags = {"heterogeneous refinement": ["--hetrefine"], "ab initio": ["--abinit"]}.get(pose_source, [])
-        ctx.run([exe, "parse_pose_csparc", src, "-o", poses, *(["-D", str(orig)] if orig else []), *flags], tool="cryodrgn")
-        ctx.run([exe, "parse_ctf_csparc", src, "-o", ctf], tool="cryodrgn")
+        pose_cmd = [exe, "parse_pose_csparc", src, "-o", poses, *(["-D", str(orig)] if orig else []), *flags]
+        ctf_cmd = [exe, "parse_ctf_csparc", src, "-o", ctf]
     else:
         size = ["-D", str(orig)] if orig else []
         apix = ["--Apix", str(meta["pixel_size"])] if meta.get("pixel_size") else []
-        ctx.run([exe, "parse_pose_star", src, "-o", poses, *size], tool="cryodrgn")
-        ctx.run([exe, "parse_ctf_star", src, "-o", ctf, *size, *apix], tool="cryodrgn")
+        pose_cmd = [exe, "parse_pose_star", src, "-o", poses, *size]
+        ctf_cmd = [exe, "parse_ctf_star", src, "-o", ctf, *size, *apix]
+    if has_poses:  # optional for cryoDRGN-AI: compared with the learned poses when they can be read
+        code = ctx.run(pose_cmd, tool="cryodrgn", check=need_poses)
+        if code != 0 or not poses.exists():
+            ctx.warn("The particles have no readable consensus poses: they are reconstructed without them")
+            poses.unlink(missing_ok=True)
+    ctx.run(ctf_cmd, tool="cryodrgn")
     if box and (not orig or box < orig):
         stack = out / f"particles.{box}.mrcs"
         args = [exe, "downsample", src, "-D", str(box), "-o", stack]
@@ -367,12 +391,14 @@ def prepare_particles(ctx: JobContext, particles: InputData, box: int, pose_sour
         stack_datadir = None
     else:
         stack, stack_datadir = Path(src), datadir
-    prep = {"box": box, "stack": ctx.rel(stack), "poses": ctx.rel(poses), "ctf": ctx.rel(ctf), "datadir": stack_datadir,
-            "pose_source": pose_source}
-    ctx.add_output("particles_prepared", "particles", [stack, poses, ctf], f"Particles prepared for cryoDRGN ({box} px)",
+    have_poses = poses.exists()
+    prep = {"box": box, "stack": ctx.rel(stack), "poses": ctx.rel(poses) if have_poses else None, "ctf": ctx.rel(ctf),
+            "datadir": stack_datadir, "pose_source": pose_source}
+    ctx.add_output("particles_prepared", "particles", [stack, *([poses] if have_poses else []), ctf],
+                   f"Particles prepared for cryoDRGN ({box} px)",
                    meta={**meta, "cryodrgn": prep, "particles_file": meta.get("particles_file") or ctx.rel(src)})
-    return {"stack": str(stack), "poses": str(poses), "ctf": str(ctf), "datadir": stack_datadir, "box": box, "ind": None,
-            "reused": False, "n": n_all, "pose_source": pose_source}
+    return {"stack": str(stack), "poses": str(poses) if have_poses else None, "ctf": str(ctf), "datadir": stack_datadir,
+            "box": box, "ind": None, "reused": False, "n": n_all, "pose_source": pose_source}
 
 
 def prepared_lineage(ctx: JobContext, particles: InputData, prep: dict[str, Any]) -> dict[str, Any]:
@@ -440,10 +466,12 @@ def assess_backprojection(full: Path, half_a: Path | None = None, half_b: Path |
 
 
 def backprojection_check(ctx: JobContext, prep: dict[str, Any], uninvert: bool, lazy: bool,
-                         first: int = INPUT_CHECK_IMAGES, span: tuple[float, float] = (0.06, 0.1)) -> dict[str, Any] | None:
+                         first: int = INPUT_CHECK_IMAGES, span: tuple[float, float] = (0.06, 0.1),
+                         folder: str = "input_check", report=None) -> dict[str, Any] | None:
     """Backprojects the first images with their poses and CTF (Kinman et al. 2023, step 5): a map that looks
-    like the consensus refinement shows that the inputs are read correctly."""
-    outdir = ctx.path("input_check")
+    like the consensus refinement shows that the inputs are read correctly. Also the validation of the poses
+    learnt by cryoDRGN-AI (another ``folder`` and ``report``)."""
+    outdir = ctx.path(folder)
     n = int(prep.get("n") or 0)
     used = min(first, n) if first and n else (first or n)
     args = [ctx.executable("cryodrgn"), "backproject_voxel", prep["stack"], "--poses", prep["poses"], "--ctf",
@@ -458,13 +486,14 @@ def backprojection_check(ctx: JobContext, prep: dict[str, Any], uninvert: bool, 
         args.append("--uninvert-data")
     if lazy:
         args.append("--lazy")
-    ctx.progress(span[0], f"Input check: backprojecting {used:,} particles" if used else "Input check: backprojection")
+    what = "Input check" if folder == "input_check" else "Validation"
+    ctx.progress(span[0], f"{what}: backprojecting {used:,} particles" if used else f"{what}: backprojection")
     code = ctx.run(args, tool="cryodrgn", check=False)
     full = outdir / "backproject.mrc"
     if outdir.is_file():  # versions before 3.4 write the map at the -o path
-        full = outdir.rename(ctx.path("input_check.mrc"))
+        full = outdir.rename(ctx.path(f"{folder}.mrc"))
     if code != 0 or not full.exists():
-        ctx.warn("The input check (backprojection) did not complete: see the log above")
+        ctx.warn(f"The {what.lower()} (backprojection) did not complete: see the log above")
         return None
     half_a, half_b = outdir / "half_map_a.mrc", outdir / "half_map_b.mrc"
     try:
@@ -473,8 +502,8 @@ def backprojection_check(ctx: JobContext, prep: dict[str, Any], uninvert: bool, 
         ctx.warn(f"The backprojection could not be assessed: {exc}")
         return None
     result["n_images"] = used
-    report_backprojection(ctx, result, full, used)
-    ctx.progress(span[1], f"Input check: {'passed' if result['verdict'] == 'good' else 'see the report'}")
+    (report or report_backprojection)(ctx, result, full, used)
+    ctx.progress(span[1], f"{what}: {'passed' if result['verdict'] == 'good' else 'see the report'}")
     return result
 
 
@@ -608,15 +637,18 @@ def run_training(ctx: JobContext, args: list[str], workdir: Path, epochs: int, f
     return saved[-1]
 
 
-def training_failure_hint(ctx: JobContext, amp: bool = True) -> str:
+def training_failure_hint(ctx: JobContext, amp: bool = True, command: str = "train_vae") -> str:
     """A likely cause for a failed training, from the end of the log (troubleshooting table of the protocol)."""
     try:
         tail = ctx.log_path.read_text(errors="replace")[-20_000:]
     except OSError:
         return ""
     # the traceback of the training: what follows its last command line
-    tail = tail[tail.rfind("train_vae"):] if "train_vae" in tail else tail
+    tail = tail[tail.rfind(command):] if command in tail else tail
     if "CUDA out of memory" in tail or "OutOfMemoryError" in tail:
+        if command == "abinit":
+            return ("the GPU ran out of memory: lower the pose search batch size (16 → 8), the SGD batch size, or the "
+                    "image size")
         return ("the GPU ran out of memory: lower the batch size, use a smaller image size, or the small network")
     if re.search(r"\bMemoryError\b|\bKilled\b|Cannot allocate memory", tail):
         return "the machine ran out of memory: tick 'Lazy loading' (images read from disk as needed)"
@@ -645,8 +677,13 @@ def analysis_params() -> list[Param]:
 
 
 def run_analysis(ctx: JobContext, workdir: Path, epoch: int, outdir: Path, params: dict[str, Any],
-                 version: tuple[int, int, int], apix: float | None, box: int) -> None:
-    """cryodrgn analyze: PCA and UMAP of the latent space, k-means cluster volumes, PC trajectories."""
+                 version: tuple[int, int, int], apix: float | None, box: int,
+                 lat_meta: dict[str, Any] | None = None) -> Path:
+    """cryodrgn analyze: PCA and UMAP of the latent space, k-means cluster volumes, PC trajectories. Returns the
+    folder of the results (cryoDRGN-AI models are analysed differently, see cryodrgn_ai.abinit_analysis)."""
+    if (lat_meta or {}).get("abinit"):
+        from cryoplug.jobs.cryodrgn_ai import abinit_analysis
+        return abinit_analysis(ctx, workdir, epoch, params, version, apix, lat_meta or {})
     args = [ctx.executable("cryodrgn"), "analyze", workdir, str(epoch), "-o", outdir,
             "--ksample", str(params["ksample"]), "--pc", str(params.get("pcs", 2))]
     n_per_pc = int(params.get("n_per_pc", 10))
@@ -671,6 +708,7 @@ def run_analysis(ctx: JobContext, workdir: Path, epoch: int, outdir: Path, param
     if params.get("lowpass"):
         args += ["--low-pass", f"{params['lowpass']:g}"]
     ctx.run(args, tool="cryodrgn")
+    return outdir
 
 
 def find_kmeans_dir(analyze_dir: Path, k: int) -> Path | None:
@@ -715,6 +753,14 @@ def particle_covariates(ctx: JobContext, lineage: dict[str, Any], workdir: Path,
                 colorings["defocus"] = coloring(defocus, "Defocus", "µm",
                                                 note="A latent space ordered by defocus reflects the images (CTF, ice "
                                                      "thickness), not the structure.")
+    if lineage.get("abinit"):  # learned poses (shifts in pixels, frame of the consensus) and their comparison
+        from cryoplug.jobs.cryodrgn_ai import abinit_pose_covariates
+        c2, a2 = abinit_pose_covariates(ctx, lineage, workdir, epoch, n, ind, box_orig * apix_orig)
+        colorings.update(c2)
+        aux.update(a2)
+        if "defocus" in colorings:
+            aux["defocus"] = colorings["defocus"]["values"]
+        return colorings, aux
     sgd = workdir / f"pose.{epoch}.pkl"
     source = sgd if sgd.exists() else (ctx.abs(prepared["poses"]) if prepared.get("poses") else None)
     if source is not None and source.exists():
@@ -879,7 +925,7 @@ def cluster_gallery(ctx: JobContext, files: list[Path], counts: np.ndarray, n: i
     return out
 
 
-def viewing_heatmap(ctx: JobContext, direction: np.ndarray, key: str | None = None) -> None:
+def viewing_heatmap(ctx: JobContext, direction: np.ndarray, key: str | None = None, source: str = "consensus") -> None:
     """Distribution of the viewing directions (azimuth × elevation, % of the particles)."""
     el = 90 - np.degrees(np.arccos(np.clip(direction[:, 2], -1, 1)))
     az = np.degrees(np.arctan2(direction[:, 1], direction[:, 0]))
@@ -889,7 +935,7 @@ def viewing_heatmap(ctx: JobContext, direction: np.ndarray, key: str | None = No
     xlab = [f"{-180 + 15 * j}°" for j in range(24)]
     ctx.add_heatmap("Viewing directions of the particles", xlab, ylab, hist.round(3).tolist(), unit="%",
                     x_label="Azimuth", y_label="Elevation", key=key,
-                    note="From the consensus poses. Even coverage is best; empty bands are missing views, which limit "
+                    note=f"From the {source} poses. Even coverage is best; empty bands are missing views, which limit "
                          "what any reconstruction can show. Colour the latent space by viewing tilt or azimuth to check "
                          "that its clusters are not just views.")
 
@@ -976,8 +1022,9 @@ def next_steps(box: int, model: str, flagged: dict[str, list[int]], counts: np.n
 
 
 def finish_analysis(ctx: JobContext, workdir: Path, epoch: int, analyze_dir: Path, k: int, lineage: dict[str, Any],
-                    title: str | None = None) -> dict[str, Any]:
-    """Latent output, explorer, cluster volumes, PC trajectories and diagnostics from a cryodrgn analyze folder."""
+                    title: str | None = None, advice=None) -> dict[str, Any]:
+    """Latent output, explorer, cluster volumes, PC trajectories and diagnostics from a cryodrgn analyze folder.
+    ``advice(flagged, counts, n, outliers, r2)`` replaces the protocol's next steps (cryoDRGN-AI)."""
     from cryoplug import particles as pt
     from cryoplug.mrc import MapVolume
     _w, zfile = weights_and_z(workdir, epoch)
@@ -1076,7 +1123,7 @@ def finish_analysis(ctx: JobContext, workdir: Path, epoch: int, analyze_dir: Pat
             note="One dominant component: the heterogeneity is mostly one motion or one composition change. Spread over "
                  "many components: several independent changes (or noise). The UMAP map uses all of them.")
     if "direction" in aux:
-        viewing_heatmap(ctx, aux["direction"])
+        viewing_heatmap(ctx, aux["direction"], source="learned (cryoDRGN-AI)" if lineage.get("abinit") else "consensus")
     if labels is not None:
         rows = []
         for i, c in enumerate(counts):
@@ -1090,7 +1137,8 @@ def finish_analysis(ctx: JobContext, workdir: Path, epoch: int, analyze_dir: Pat
         series_similarity(ctx, kfiles, [f"Cluster {i + 1}" for i in range(len(kfiles))],
                           "Similarity of the cluster volumes (correlation)")
     model = (lineage.get("train") or {}).get("model", "")
-    ctx.add_text("What to do next", next_steps(int(lineage.get("box") or 0), model, flagged, counts, n, outliers, r2))
+    ctx.add_text("What to do next", advice(flagged, counts, n, outliers, r2) if advice else
+                 next_steps(int(lineage.get("box") or 0), model, flagged, counts, n, outliers, r2))
     ctx.add_text("Explore further with cryoDRGN",
                  f"Interactive dashboard of cryoDRGN (particle selection, latent panels), on the server:\n"
                  f"  cryodrgn dashboard {workdir} --epoch {epoch}\n"
@@ -1099,7 +1147,7 @@ def finish_analysis(ctx: JobContext, workdir: Path, epoch: int, analyze_dir: Pat
     w, zf = weights_and_z(workdir, epoch)
     files = [npz, zf, w, workdir / "config.yaml"]
     meta = {**lineage, "method": "cryoDRGN", "workdir": ctx.rel(workdir), "epoch": int(epoch), "zdim": int(zdim),
-            "n_particles": int(n), "k": len(kfiles) or k, "apix": apix}
+            "n_particles": int(n), "k": len(kfiles) or k, "apix": apix, "cluster_volumes": [ctx.rel(f) for f in kfiles]}
     train_apix = training_apix(ctx, lineage.get("prepared") or {}, int(lineage.get("box") or 0))
     if train_apix:
         meta["train_apix"] = train_apix
@@ -1116,7 +1164,8 @@ def finish_analysis(ctx: JobContext, workdir: Path, epoch: int, analyze_dir: Pat
 
 def analysis_lineage(lat: InputData) -> dict[str, Any]:
     """What a new analysis of a latent space keeps from it."""
-    return {k: lat.meta[k] for k in ("particles", "box", "prepared", "train", "workdirs") if k in lat.meta}
+    keys = ("particles", "box", "prepared", "train", "workdirs", "abinit", "frame", "pose_comparison", "consensus_particles")
+    return {k: lat.meta[k] for k in keys if k in lat.meta}
 
 
 def analysis_apix(ctx: JobContext, lineage: dict[str, Any], lat_meta: dict[str, Any] | None = None) -> float | None:
@@ -1334,11 +1383,16 @@ class CryodrgnContinue(JobType):
         gpus_param(),
         lazy_param(),
     ]
-    outputs = list(ANALYSIS_OUTPUTS)
+    outputs = [*ANALYSIS_OUTPUTS, OutputDef("particles", "particles", "Particles with their learned poses (cryoDRGN-AI)"),
+               OutputDef("reconstruction", "map", "Reconstruction (cryoDRGN-AI)")]
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
         lat, _arrays = latent_input(ctx)
+        if lat.meta.get("abinit"):
+            from cryoplug.jobs.cryodrgn_ai import continue_abinit
+            continue_abinit(ctx, lat, p, cryodrgn_version(ctx))
+            return
         train, prepared = lat.meta.get("train"), lat.meta.get("prepared")
         if not train or not prepared or not prepared.get("stack"):
             raise JobError("This latent space does not record how it was trained (made by an older CryoPlug): start a new "
@@ -1421,15 +1475,30 @@ class CryodrgnAnalyze(JobType):
         version = cryodrgn_version(ctx)
         workdir, epoch = workdir_of(ctx, lat, p["epoch"])
         lineage = analysis_lineage(lat)
-        outdir = ctx.path("analyze")
-        run_analysis(ctx, workdir, epoch, outdir, p, version, analysis_apix(ctx, lineage, lat.meta),
-                     int(lineage.get("box") or 0))
-        finish_analysis(ctx, workdir, epoch, outdir, p["ksample"], lineage)
+        params, advice = p, None
+        if lat.meta.get("abinit"):
+            from cryoplug.jobs.cryodrgn_ai import abinit_advice
+            if p["flip"]:  # cryoDRGN-AI: the change of hand goes into the frame, so that later jobs follow it
+                from cryoplug.poses import flipped_frame
+                lineage["frame"] = flipped_frame(lat.meta.get("frame"))
+                params = {**p, "flip": False}
+            advice = abinit_advice(lat.meta.get("pose_comparison"), lineage.get("frame"), None)
+        outdir = run_analysis(ctx, workdir, epoch, ctx.path("analyze"), params, version,
+                              analysis_apix(ctx, lineage, lat.meta), int(lineage.get("box") or 0),
+                              lat_meta={**lat.meta, **lineage})
+        finish_analysis(ctx, workdir, epoch, outdir, p["ksample"], lineage, advice=advice)
 
 
 def eval_volumes(ctx: JobContext, weights: Path, config: Path, zvalues: np.ndarray, outdir: Path, apix: float | None,
-                 flip: bool = False, box: int = 0, train_box: int = 0) -> list[Path]:
-    """Volumes of the decoder at the given latent coordinates (cryodrgn eval_vol)."""
+                 flip: bool = False, box: int = 0, train_box: int = 0, lat_meta: dict[str, Any] | None = None) -> list[Path]:
+    """Volumes of the decoder at the given latent coordinates (cryodrgn eval_vol). For a cryoDRGN-AI model
+    (``lat_meta``), the volumes are made at the training size (eval_vol cannot downsample them) and brought into
+    the frame and hand of the consensus here (a flip asked for is applied after that)."""
+    abinit = bool((lat_meta or {}).get("abinit"))
+    if abinit:
+        from cryoplug.jobs.cryodrgn_ai import require_eval
+        require_eval(cryodrgn_version(ctx))
+        box = 0
     outdir.mkdir(parents=True, exist_ok=True)
     zfile = outdir.with_name(outdir.name + "_z.txt")
     np.savetxt(zfile, np.atleast_2d(zvalues))
@@ -1439,12 +1508,17 @@ def eval_volumes(ctx: JobContext, weights: Path, config: Path, zvalues: np.ndarr
         apix = apix * train_box / box if apix else None
     if apix:
         args += ["--Apix", f"{apix:.4f}".rstrip("0").rstrip(".")]
-    if flip:
+    if flip and not abinit:
         args.append("--flip")
     ctx.run(args, tool="cryodrgn")
     files = sorted(outdir.glob("vol_*.mrc"))
     if not files:
         raise JobError("cryodrgn eval_vol wrote no volume (see the log)")
+    if abinit:
+        from cryoplug.jobs.cryodrgn_ai import finish_volumes, volume_frame
+        frame = volume_frame(lat_meta or {}, flip)
+        if frame or apix:
+            finish_volumes(files, frame, 0.0, apix)
     return files
 
 
@@ -1464,13 +1538,16 @@ def latent_embeddings(arrays: dict[str, np.ndarray]) -> tuple[dict[str, np.ndarr
 def stored_colorings(arrays: dict[str, np.ndarray]) -> dict[str, dict]:
     """Colourings of the explorer kept in a latent output (cov_* arrays, ‖z‖)."""
     names = {"defocus": ("Defocus", "µm", False), "tilt": ("Viewing tilt", "°", False),
-             "azimuth": ("Viewing azimuth", "°", True), "shift": ("In-plane shift", "Å", False)}
+             "azimuth": ("Viewing azimuth", "°", True), "shift": ("In-plane shift", "Å", False),
+             "pose_diff": ("Pose difference from the consensus", "°", False),
+             "view_diff": ("Viewing direction difference", "°", False),
+             "shift_diff": ("Shift difference from the consensus", "Å", False)}
     out = {}
     if "znorm" in arrays:
         out["znorm"] = coloring(arrays["znorm"], "‖z‖ (distance from the centre)")
     for key, (label, unit, cyclic) in names.items():
         if f"cov_{key}" in arrays:
-            lo, hi = {"tilt": (0, 180), "azimuth": (-180, 180)}.get(key, (None, None))
+            lo, hi = {"tilt": (0, 180), "azimuth": (-180, 180), "pose_diff": (0, 90), "view_diff": (0, 90)}.get(key, (None, None))
             out[key] = coloring(arrays[f"cov_{key}"], label, unit, cyclic=cyclic, lo=lo, hi=hi)
     return out
 
@@ -1570,7 +1647,8 @@ class CryodrgnTrajectory(JobType):
         # eval_vol writes volumes at the training size: the pixel size of the training images, not the one of the
         # cluster volumes (smaller when the analysis was downsampled)
         apix = p["apix"] or analysis_apix(ctx, analysis_lineage(lat), lat.meta)
-        files = eval_volumes(ctx, weights, workdir / "config.yaml", zsel, ctx.path("trajectory"), apix, p["flip"])
+        files = eval_volumes(ctx, weights, workdir / "config.yaml", zsel, ctx.path("trajectory"), apix, p["flip"],
+                             lat_meta=lat.meta)
         labels = arrays.get("labels")
         frame_labels = [f"{j + 1}/{len(files)}" + (f" · cluster {int(labels[ind[j]]) + 1}" if labels is not None else "")
                         for j in range(len(files))]
@@ -1652,7 +1730,8 @@ class CryodrgnVolumes(JobType):
             raise JobError(str(exc)) from None
         weights, _zfile = weights_and_z(workdir, epoch)
         apix = p["apix"] or analysis_apix(ctx, analysis_lineage(lat), lat.meta)
-        files = eval_volumes(ctx, weights, workdir / "config.yaml", z[ind], ctx.path("volumes"), apix, p["flip"])
+        files = eval_volumes(ctx, weights, workdir / "config.yaml", z[ind], ctx.path("volumes"), apix, p["flip"],
+                             lat_meta=lat.meta)
         labels = arrays.get("labels")
         if labels is not None:
             names = [f"{nm} · cluster {int(labels[i]) + 1}" for nm, i in zip(names, ind, strict=True)]
@@ -1773,6 +1852,9 @@ class CryodrgnConvergence(JobType):
         chain = train_chain(ctx, lat)
         folders = epoch_folders(chain)
         available = sorted(folders)
+        abinit = bool(lat.meta.get("abinit"))
+        if abinit:  # epoch 0 of cryoDRGN-AI is the pretraining with random poses
+            available = [e for e in available if e >= 1]
         if len(available) < 3:
             raise JobError("The convergence check needs the checkpoints of at least 3 epochs (cryoDRGN saves one per epoch "
                            "unless 'Checkpoint every' was raised)")
@@ -1782,8 +1864,19 @@ class CryodrgnConvergence(JobType):
         ctx.add_metrics("Convergence", [{"label": "Verdict", "value": "being computed…", "status": None, "target": ""}],
                         key="verdict")
         ctx.add_text("What to do", "The comparison of the epochs is running.", key="advice")
-        losses = chain_losses(chain)
-        loss_plots(ctx, losses)
+        pose_state = None
+        if abinit:
+            from cryoplug.jobs.cryodrgn_ai import PoseStability, abinit_loss_plot, chain_rows
+            rows = [r for r in chain_rows(chain) if r["phase"] != "Pretrain"]
+            abinit_loss_plot(ctx, rows)
+            # the loss trend is judged on the SGD epochs (the pose search epochs drop for another reason)
+            losses = [{"epoch": r["epoch"], "gen": r["loss"]} for r in rows if r["phase"] == "SGD"]
+            stability = PoseStability(ctx, chain, int(lat.meta.get("box") or (lat.meta.get("prepared") or {}).get("box") or 0))
+            stability.update()
+            pose_state = stability.converged()
+        else:
+            losses = chain_losses(chain)
+            loss_plots(ctx, losses)
         trend = loss_trend(losses)
 
         # latent space: motion between epochs and stability of the neighbourhoods (on a fixed subset)
@@ -1852,11 +1945,16 @@ class CryodrgnConvergence(JobType):
 
         volume_state, stable_from, overtrained = "not compared", None, None
         vol_epochs = [e for e in vol_epochs if e in z_cache]  # epochs with another particle count were skipped
-        if p["volumes"] and len(vol_epochs) < 2:
+        compare = p["volumes"]
+        if compare and abinit and cryodrgn_version(ctx) < (4, 3):
+            ctx.warn(f"cryoDRGN {version_text(cryodrgn_version(ctx))} cannot generate the volumes of a cryoDRGN-AI model "
+                     "(eval_vol reads them from 4.3): the volumes are not compared")
+            compare = False
+        if compare and len(vol_epochs) < 2:
             ctx.warn("Fewer than two epochs to compare: the volumes are not compared")
-        if p["volumes"] and len(vol_epochs) >= 2:
+        if compare and len(vol_epochs) >= 2:
             volume_state, stable_from, overtrained = self._volumes(ctx, lat, folders, vol_epochs, z_cache, z_final)
-        self._verdict(ctx, trend, latent_stable, volume_state, stable_from, overtrained, final, motion)
+        self._verdict(ctx, trend, latent_stable, volume_state, stable_from, overtrained, final, motion, pose_state)
 
     def _volumes(self, ctx: JobContext, lat: InputData, folders: dict[int, Path], epochs: list[int],
                  z_cache: dict[int, np.ndarray], z_final: np.ndarray) -> tuple[str, int | None, int | None]:
@@ -1877,7 +1975,7 @@ class CryodrgnConvergence(JobType):
             ctx.progress(0.35 + 0.45 * j / len(epochs), f"Volumes of the representative particles at epoch {e}")
             w, cfg = folders[e] / f"weights.{e}.pkl", folders[e] / "config.yaml"
             per_epoch[e] = eval_volumes(ctx, w, cfg, z_cache[e][reps], ctx.path("convergence", f"epoch_{e:03d}"), apix,
-                                        box=box, train_box=train_box)
+                                        box=box, train_box=train_box, lat_meta=lat.meta)
         frames = {e: load_frames(per_epoch[e], max_box=64)[0] for e in epochs}
         stack = np.stack([[frames[e][r].data for e in epochs] for r in range(len(reps))])  # (reps, epochs, z, y, x)
         region = molecule_region(stack[:, -1].mean(axis=0))
@@ -1933,13 +2031,16 @@ class CryodrgnConvergence(JobType):
 
     @staticmethod
     def _verdict(ctx: JobContext, trend: dict[str, Any], latent_stable: bool, volume_state: str, stable_from: int | None,
-                 overtrained: int | None, final: int, motion: list[dict[str, Any]]) -> None:
+                 overtrained: int | None, final: int, motion: list[dict[str, Any]], pose_state: bool | None = None) -> None:
         checks = [
             {"label": "Training loss", "value": trend["text"],
              "status": {"plateau": "good", "slow": "warn", "falling": "bad"}.get(trend["state"])},
             {"label": "Latent space", "value": "stable over the last epochs" if latent_stable else "still changing",
              "status": "good" if latent_stable else "warn"},
         ]
+        if pose_state is not None:  # cryoDRGN-AI learns the poses too
+            checks.append({"label": "Poses (cryoDRGN-AI)", "value": "stable between the last checkpoints" if pose_state
+                           else "still changing", "status": "good" if pose_state else "warn"})
         if volume_state != "not compared":
             checks.append({"label": "Volumes of representative particles",
                            "value": {"stable": "stable", "nearly": "almost stable", "changing": "still changing"}[volume_state]
@@ -1955,6 +2056,8 @@ class CryodrgnConvergence(JobType):
             bad = volume_state == "changing" or (not latent_stable and trend["state"] == "falling")
         steep = trend["state"] == "falling" and trend.get("relative", 0.0) > 0.1
         if good and steep:  # the network is still learning noticeably: not finished yet
+            good = False
+        if good and pose_state is False:  # cryoDRGN-AI: poses still moving
             good = False
         verdict = "converged" if good else ("not converged" if bad else "nearly converged")
         checks.append({"label": "Verdict", "value": verdict, "status": "good" if good else ("bad" if bad else "warn")})
@@ -1975,6 +2078,9 @@ class CryodrgnConvergence(JobType):
         else:
             advice.append(f"Almost converged: the overall picture is reliable, fine details may still change. Continuing to "
                           f"epoch {2 * final} makes sure.")
+        if pose_state is False:
+            advice.append("The poses learnt by cryoDRGN-AI still change between the last checkpoints: continue the training "
+                          "(cryoDRGN continue training), then run this check again.")
         if overtrained is not None:
             advice.append(f"The volumes get noisier over the last epochs (overtraining?): compare with the analysis of epoch "
                           f"{overtrained} (cryoDRGN analysis with Epoch = {overtrained}) and keep the cleaner one.")
@@ -2043,20 +2149,71 @@ class CryodrgnLandscape(JobType):
         train_box = int(lineage.get("box") or 0)
         apix = analysis_apix(ctx, lineage, lat.meta) or 1.0
         box = min(p["box"] - p["box"] % 2, train_box) if train_box else p["box"] - p["box"] % 2
-        apix_vol = apix * train_box / box if train_box else apix
+        abinit = bool(lat.meta.get("abinit"))
+        if abinit:  # cryoDRGN-AI volumes keep their pixel size: a smaller box crops them instead of downsampling
+            apix_vol = apix
+            if train_box and box < train_box:
+                ctx.log(f"cryoDRGN-AI volumes are cropped to {box} px ({box * apix:.0f} Å) rather than downsampled")
+        else:
+            apix_vol = apix * train_box / box if train_box else apix
         args = [ctx.executable("cryodrgn"), "analyze_landscape", workdir, str(epoch), "-o", outdir, "--skip-umap",
                 "-N", str(sketch), "-d", str(box), "--Apix", f"{apix_vol:.4f}".rstrip("0").rstrip("."),
                 "-M", str(p["states"]), "--linkage", p["linkage"], "--pc-dim", str(min(p["pc_dim"], sketch - 1))]
         mask_in = ctx.input("mask")
+        mask_path = None
         if mask_in is not None:
-            args += ["--mask", self._mask(ctx, Path(ctx.abs(mask_in.files[0])), box, apix_vol)]
-        if p["flip"]:
+            mask_path = self._mask(ctx, Path(ctx.abs(mask_in.files[0])), box, apix_vol)
+            if abinit and lat.meta.get("frame"):  # drawn on the volumes shown (consensus frame): back to the model frame
+                self._to_model_frame(mask_path, lat.meta["frame"], train_box)
+        elif abinit:  # cryoDRGN's automatic mask is made from volumes it inverts for these models: made here instead
+            mask_path = self._abinit_mask(ctx, lat, workdir, epoch, box, apix_vol)
+        if mask_path is not None:
+            args += ["--mask", mask_path]
+        if p["flip"] and not abinit:
             args.append("--flip")
         if p["gpus"] > 1:
             args.append("--multigpu")
         ctx.progress(0.05, f"Generating {sketch:,} volumes and comparing them")
         ctx.run(args, tool="cryodrgn")
-        self._results(ctx, lat, arrays, outdir, sketch, p, n)
+        self._results(ctx, lat, arrays, outdir, sketch, p, n, mask_path=mask_path if abinit else None,
+                      apix_vol=apix_vol, train_box=train_box)
+
+    @staticmethod
+    def _to_model_frame(path: Path, frame: dict[str, Any], train_box: int) -> None:
+        from cryoplug.mrc import MapVolume
+        from cryoplug.poses import frame_volume
+        vol = MapVolume.read(path)
+        data = frame_volume(vol.data, frame, inverse=True, order=1, frame_box=train_box or None)
+        MapVolume(data=(data > 0.5).astype(np.float32), voxel=vol.voxel).write(path)
+
+    def _abinit_mask(self, ctx: JobContext, lat: InputData, workdir: Path, epoch: int, box: int, apix: float) -> Path | None:
+        """Mask of the molecule for a cryoDRGN-AI model (frame of the model): union of its cluster volumes
+        thresholded as cryoDRGN does (half the 99.99th percentile), dilated; else from its reconstruction."""
+        from scipy import ndimage
+
+        from cryoplug.mrc import MapVolume
+        from cryoplug.poses import frame_volume
+        files = [ctx.abs(f) for f in lat.meta.get("cluster_volumes") or [] if ctx.abs(f).exists()][:20]
+        frame = lat.meta.get("frame")
+        if not files:
+            files, frame = [workdir / f"reconstruct.{epoch}.mrc"], None
+            files = [f for f in files if f.exists()]
+        if not files:
+            ctx.warn("No volume to make the mask of the landscape analysis from: cryoDRGN's own mask is used")
+            return None
+        union = None
+        voxel = None
+        for f in files:
+            vol = MapVolume.read(f)
+            data = frame_volume(vol.data, frame, inverse=True) if frame else vol.data
+            region = data > np.percentile(data, 99.99) / 2
+            union = region if union is None or union.shape != region.shape else (union | region)
+            voxel = vol.voxel
+        union = ndimage.binary_dilation(union, iterations=3)
+        raw = ctx.path("landscape_mask_model.mrc")
+        MapVolume(data=union.astype(np.float32), voxel=voxel).write(raw)
+        ctx.log(f"Mask of the molecule made from {len(files)} volume(s) of the cryoDRGN-AI model")
+        return self._mask(ctx, raw, box, apix)
 
     @staticmethod
     def _mask(ctx: JobContext, path: Path, box: int, apix: float) -> Path:
@@ -2085,12 +2242,19 @@ class CryodrgnLandscape(JobType):
         return out
 
     def _results(self, ctx: JobContext, lat: InputData, arrays: dict[str, np.ndarray], outdir: Path, k: int,
-                 p: dict[str, Any], n: int) -> None:
+                 p: dict[str, Any], n: int, mask_path: Path | None = None, apix_vol: float | None = None,
+                 train_box: int = 0) -> None:
         from cryoplug import particles as pt
         kdir = outdir / f"kmeans{k}"
         sdir = outdir / f"sketch_clustering_{p['linkage']}_{p['states']}"
         if not (kdir / "labels.pkl").exists() or not (sdir / "state_labels.pkl").exists():
             raise JobError("cryodrgn analyze_landscape did not write its clustering (see the log)")
+        if lat.meta.get("abinit"):  # sign, pixel size and frame of cryoDRGN-AI volumes
+            from cryoplug.jobs.cryodrgn_ai import finish_volumes, volume_frame
+            from cryoplug.mrc import MapVolume
+            files = sorted(sdir.glob("state_*_mean.mrc")) + sorted((outdir / "vol_pcs").glob("pc*/*.mrc"))
+            mask = MapVolume.read(mask_path).data if mask_path is not None and Path(mask_path).exists() else None
+            finish_volumes(files, volume_frame(lat.meta, p["flip"]), 0.0, apix_vol, mask=mask, frame_box=train_box or None)
         klabels = pt.load_array_pkl(kdir / "labels.pkl").astype(np.int64)
         klabels -= int(klabels.min()) if klabels.min() in (0, 1) else 0
         state_of_volume = pt.load_array_pkl(sdir / "state_labels.pkl").astype(np.int64) - 1

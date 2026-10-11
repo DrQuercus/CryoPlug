@@ -105,16 +105,16 @@ Importe des particules pour l'analyse d'hétérogénéité (cryoDRGN) : un job C
 
 **À éviter / pièges**
 
-- Particules sans poses (extraction, classification 2D) : cryoDRGN a besoin d'un raffinement consensus.
+- Particules sans poses (extraction, classification 2D) pour un entraînement cryoDRGN classique : il lui faut un raffinement consensus. cryoDRGN-AI (ab initio), lui, les accepte.
 
-**Entrées conseillées** : Le dossier du job de raffinement consensus (ses particules portent les poses), un .cs ou un .star.
+**Entrées conseillées** : Le dossier du job de raffinement consensus (ses particules portent les poses), un .cs ou un .star ; pour cryoDRGN-AI, n'importe quel job qui contient les particules (Select 2D, extraction…).
 
 **Conseils**
 
 - « Import from CryoSPARC » importe déjà les particules du job en même temps que les cartes.
 - Si les chemins des images sont cassés, indiquez le dossier des images (Image folder).
 
-**Étapes suivantes** : cryoDRGN input check (backprojection), cryoDRGN training
+**Étapes suivantes** : cryoDRGN input check (backprojection), cryoDRGN training, cryoDRGN-AI ab initio reconstruction
 
 ### Import sequence
 
@@ -571,8 +571,9 @@ Garde ou retire des particules choisies dans un espace latent (cryoDRGN ou 3D va
 - Un nouvel entraînement cryoDRGN sur la sélection réutilise les images déjà réduites ; en mode auto il prend le grand réseau (second tour du protocole).
 - Outliers : ‖z‖ au-delà de la moyenne + 2 écarts-types (« Outlier threshold »).
 - Dans CryoSPARC : Import Particle Stack avec le fichier .cs produit, puis Homogeneous / NU refinement pour valider un état.
+- Espace latent cryoDRGN-AI : la sélection garde les poses apprises (« Poses of the selection ») ou, au choix, les poses consensus des particules d'origine, pour un entraînement cryoDRGN classique quand elles concordent.
 
-**Étapes suivantes** : cryoDRGN training, cryoDRGN input check (backprojection)
+**Étapes suivantes** : cryoDRGN training, cryoDRGN-AI ab initio reconstruction, cryoDRGN input check (backprojection)
 
 ### Volume series analysis
 
@@ -619,7 +620,8 @@ Analyse à nouveau un modèle cryoDRGN entraîné : autre époque, plus de clust
 **Conseils**
 
 - Epoch = 0 reprend l'époque de l'entrée (la dernière de l'entraînement).
-- Volume box : volumes plus petits, plus rapides à générer et à visualiser ; la taille de pixel est corrigée.
+- Volume box : volumes plus petits, plus rapides à générer et à visualiser ; la taille de pixel est corrigée. Les modèles cryoDRGN-AI restent à la taille d'entraînement (cryoDRGN ne les réduit pas).
+- Modèle cryoDRGN-AI : « Flip handedness » change la main des volumes et des poses suivantes (elle est gardée dans le repère du modèle).
 
 **Étapes suivantes** : Select particles (latent space), cryoDRGN trajectory, cryoDRGN landscape analysis, Volume series analysis
 
@@ -639,11 +641,12 @@ Poursuit l'entraînement d'un modèle cryoDRGN depuis son dernier point de sauve
 - Changer de taille d'image, de réseau ou de particules : lancez un nouvel entraînement.
 - Prolonger un entraînement déjà convergé : risque de sur-apprentissage (volumes plus bruités).
 
-**Entrées conseillées** : L'espace latent d'un entraînement cryoDRGN (ou d'une continuation précédente).
+**Entrées conseillées** : L'espace latent d'un entraînement cryoDRGN ou cryoDRGN-AI (ou d'une continuation précédente).
 
 **Conseils**
 
 - « Train until epoch » = nombre total d'époques à la fin (0 = le double).
+- Modèle cryoDRGN-AI : la continuation ajoute des époques de descente de gradient (cryodrgn abinit --load), puis refait la comparaison avec le consensus, les particules avec leurs poses apprises et l'analyse.
 - Les époques précédentes restent dans le dossier du premier job : les courbes et le contrôle de convergence couvrent tout l'entraînement.
 
 **Étapes suivantes** : cryoDRGN convergence check, Select particles (latent space), cryoDRGN landscape analysis
@@ -671,6 +674,7 @@ Dit si un entraînement cryoDRGN a convergé, comme le recommande le protocole d
 - Les sorties « Particle … across epochs » se jouent en 3D : un entraînement convergé montre le même volume à chaque époque.
 - L'explorateur montre l'espace latent aux époques comparées, aligné sur la dernière ; « Play the epochs » anime la mise en place des états.
 - Une perte qui baisse encore lentement n'empêche pas la convergence : ce sont les volumes et l'organisation de l'espace latent qui décident.
+- Modèle cryoDRGN-AI : la stabilité des poses entre points de sauvegarde entre dans le verdict, la perte est jugée sur les époques SGD et l'époque 0 (pré-entraînement) est ignorée.
 
 **Étapes suivantes** : cryoDRGN continue training, cryoDRGN analysis, Select particles (latent space), cryoDRGN landscape analysis
 
@@ -726,6 +730,7 @@ Cartographie le paysage conformationnel à partir des volumes plutôt que de l'e
 - 1000 volumes et 10 états (valeurs par défaut de cryoDRGN) ; moins de volumes pour un essai rapide.
 - La sortie « latent » porte les états à la place des clusters : l'explorateur (Keep…) ou « Select particles » prennent les particules d'un état, à raffiner dans CryoSPARC.
 - Trajectoires « Volume PC » : les principales façons dont les volumes diffèrent dans le masque.
+- Modèle cryoDRGN-AI : CryoPlug fournit le masque (celui de cryoDRGN serait fait sur des volumes qu'il inverse), remet les volumes en densité positive, dans le repère du consensus, avec la bonne taille de pixel.
 
 **Étapes suivantes** : Select particles (latent space), Volume series analysis, Extract volume from series, cryoDRGN trajectory
 
@@ -743,7 +748,7 @@ Reconstruction hétérogène avec cryoDRGN : un réseau de neurones apprend un e
 
 **À éviter / pièges**
 
-- Particules sans poses fiables : faites d'abord un bon raffinement consensus (NU-refine).
+- Particules sans poses fiables : faites d'abord un bon raffinement consensus (NU-refine), ou utilisez cryoDRGN-AI (ab initio), qui apprend les poses.
 - Particules déjà très filtrées (classifications 2D/3D agressives) : l'hétérogénéité cherchée a pu disparaître.
 - Lire les volumes cryoDRGN comme des cartes haute résolution : ils montrent les états, ils ne servent pas à affiner un modèle fin.
 
@@ -810,6 +815,43 @@ Génère le volume de particules choisies (à partir de leurs coordonnées laten
 - Plusieurs volumes dans une région = centres k-means de ses particules (points sur les données, comme cryoDRGN).
 
 **Étapes suivantes** : Volume series analysis, Extract volume from series
+
+### cryoDRGN-AI ab initio reconstruction
+
+`cryodrgn_abinit` — logiciel : `cryodrgn` · GPU
+
+Reconstruction hétérogène ab initio avec cryoDRGN-AI (cryodrgn abinit, Levy et al. 2025) : la pose et les coordonnées latentes de chaque particule sont apprises ensemble, à partir des seules images et de leur CTF, sans raffinement consensus. CryoPlug ajoute le contrôle des entrées, le suivi par phase avec temps restant, la stabilité des poses, la comparaison avec les poses consensus (main, repère, écart par particule), une rétroprojection de validation, les particules réécrites avec leurs poses apprises et les outils d'espace latent des entraînements cryoDRGN.
+
+**Quand l'utiliser**
+
+- Le consensus est flou sur une partie de l'objet (grand mouvement, composition variable) : ses poses sont alignées sur la partie dominante et faussent un entraînement cryoDRGN classique.
+- Travailler tôt, sur un jeu peu filtré (juste après une classification 2D), pour ne rien jeter trop vite : cryoDRGN-AI tolère le junk et le regroupe dans l'espace latent.
+- Mélanges, états rares : l'article a trouvé un nouvel état de la V-ATPase et un supercomplexe rare de l'ankyrine-1.
+- Contre-expertise d'un entraînement cryoDRGN : deux estimations indépendantes des poses ; si le même paysage apparaît, l'hétérogénéité n'est pas un artefact d'alignement.
+
+**À éviter / pièges**
+
+- Chercher la meilleure résolution : cryoDRGN-AI découvre, trie et donne des poses ; la carte finale de chaque état se fait dans CryoSPARC.
+- Très petites particules (moins de ~250 kDa, le plus petit complexe de l'article) : la recherche de poses devient fragile.
+- Particules symétriques dont on veut exploiter la symétrie : cryoDRGN-AI reconstruit en C1.
+- cryoDRGN avant 4.2 : la commande abinit n'existe pas (et eval_vol ne lit ces modèles qu'à partir de 4.3).
+
+**Entrées conseillées** : Des particules avec leur CTF : Import from CryoSPARC (ou Import particles) d'un job Select 2D, d'une extraction ou d'un raffinement. Si elles portent des poses consensus, elles sont comparées aux poses apprises. Sans poses consensus, une carte de référence facultative (même molécule) fixe le repère et la main.
+
+**Conseils**
+
+- Réglages de l'article : images à 128 px, z = 8, réseau 3 × 256, 3 époques de recherche de poses puis descente de gradient (30 époques au total par défaut, 50 à 100 pour de gros jeux).
+- Les époques de recherche de poses (HPS) sont lentes, les époques SGD environ 20 fois plus rapides : la carte du job affiche la phase et une estimation du temps restant (« roughly » tant que la vitesse SGD n'est pas mesurée).
+- Contrôle des entrées : image moyenne des particules (elles doivent être sombres dans les images brutes), plus une rétroprojection avec les poses consensus si elles existent. « Image contrast = auto » choisit seul --uninvert-data : un mauvais choix donne des volumes creux.
+- « Pose changes between checkpoints » : grandes pendant la recherche de poses, puis quelques degrés. Des valeurs faibles et stables à la fin indiquent des poses convergées.
+- Comparaison avec le consensus : main (un ab initio peut sortir en miroir, c'est alors corrigé), écart médian, % de particules à moins de 10°. Coloriez l'explorateur par « Pose difference from the consensus » : des clusters à grand écart sont du junk ou une autre espèce.
+- « Put the results in the consensus frame » : volumes et poses dans le repère et la main du consensus (ou de la carte de référence) ; les volumes se superposent à la carte consensus dans le visualiseur.
+- Sortie « Particles with their learned poses » (.cs ou .star) : s'importe tel quel dans CryoSPARC (Import Particle Stack, reconstruction sans réalignement), ou sert à un entraînement cryoDRGN classique.
+- Validation : la FSC de la rétroprojection avec les poses apprises dit si la recherche de poses a réussi.
+- Second tour (comme dans l'article) : retirez le junk dans l'explorateur, puis relancez cryoDRGN-AI sur la sélection (les images réduites sont réutilisées).
+- CUDA out of memory pendant la recherche de poses : « Batch size (pose search) » à 8.
+
+**Étapes suivantes** : cryoDRGN convergence check, Select particles (latent space), cryoDRGN continue training, cryoDRGN analysis, cryoDRGN landscape analysis, cryoDRGN trajectory, cryoDRGN training, Volume series analysis
 
 ## Construction de modèle
 

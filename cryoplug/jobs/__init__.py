@@ -43,6 +43,7 @@ def _load() -> None:
     from cryoplug.jobs import (  # noqa: F401
         building,
         cryodrgn,
+        cryodrgn_ai,
         deposition,
         heterogeneity,
         imports,

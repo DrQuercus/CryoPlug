@@ -11,7 +11,7 @@ local :
 |---|---|---|
 | Import | CryoSPARC, RELION, fichiers MRC, PDB, AlphaFold DB, UniProt | `Import from CryoSPARC`, `Import maps`, `Import atomic model`, `Import sequence` |
 | Amélioration de carte | **LocScale 2** (model-free / pseudo-modèle / model-based / hybride), **EMmerNet**, **DeepEMhancer**, **EMReady**, **spIsoNet** (correction de l'anisotropie due à l'orientation préférentielle), Phenix `resolve_cryo_em`, `auto_sharpen`, `local_aniso_sharpen`, **résolution locale** (`local_resolution`), **cartes composites** de raffinements locaux (`combine_focused_maps`) | + FSC demi-cartes (masquée, corrigée par randomisation de phase), **résolution directionnelle / 3D FSC**, **création de masques** (densité, chaînes du modèle, densité proche du modèle ; dilatation et bord doux en Å) et opérations de carte (main, B-factor, filtre, masque, boîte) intégrées |
-| Hétérogénéité (variabilité 3D) | **cryoDRGN** (contrôle des entrées, entraînement en deux tours, convergence, analyse, paysage, trajectoires), **CryoSPARC 3D Variability** et *3D Variability Display* / 3D Flex (import des coordonnées des particules et des séries de volumes) | **Explorateur de l'espace latent** interactif (UMAP / PCA, coloration par densité, défocus ou orientation, galerie des volumes avec alertes junk, lasso, images des particules, clusters → volumes en 3D, sélection de particules, trajectoire), **lecture des séries** dans le visualiseur 3D, **analyse de série** (carte de variabilité, corrélation entre états, chaînes qui bougent ou disparaissent), sélection de particules vers CryoSPARC ou un nouvel entraînement |
+| Hétérogénéité (variabilité 3D) | **cryoDRGN** (contrôle des entrées, entraînement en deux tours, convergence, analyse, paysage, trajectoires), **cryoDRGN-AI** (ab initio, sans consensus : poses apprises, main et repère, validation), **CryoSPARC 3D Variability** et *3D Variability Display* / 3D Flex (import des coordonnées des particules et des séries de volumes) | **Explorateur de l'espace latent** interactif (UMAP / PCA, coloration par densité, défocus ou orientation, galerie des volumes avec alertes junk, lasso, images des particules, clusters → volumes en 3D, sélection de particules, trajectoire), **lecture des séries** dans le visualiseur 3D, **analyse de série** (carte de variabilité, corrélation entre états, chaînes qui bougent ou disparaissent), sélection de particules vers CryoSPARC ou un nouvel entraînement |
 | Construction de modèle | **ModelAngelo** (avec ou sans séquence) et **identification de chaînes inconnues** (`hmm_search`), **CryoAtom2** (protéines, ARN/ADN, complexes, identification par base de séquences), ColabFold/AlphaFold2, **Boltz-2** (complexes protéines/acides nucléiques/ligands), Phenix `process_predicted_model`, `dock_in_map`, ChimeraX `fitmap` | + restreintes de ligands (Phenix eLBOW), fusion et édition de modèles (gemmi) |
 | Reconstruction interactive | **ISOLDE** (ChimeraX), **Coot** | sessions ouvertes en un clic sur l'écran du serveur, ou paquet téléchargeable pour votre poste |
 | Affinement | Phenix `real_space_refine`, **Servalcat** (demi-cartes, cartes Fo-Fc), `phenix.douse` (eaux) | restreintes de ligands branchées directement sur l'affinement |
@@ -188,7 +188,7 @@ setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate checkmyseq
 [tools.onedep]              # client du serveur de validation wwPDB : pip install onedep_api (accès internet requis)
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate onedep"
 
-[tools.cryodrgn]            # cryoDRGN 3.x/4.x : pip install cryodrgn dans son env (GPU)
+[tools.cryodrgn]            # cryoDRGN 3.x/4.x (cryoDRGN-AI : 4.2+, 4.3+ conseillé) : pip install cryodrgn (GPU)
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate cryodrgn"
 
 [interactive]
@@ -318,13 +318,24 @@ les contrôles qui disent si le résultat est fiable :
    corrélation entre volumes et, avec un modèle, chaînes qui bougent ou disparaissent).
 7. **Select particles** (clusters, région du lasso ou outliers) écrit la sélection et les particules écartées (`.cs`
    pour CryoSPARC, `.star` pour RELION) et les indices pour un nouvel entraînement (images réduites réutilisées).
-8. Déjà calculé dans CryoSPARC : *Import from CryoSPARC* du job **3D Variability** (coordonnées des particules le long
+8. **cryoDRGN-AI ab initio reconstruction** (`cryodrgn abinit`, Levy et al. 2025) : poses et espace latent appris
+   ensemble, **sans raffinement consensus** (particules d'un *Select 2D*, ou d'un raffinement dont les poses sont alors
+   comparées). Suivi en direct par phase (pré-entraînement, recherche de poses, descente de gradient) avec temps
+   restant, stabilité des poses entre points de sauvegarde, reconstruction au fil des époques ; **comparaison avec les
+   poses consensus** (main — un ab initio peut sortir en miroir —, écart par particule, coloration de l'explorateur)
+   ou alignement sur une carte de référence ; résultats ramenés dans le **repère et la main du consensus** ;
+   rétroprojection de **validation** ; particules réécrites avec leurs **poses apprises** (`.cs` / `.star`) pour
+   CryoSPARC ou un entraînement cryoDRGN. Analyse, continuation, convergence, paysage, trajectoires et sélection
+   acceptent ces modèles (CryoPlug corrige ce que cryoDRGN fait différemment pour eux : translations en pixels,
+   analyse dans le dossier d'entraînement, volumes du paysage inversés…).
+9. Déjà calculé dans CryoSPARC : *Import from CryoSPARC* du job **3D Variability** (coordonnées des particules le long
    des composantes, mêmes explorateur et sélection) et **Import volume series** du job *3D Variability Display*
    (dossier, ZIP ou motif de fichiers ; une série par composante).
 
-Workflows *Conformational heterogeneity (cryoDRGN)* et *3D variability (CryoSPARC) → interpretation* ; tout le
-protocole, la lecture des rapports et les pièges dans le [guide](cryoplug/web/docs/GUIDE.md) (chapitre 4
-« Hétérogénéité avec cryoDRGN », §3.7 et recette H).
+Workflows *Conformational heterogeneity (cryoDRGN)*, *Ab initio heterogeneity (cryoDRGN-AI)* et *3D variability
+(CryoSPARC) → interpretation* ; tout le protocole, la lecture des rapports et les pièges dans le
+[guide](cryoplug/web/docs/GUIDE.md) (chapitre 4 « Hétérogénéité avec cryoDRGN » dont §4.12 pour cryoDRGN-AI, §3.7,
+recettes H et I).
 
 ### Sessions interactives ISOLDE / Coot
 
@@ -596,7 +607,7 @@ La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes
 |---|---|
 | Import | Import from CryoSPARC (cartes et particules, coordonnées de 3D variability) · Import maps · Import atomic model (fichier / PDB / AlphaFold DB) · Import sequence (FASTA / UniProt, séparation protéine/ARN/ADN) · Import particles (`.cs` CryoSPARC, `.star` RELION) · Import volume series (3DVA, 3D Flex, cryoDRGN…) |
 | Map processing | Half-map FSC · Directional resolution (3D FSC) · Local resolution (Phenix) · Create mask · Composite map (focused maps) · Map operations · LocScale 2 · EMmerNet · DeepEMhancer · EMReady · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
-| Heterogeneity | cryoDRGN input check (backprojection) · cryoDRGN training · cryoDRGN continue training · cryoDRGN convergence check · cryoDRGN analysis · cryoDRGN landscape analysis · cryoDRGN trajectory · cryoDRGN volumes at particles · Select particles (latent space) · Volume series analysis · Extract volume from series |
+| Heterogeneity | cryoDRGN input check (backprojection) · cryoDRGN training · cryoDRGN-AI ab initio reconstruction · cryoDRGN continue training · cryoDRGN convergence check · cryoDRGN analysis · cryoDRGN landscape analysis · cryoDRGN trajectory · cryoDRGN volumes at particles · Select particles (latent space) · Volume series analysis · Extract volume from series |
 | Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
 | Interactive | ISOLDE session · Coot session |
 | Refinement | Real-space refinement (Phenix) · Refinement (Servalcat) · Add waters (phenix.douse) |

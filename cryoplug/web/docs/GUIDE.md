@@ -237,14 +237,14 @@ Une région floue dans la carte consensus (résolution locale médiocre, densit�
 (un domaine qui bouge) ou d'une **occupation partielle** (une sous-unité absente d'une partie des particules), ou d'un
 mélange d'états. Deux approches, qui se complètent :
 
-| | CryoSPARC 3D Variability (3DVA) | cryoDRGN |
-|---|---|---|
-| Principe | Composantes **linéaires** de variabilité autour de la carte consensus | Réseau de neurones : espace latent **non linéaire**, états discrets et continus |
-| Dans CryoPlug | *Import from CryoSPARC* du job 3DVA (coordonnées des particules) et *Import volume series* du job *3D Variability Display* | *Import from CryoSPARC* du raffinement consensus, puis *cryoDRGN training* (GPU) |
-| Coût | Déjà calculé dans CryoSPARC | Une à quelques heures de GPU selon le nombre de particules et la taille d'image |
+| | CryoSPARC 3D Variability (3DVA) | cryoDRGN | cryoDRGN-AI (ab initio) |
+|---|---|---|---|
+| Principe | Composantes **linéaires** de variabilité autour de la carte consensus | Réseau de neurones : espace latent **non linéaire**, états discrets et continus, avec les poses du consensus | Comme cryoDRGN, mais apprend aussi les **poses** : pas besoin de consensus |
+| Dans CryoPlug | *Import from CryoSPARC* du job 3DVA (coordonnées des particules) et *Import volume series* du job *3D Variability Display* | *Import from CryoSPARC* du raffinement consensus, puis *cryoDRGN training* (GPU) | *Import from CryoSPARC* d'un *Select 2D* ou d'un raffinement, puis *cryoDRGN-AI ab initio reconstruction* (GPU) |
+| Coût | Déjà calculé dans CryoSPARC | Une à quelques heures de GPU selon le nombre de particules et la taille d'image | Plus long : la recherche de poses coûte cher (128 px recommandé) |
 
 **cryoDRGN a son propre chapitre** (§4) : protocole en deux tours, contrôle des entrées, lecture des rapports,
-explorateur, nettoyage du junk, convergence, paysage des états et validation.
+explorateur, nettoyage du junk, convergence, paysage des états et validation ; cryoDRGN-AI y est décrit au §4.12.
 
 **3D Variability (CryoSPARC), pas à pas**
 
@@ -286,7 +286,9 @@ des **états discrets** (îlots), des **mouvements continus** (bandes), des **so
 particules, et surtout le **junk** qu'on n'avait pas su retirer.
 
 CryoPlug suit le protocole publié par les auteurs (Kinman et al. 2023, *Nature Protocols* 18, 319) et ajoute à chaque
-étape les contrôles et les explications qui permettent de savoir si le résultat est fiable.
+étape les contrôles et les explications qui permettent de savoir si le résultat est fiable. Quand le consensus n'est
+pas fiable (grand mouvement, mélange, jeu peu filtré), **cryoDRGN-AI** fait la même analyse en apprenant aussi les
+poses (§4.12).
 
 ### 4.1 Le principe en bref
 
@@ -490,7 +492,103 @@ et l'organisation de l'espace latent qui décident.
 | « Cannot find file … under datadir » | Projet CryoSPARC déplacé | *Import particles* avec *Image folder* |
 | Options refusées par cryodrgn | Version ancienne | CryoPlug s'adapte aux versions 3.x et 4.x ; mettez à jour (`pip install -U cryodrgn`) |
 
-### 4.12 Mémo
+### 4.12 Sans consensus : cryoDRGN-AI (ab initio)
+
+cryoDRGN-AI (Levy et al. 2025, *Nature Methods* 22, 1486 ; commande `cryodrgn abinit`, cryoDRGN 4.2 ou plus récent)
+apprend **en même temps** la pose et les coordonnées latentes de chaque particule, à partir des images et de leur CTF :
+il n'a besoin ni de raffinement consensus, ni de carte de départ.
+
+**Pourquoi c'est utile**
+
+- Un entraînement cryoDRGN classique garde les poses du consensus. Quand l'objet bouge beaucoup ou change de
+  composition, ces poses sont alignées sur la partie dominante : les régions mobiles sont mal orientées, et les
+  classifications 2D/3D ont souvent écarté les états rares avant même cryoDRGN. cryoDRGN-AI supprime cette dépendance.
+- Il tolère le junk : il peut tourner juste après une classification 2D peu sévère, et regroupe les particules cassées
+  dans l'espace latent (le complexe DSL1/SNARE et la V-ATPase dans l'article).
+- Avec des poses consensus, il dit pour chaque particule si les deux reconstructions sont d'accord : une
+  contre-expertise de l'alignement. Si le même paysage apparaît, l'hétérogénéité n'est pas un artefact de poses.
+
+**Comment il apprend (les phases du rapport)**
+
+| Phase | Ce qui se passe | Durée |
+|---|---|---|
+| Pré-entraînement (époque 0) | 10 000 images avec des poses aléatoires : une première densité grossière | Courte |
+| Recherche de poses (HPS, 3 époques) | Chaque image est comparée aux projections du modèle sur une grille d'orientations (4 608 à 15°), puis sur des grilles de plus en plus fines | Longue |
+| Descente de gradient (SGD) | Poses et coordonnées latentes de chaque particule sont affinées par gradient (auto-décodeur : pas d'encodeur) | ~20 fois plus rapide par époque |
+
+**Lancer**
+
+- Particules : *Import from CryoSPARC* d'un job *Select 2D* (sans poses) ou d'un raffinement (ses poses seront
+  comparées aux poses apprises). Puis *cryoDRGN-AI ab initio reconstruction*, ou le workflow *Ab initio heterogeneity
+  (cryoDRGN-AI)*.
+- Réglages de l'article : 128 px (le coût de la recherche de poses augmente vite avec la taille), z = 8, réseau
+  3 × 256, 3 époques de recherche de poses. 30 époques au total par défaut, 50 à 100 pour un gros jeu.
+  Plusieurs GPU (*GPUs* > 1) accélèrent l'entraînement.
+- Sans poses consensus, connectez si possible une **carte de référence** de la même molécule (consensus d'un autre
+  jeu, ab initio CryoSPARC, carte EMDB) : elle fixe le repère et la main des résultats.
+
+**Lire le rapport**
+
+1. *Input check* : l'image moyenne des particules doit être sombre dans les images brutes (cryoDRGN les inverse) ;
+   avec des poses consensus, la rétroprojection s'y ajoute. *Image contrast = auto* choisit seul `--uninvert-data`.
+2. *Training loss* (époques de recherche de poses et de SGD) et *Pose changes between checkpoints* : grands sauts
+   pendant la recherche, puis quelques degrés. Des valeurs faibles et stables à la fin = poses convergées. La carte du
+   job affiche la phase et le temps restant (« roughly » tant que la vitesse des époques SGD n'est pas mesurée).
+3. *Reconstruction across epochs* : la densité passe d'une boule à la molécule (sortie jouable en 3D).
+4. *Comparison with the consensus poses* : main (*same as the consensus* ou *mirror image*, corrigée automatiquement),
+   écart médian, part des particules à moins de 10°. L'histogramme montre un pic vers 0° (accord) et une queue
+   (désaccord).
+5. *Validation* : rétroprojection de toutes les particules avec leurs poses apprises. Une FSC qui monte haut = des
+   poses précises.
+6. Explorateur et analyse comme pour un entraînement cryoDRGN, avec en plus la couleur **Pose difference from the
+   consensus** : des clusters à grand écart sont du junk ou une autre espèce ; un écart réparti partout désigne des
+   poses que l'une des deux reconstructions a mal trouvées.
+
+**Main et repère**
+
+Une reconstruction ab initio ne distingue pas une molécule de son image miroir, et son orientation est arbitraire.
+CryoPlug calcule le changement de repère (rotation, translation et éventuel miroir) qui amène le modèle sur le
+consensus — à partir des poses, ou à défaut de la carte de référence (recherche sur toutes les orientations, pour les
+deux mains) — et l'applique à tout : volumes (ils se superposent à la carte consensus dans le visualiseur), poses des
+particules, et volumes générés ensuite (analyse, trajectoires, *landscape*…). Sans consensus ni référence, la main
+reste inconnue : vérifiez-la sur une structure connue, ou utilisez *Flip handedness* (elle est alors gardée pour les
+jobs suivants).
+
+**Les poses apprises**
+
+La sortie *Particles with their learned poses* (`.cs` ou `.star`, au format des particules d'origine) contient les
+poses dans le repère du consensus :
+
+- dans CryoSPARC : *Import Particle Stack*, puis une reconstruction homogène sans réalignement ;
+- dans cryoDRGN : un entraînement classique sur cette sortie, ou sur une sélection, utilise les poses apprises
+  (*Select particles* propose aussi de garder les poses consensus des particules d'origine).
+
+**La suite**
+
+- Junk : retirez-le dans l'explorateur, puis faites un **second tour cryoDRGN-AI** sur la sélection, comme l'article
+  (les images réduites sont réutilisées).
+- Si les poses concordent avec le consensus pour la plupart des particules : un entraînement cryoDRGN classique à
+  256 px (grand réseau) sur les particules nettoyées donne plus de détail.
+- *cryoDRGN convergence check* (il suit aussi la stabilité des poses), *continue training* si besoin, puis validation
+  de chaque état dans CryoSPARC (§4.10).
+
+> CryoPlug corrige pour ces modèles ce que les outils de cryoDRGN font différemment : translations enregistrées en
+> pixels (et non en fraction de boîte), analyse écrite dans le dossier de l'entraînement, volumes non réduits,
+> volumes du *landscape* inversés et sans taille de pixel.
+
+**Pièges propres à cryoDRGN-AI**
+
+| Symptôme | Cause probable | Solution |
+|---|---|---|
+| Volumes creux | Contraste des images inversé | *Image contrast* sur *do not invert*, ou *auto* avec le contrôle des entrées |
+| Poses différentes du consensus pour presque toutes les particules | Recherche de poses non convergée, petite particule, ou consensus faux | *Pose changes*, validation ; plus d'époques ; rester à 128 px |
+| Main « uncertain » | Poses trop différentes, ou objet presque symétrique en miroir à basse résolution | Carte de référence ; vérifier sur un modèle à plus haute résolution |
+| Pics à 180° ou 360°/n dans l'histogramme | Symétrie du raffinement consensus | Paramètre *Symmetry of the consensus* |
+| `CUDA out of memory` pendant la recherche de poses | Batch de la recherche trop gros | *Batch size (pose search)* à 8 |
+| Une trajectoire ne fait que tourner la carte | Pose et conformation ne sont pas séparées explicitement (limite de la méthode) | Vérifier que la forme change ; R² de la direction de vue dans le tableau des propriétés codées |
+| Trajectoires ou volumes refusés avec cryoDRGN 4.2 | `eval_vol` ne lit ces modèles qu'à partir de 4.3 | `pip install -U cryodrgn` |
+
+### 4.13 Mémo
 
 - **Tour 1** : *cryoDRGN training* sur les particules du raffinement consensus, 128 px, réglages par défaut. Lire :
   contrôle des entrées, galerie, outliers, tableau des propriétés codées. Retirer le junk.
@@ -499,6 +597,8 @@ et l'organisation de l'espace latent qui décident.
 - **Analyse** : explorateur (couleurs, lasso, images), *analysis* avec plus de volumes, *trajectory* à travers les
   particules, *landscape analysis* pour des états, *Volume series analysis* avec le modèle.
 - **Validation** : une reconstruction CryoSPARC par état, avant toute interprétation fine.
+- **Consensus douteux ou jeu peu filtré** : *cryoDRGN-AI ab initio reconstruction* (128 px), lire la comparaison avec
+  le consensus et la validation, retirer le junk, second tour cryoDRGN-AI (§4.12).
 
 ---
 
@@ -760,6 +860,17 @@ Raccourci : workflow *Identify unknown proteins in the map*.
    état, puis la suite du pipeline (construction, affinement, validation) pour chacune
 7. Si la 3DVA est déjà calculée : workflow *3D variability (CryoSPARC) → interpretation* pour comparer
 
+### I. Mélange ou grand mouvement : le consensus n'est pas fiable
+
+1. Dans CryoSPARC, les particules d'une classification 2D peu sévère (*Select 2D*) ; *Import from CryoSPARC* de ce
+   job (et, si possible, une carte de référence de la molécule avec *Import maps*)
+2. Workflow *Ab initio heterogeneity (cryoDRGN-AI)* : cryoDRGN-AI à 128 px, z = 8
+3. Rapport : contrôle des entrées, stabilité des poses, validation ; main et repère fixés par la référence
+4. Explorateur : retirer le junk (galerie, outliers, images des particules) → second tour cryoDRGN-AI sur la sélection
+5. *cryoDRGN convergence check* ; *landscape analysis* pour définir des états
+6. *Keep…* pour chaque état → CryoSPARC (*Import Particle Stack* avec les poses apprises → reconstruction homogène,
+   puis NU refinement) : une carte gold-standard par état
+
 ---
 
 ## 10. Dépannage
@@ -788,7 +899,7 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | Create mask : « Masks need SciPy » | SciPy absent de l'environnement de CryoPlug | `pip install scipy` (installé avec CryoPlug depuis cette version) |
 | wwPDB validation : « wwPDB validation server: … » | Serveur indisponible, pas d'accès internet depuis le serveur, fichier refusé | Vérifier l'accès internet (proxy) du serveur, relancer plus tard ; le message du serveur est dans le log |
 | checkMySequence : « needs HMMER » | `hmmsearch` absent de son environnement | `conda install -c bioconda hmmer` dans l'environnement de checkMySequence |
-| cryoDRGN : volumes creux, junk partout, mémoire, convergence… | — | Tableau des pièges de cryoDRGN : §4.11 |
+| cryoDRGN : volumes creux, junk partout, mémoire, convergence… | — | Tableau des pièges de cryoDRGN : §4.11 (cryoDRGN-AI : §4.12) |
 | cryoDRGN : « Cannot find file … under datadir » | Le projet CryoSPARC a été déplacé, ou les chemins des images ne sont pas relatifs au dossier du projet | *Import particles* avec *Image folder* = le dossier du projet CryoSPARC qui contient les images |
 | « These particles have no poses » | Particules d'une extraction ou d'une classification 2D | Importez le job de **raffinement** (champs `alignments3D`) |
 | « … uses CryoSPARC's compressed format » | Fichiers `.cs` compressés des versions récentes de CryoSPARC | `pip install cryosparc-tools` dans l'environnement de CryoPlug |
@@ -841,3 +952,8 @@ Après correction : **Clear** remet le job en préparation, **Clone** crée une 
 | 3DVA | *3D Variability Analysis* de CryoSPARC : composantes linéaires de la variabilité et coordonnée de chaque particule le long de chacune. |
 | Série de volumes | Volumes ordonnés (clusters, trajectoire, frames de 3DVA) superposés, joués comme un film. |
 | Carte de variabilité | Écart-type de la densité entre les volumes d'une série : grand là où la structure change. |
+| Ab initio | Reconstruction sans information de départ : ni carte initiale, ni poses. |
+| Recherche hiérarchique des poses (HPS) | Comparaison de chaque image aux projections du modèle sur une grille d'orientations affinée par étapes (cryoDRGN-AI). |
+| Auto-décodeur | Les coordonnées latentes et les poses de chaque particule sont des paramètres optimisés directement, sans encodeur (cryoDRGN-AI). |
+| Main (chiralité) | Une reconstruction à partir de projections ne distingue pas une molécule de son image miroir : la main se vérifie (hélices α, modèle connu, référence). |
+| Repère | Orientation et origine arbitraires d'une reconstruction ab initio ; CryoPlug le ramène sur celui du consensus ou d'une carte de référence. |

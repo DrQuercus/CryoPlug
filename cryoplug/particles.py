@@ -122,6 +122,35 @@ def summary(data: np.ndarray) -> dict[str, Any]:
     return info
 
 
+def with_poses(data: np.ndarray, pose: np.ndarray, shift: np.ndarray) -> np.ndarray:
+    """A copy of CryoSPARC particles with new 3D alignments (axis-angle ``alignments3D/pose``, ``/shift`` in pixels
+    of the particle images). The fields are added when the particles had none (after a 2D classification)."""
+    names = data.dtype.names or ()
+    extra: list[tuple] = []
+    if "alignments3D/pose" not in names:
+        extra.append(("alignments3D/pose", "<f4", (3,)))
+    if "alignments3D/shift" not in names:
+        extra.append(("alignments3D/shift", "<f4", (2,)))
+    if "alignments3D/psize_A" not in names and "blob/psize_A" in names:
+        extra.append(("alignments3D/psize_A", "<f4"))
+    if "alignments3D/split" not in names:
+        extra.append(("alignments3D/split", "<u4"))
+    if extra:
+        out = np.zeros(len(data), dtype=np.dtype(data.dtype.descr + extra))
+        for name in names:
+            out[name] = data[name]
+        added = {e[0] for e in extra}
+        if "alignments3D/psize_A" in added:
+            out["alignments3D/psize_A"] = data["blob/psize_A"]
+        if "alignments3D/split" in added:  # half-sets for a reconstruction in CryoSPARC
+            out["alignments3D/split"] = np.arange(len(data)) % 2
+    else:
+        out = data.copy()
+    out["alignments3D/pose"] = np.asarray(pose, dtype=np.float32)
+    out["alignments3D/shift"] = np.asarray(shift, dtype=np.float32)
+    return out
+
+
 def components(data: np.ndarray) -> np.ndarray | None:
     """3D variability reaction coordinates of each particle (N, K), or None."""
     names = sorted((n for n in data.dtype.names or () if re.fullmatch(r"components_mode_\d+/value", n)),
@@ -302,6 +331,39 @@ def star_column(path: str | Path, label: str) -> list[str]:
 
 def star_count(path: str | Path) -> int:
     return len(_star_table(path)[2])
+
+
+def star_with_poses(src: str | Path, dst: str | Path, euler: np.ndarray, shift: np.ndarray,
+                    apix: float | None = None) -> Path:
+    """Copy of a .star file with new orientations: RELION Euler angles (degrees) and origins (``shift`` in pixels;
+    written in Å as ``_rlnOriginX/YAngst`` in RELION 3.1+ files, in pixels as ``_rlnOriginX/Y`` otherwise).
+    Missing columns are added."""
+    head, labels, rows, tail = _star_table(src)
+    euler, shift = np.asarray(euler, dtype=np.float64), np.asarray(shift, dtype=np.float64)
+    if len(rows) != len(euler):
+        raise ValueError(f"{Path(src).name} has {len(rows)} particles, the poses {len(euler)}")
+    angst = "_rlnOriginXAngst" in labels or ("_rlnOriginX" not in labels and apix is not None
+                                              and any(ln.strip().startswith("data_optics") for ln in head))
+    cols = {"_rlnAngleRot": euler[:, 0], "_rlnAngleTilt": euler[:, 1], "_rlnAnglePsi": euler[:, 2]}
+    if angst:
+        if not apix:
+            raise ValueError("The pixel size is needed to write origins in Å")
+        cols["_rlnOriginXAngst"], cols["_rlnOriginYAngst"] = shift[:, 0] * apix, shift[:, 1] * apix
+    else:
+        cols["_rlnOriginX"], cols["_rlnOriginY"] = shift[:, 0], shift[:, 1]
+    new_labels = list(labels) + [lab for lab in cols if lab not in labels]
+    position = {lab: i for i, lab in enumerate(new_labels)}
+    out_rows = []
+    for r, row in enumerate(rows):
+        tokens = row.split()
+        tokens += ["0"] * (len(new_labels) - len(tokens))
+        for lab, values in cols.items():
+            tokens[position[lab]] = f"{values[r]:.6f}"
+        out_rows.append(" ".join(tokens))
+    head = head[: len(head) - len(labels)] + [f"{lab} #{i + 1}" for i, lab in enumerate(new_labels)]
+    dst = Path(dst)
+    dst.write_text("\n".join(head + out_rows + [""] + tail).rstrip("\n") + "\n")
+    return dst
 
 
 def filter_star(src: str | Path, dst: str | Path, ind: np.ndarray) -> Path:

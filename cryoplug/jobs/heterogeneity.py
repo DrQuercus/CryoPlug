@@ -232,6 +232,7 @@ def output_meta_of(ctx: JobContext, particles_path: Path) -> dict[str, Any]:
 
 # ------------------------------------------------------------ particle selection
 SELECTION_MODES = ["clusters", "region", "outliers"]
+POSE_CHOICES = ["learned (cryoDRGN-AI)", "consensus (original particles)"]
 
 
 @register
@@ -257,6 +258,9 @@ class SelectParticles(JobType):
               help="Selection by outliers: particles whose ‖z‖ exceeds the mean by this many standard deviations."),
         Param("action", "choice", "keep", choices=["keep", "remove"], label="Action",
               help="keep: the output holds the selected particles; remove: it holds all the others."),
+        Param("poses", "choice", POSE_CHOICES[0], choices=POSE_CHOICES, label="Poses of the selection", advanced=True,
+              help="For a cryoDRGN-AI latent space: the poses it learnt (frame of the consensus), or the consensus poses of "
+                   "the original particles — for a cryoDRGN training with the consensus poses when they agree."),
     ]
     outputs = [OutputDef("particles", "particles", "Selected particles"),
                OutputDef("excluded", "particles", "Particles left out")]
@@ -317,6 +321,19 @@ class SelectParticles(JobType):
                            f"{'none' if p['action'] == 'keep' else 'all'} of the particles")
         ctx.log(f"Selection: {what} ({int(member.sum()):,} particles); action {p['action']}: {len(ind):,} kept, {len(left):,} left out")
         src, parent_meta = particles_source(ctx, lat)
+        prepared = dict(lat.meta.get("prepared") or {})
+        if lat.meta.get("abinit") and p["poses"].startswith("consensus"):
+            if not lat.meta.get("consensus_particles") or not ctx.abs(lat.meta["consensus_particles"]).exists():
+                raise JobError("These particles have no consensus poses (they were reconstructed ab initio only): keep the "
+                               "learned poses")
+            src = ctx.abs(lat.meta["consensus_particles"])
+            parent_meta = output_meta_of(ctx, src) or parent_meta
+            if prepared.get("consensus_poses"):
+                prepared.update(poses=prepared["consensus_poses"],
+                                pose_source=prepared.get("consensus_pose_source") or prepared.get("pose_source"))
+            else:
+                prepared = {}
+            ctx.log("The selection keeps the consensus poses of the original particles")
         out = self._write(ctx, src, ind, "particles", n)
         excluded = self._write(ctx, src, left, "excluded", n) if len(left) else None
         base_meta: dict[str, Any] = {"format": parent_meta.get("format") or ("star" if src.suffix == ".star" else "cs")}
@@ -326,7 +343,9 @@ class SelectParticles(JobType):
         selection = {"mode": mode, "action": p["action"], "what": what}
         if chosen:
             selection["clusters"] = [c + 1 for c in chosen]
-        prepared = lat.meta.get("prepared") or {}
+        learned = lat.meta.get("abinit") and not p["poses"].startswith("consensus")
+        if learned:
+            base_meta["poses_from"] = "cryoDRGN-AI"
 
         def meta_for(rows: np.ndarray, file: Path, name: str) -> dict[str, Any]:
             from cryoplug import particles as pt
@@ -337,7 +356,8 @@ class SelectParticles(JobType):
                 base = pt.load_array_pkl(ctx.abs(prepared["ind"])) if prepared.get("ind") else None
                 absolute = base[rows] if base is not None else rows
                 parent_ind = pt.save_array_pkl(absolute, ctx.path(f"{name}_parent_indices.pkl"))
-                meta["parent_cryodrgn"] = {k: v for k, v in prepared.items() if k != "ind"}
+                meta["parent_cryodrgn"] = {k: v for k, v in prepared.items()
+                                           if k not in ("ind", "consensus_poses", "consensus_pose_source")}
                 meta["parent_indices"] = ctx.rel(parent_ind)
             return meta
 
