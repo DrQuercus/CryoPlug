@@ -1,24 +1,29 @@
-// CryoPlug 3D viewer: a CryoSPARC-like volume viewer with ChimeraX habits (models panel, histogram,
-// command line), drawn by Mol*. Maps arrive as binned previews unless full resolution is asked for.
+// CryoPlug 3D viewer: a CryoSPARC-like volume viewer with ChimeraX habits (models panel, histogram, slices, command
+// line), drawn by Mol*. Maps arrive as compact binned copies at the detail and filter picked in their card — a quick
+// coarse look first when the connection is slow — and the URL keeps the items, their settings and the camera.
 import { api } from './api.js';
-import { clear, h, icon, modal, showError, toast } from './ui.js';
+import { clear, h, icon, modal, popupMenu, showError, toast } from './ui.js';
 import { COMMAND_HELP, createCommands } from './viewer/commands.js';
-import { COLOR_KINDS, createPanel } from './viewer/panel.js';
+import { binning, COARSE_BOX, DEFAULT_BOX, expectedSeconds, fetchMap, fmtBytes, fmtDims, mapInfo, seriesBox } from './viewer/mapdata.js';
+import { COLOR_KINDS, colorLegend, createPanel, hex } from './viewer/panel.js';
 import * as scene from './viewer/scene.js';
-import { createSeriesPlayer, initSeries, seriesBox, SPEEDS } from './viewer/series.js';
+import { createSeriesPlayer, initSeries, SPEEDS } from './viewer/series.js';
 import { createSlices } from './viewer/slices.js';
-import { defaultLevel, fmtLevel, mapStatistics, toSigma } from './viewer/stats.js';
+import { defaultLevel, fmtLevel, levelForMass, mapStatistics, toSigma } from './viewer/stats.js';
 
 const MAP_COLORS = [0x8fb3f0, 0xf0b46e, 0x8fd3a5, 0xe899c3, 0xc3a6f0, 0xe8e27a];
 const MASK_COLOR = 0x9aa0a6;
 const MODEL_COLOR = 0xd8d8d8;
 const BACKGROUNDS = [['Black', 0x000000], ['Grey', 0x5a5a5a], ['White', 0xffffff]];
-const HINT = 'Left-drag rotate · right-drag move · wheel zoom · click an atom to centre on it · + / − level · ? help';
+const MAP_STYLES = ['surface', 'mesh', 'transparent'];
+const MODEL_DISPLAYS = ['cartoon', 'both', 'sticks', 'spheres', 'surface', 'cartoon-surface'];
+const HINT = 'Left-drag rotate · right-drag move · wheel zoom · click an atom to centre on it · Shift + click two atoms: distance · ? help';
 
 const V = {
   project: null, items: [], nextId: 1, active: null, mapColors: 0, full: false,
   background: 0x000000, spin: false, slab: null, ortho: false, soft: false,
   sources: [], // maps that colour other maps: [{ path, label, range, colourMap, kind, unit }]
+  ready: false, // items of the link opened: from then on the URL follows the view
 };
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -42,10 +47,14 @@ function loading(text) {
   $('vw-loading-text').textContent = text;
   $('vw-loading').hidden = false;
 }
+function loadingText(text) {
+  if (loadingDepth) $('vw-loading-text').textContent = text;
+}
 function loaded() {
   loadingDepth = Math.max(0, loadingDepth - 1);
   if (!loadingDepth) $('vw-loading').hidden = true;
 }
+const progress = (what) => (got, total) => loadingText(`${what} · ${fmtBytes(got)} of ${fmtBytes(total)}`);
 
 function log(text, kind = '') {
   const el = $('vw-log');
@@ -65,36 +74,104 @@ const activeMap = () => (V.active?.kind === 'map' ? V.active : V.items.find((i) 
 const activeModel = () => (V.active?.kind === 'model' ? V.active : V.items.find((i) => i.kind === 'model'));
 // the series the player controls: the active item if it is one, otherwise the first one
 const activeSeries = () => (V.active?.series ? V.active : V.items.find((i) => i.series));
+const voxelVolume = (item) => scene.voxelAxes(item.volume).scale.reduce((a, b) => a * Math.abs(b), 1);
+const defaultBox = (item) => (item.series ? seriesBox(item.series.frames.length) : DEFAULT_BOX);
+const round = (v) => Number(v.toPrecision(6));
+
+// The URL keeps what is open, how it is shown and the camera: reloading the page, or sending the link to a colleague
+// on the same server, gives the same view.
+function itemState(i) {
+  const out = { kind: i.kind, path: i.path, label: i.label, ...(i.otype && i.otype !== 'map' ? { otype: i.otype } : {}) };
+  if (!i.visible) out.visible = false;
+  if (i.kind === 'map') {
+    Object.assign(out, { color: i.color, level: round(i.level), style: i.style });
+    if (i.style === 'transparent') out.opacity = i.opacity;
+    if (i.box !== defaultBox(i)) out.box = i.box;
+    if (i.lowpass) out.lowpass = i.lowpass;
+    if (i.series) Object.assign(out, { series: i.series.frames.map((f) => f.path), labels: i.series.frames.map((f) => f.label) });
+    if (i.colorBy) {
+      Object.assign(out, { colorBy: i.colorBy.path, colorRange: [i.colorBy.min, i.colorBy.max] });
+      if (i.colorBy.kind !== 'locres') out.colorKind = i.colorBy.kind;
+    }
+  } else {
+    Object.assign(out, { display: i.display, colorMode: i.colorMode });
+    if (i.colorMode === 'uniform') out.color = i.color;
+    if (i.surfaceOpacity !== undefined) out.surfaceOpacity = i.surfaceOpacity;
+    if (i.waters) out.waters = true;
+  }
+  return out;
+}
 
 function syncHash() {
-  const items = V.items.map((i) => ({
-    kind: i.kind, path: i.path, label: i.label, ...(i.otype && i.otype !== 'map' ? { otype: i.otype } : {}),
-    ...(i.kind === 'map' ? { color: i.color } : {}),
-    ...(i.series ? { series: i.series.frames.map((f) => f.path), labels: i.series.frames.map((f) => f.label) } : {}),
-    ...(i.colorBy ? { colorBy: i.colorBy.path, colorRange: [i.colorBy.min, i.colorBy.max], ...(i.colorBy.kind !== 'locres' ? { colorKind: i.colorBy.kind } : {}) } : {}),
-  }));
-  history.replaceState(null, '', `${location.pathname}${location.search}#${encodeURIComponent(JSON.stringify({ project: V.project, items }))}`);
+  if (!V.ready) return;
+  const state = { project: V.project, items: V.items.map(itemState) };
+  if (V.items.length) state.view = scene.cameraState();
+  if (V.slab !== null) state.slab = V.slab;
+  history.replaceState(null, '', `${location.pathname}${location.search}#${encodeURIComponent(JSON.stringify(state))}`);
   const labels = V.items.map((i) => i.label);
   $('vw-title').textContent = labels.length ? `${V.project} · ${labels.join('  ·  ')}` : V.project;
   document.title = labels.length ? `${labels.join(', ')} — CryoPlug viewer` : 'CryoPlug viewer';
 }
+let hashTimer = 0;
+const syncHashSoon = () => { clearTimeout(hashTimer); hashTimer = setTimeout(syncHash, 500); };
 
-function mapUrl(item) {
-  const model = item.zone && byId(item.zone.model);
-  if (model) return api.zoneUrl(V.project, item.path, model.path, item.zone.radius, item.full ? 0 : 200);
-  return item.full ? api.fileUrl(V.project, item.path) : api.previewUrl(V.project, item.path);
+// URL of a map as the viewer loads it: binned to the item's detail, filtered, 16-bit (zone: only near its model).
+function mapUrl(item, { path = item.path, box = item.box, encoding = 'i16' } = {}) {
+  const opts = { encoding, lowpass: item.lowpass || 0 };
+  const model = !item.series && item.zone && byId(item.zone.model);
+  if (model) return api.zoneUrl(V.project, path, model.path, item.zone.radius, box, opts);
+  return api.previewUrl(V.project, path, box, opts);
+}
+
+async function loadMapData(item, opts = {}) {
+  const bytes = await fetchMap(mapUrl(item, opts), opts.onProgress);
+  return scene.loadVolume(bytes, item.label);
+}
+
+function setVolume(item, r, { coarse = false } = {}) {
+  item.refs = { data: r.dataRef, volume: r.volumeRef, repr: null };
+  item.volume = r.volume;
+  item.stats = mapStatistics(r.volume);
+  item.coarse = coarse;
+  item.full = !coarse && (item.info ? binning(item.info, item.box) === 1 : item.box === 0);
+}
+
+// A quick 8-bit look at 96 voxels first when the map asked for would take a while to arrive.
+function previewFirst(item) {
+  if (!item.info?.box || item.zone) return false;
+  const target = binning(item.info, item.box);
+  if (binning(item.info, COARSE_BOX) < 1.5 * target) return false;
+  const voxels = item.info.box.reduce((a, d) => a * Math.floor(d / target), 1);
+  return expectedSeconds(voxels * 2) > 0.8;
+}
+
+// Level after the map changed. keep: 'fraction' (another binning or filter changes the values: same volume enclosed),
+// 'absolute' (a zone only hides voxels). A level never set by the user follows the map's own default.
+function keepLevel(item, keep, fraction) {
+  if (item.levelAuto && keep !== 'absolute') item.level = defaultLevel(item);
+  else if (keep === 'fraction' && fraction > 0 && fraction < 1) item.level = item.stats.percentile(1 - fraction);
+  item.level = clamp(item.level, item.stats.min, item.stats.max);
 }
 
 // Whole view: the models if any are shown, otherwise the isosurfaces of the maps (not their boxes).
 function resetView(opts = {}) {
-  if (!V.items.some((i) => i.kind === 'model' && i.visible) && scene.frameMaps(V.items)) return;
+  if (!V.items.some((i) => i.kind === 'model' && i.visible) && scene.frameMaps(V.items)) { scene.reapplySlab(400); return; }
   scene.resetView(opts);
+  scene.reapplySlab(400);
+}
+
+// Thickness (Å) of a slab given as a percentage of what is shown, or directly in Å.
+function slabThickness(value) {
+  if (value && typeof value === 'object') return value.angstrom;
+  const sphere = scene.contentSphere(V.items);
+  return sphere ? Math.max(1, (2 * sphere.radius * value) / 100) : value;
 }
 
 // Redraw a map or a model after a display change (the frames of a series: see series.js).
 function redraw(item) {
   if (item.series) player.redraw(item);
   else scene.schedule(item, fail);
+  syncHashSoon();
 }
 
 // ------------------------------------------------------------------ items
@@ -102,23 +179,32 @@ async function addMap(spec, withModel) {
   const otype = spec.otype || (/mask/i.test(`${spec.label || ''} ${spec.path}`) ? 'mask' : 'map');
   const frames = Array.isArray(spec.series) && spec.series.length > 1 ? spec.series : null;
   const item = {
-    kind: 'map', otype, label: spec.label || spec.path.split('/').pop(), path: frames ? frames[0] : spec.path, visible: true, expanded: true,
-    full: frames ? false : V.full, zone: null, opacity: 0.45, refs: {},
+    kind: 'map', otype, label: spec.label || spec.path.split('/').pop(), path: frames ? frames[0] : spec.path, visible: spec.visible !== false,
+    expanded: true, zone: null, refs: {}, lowpass: Number(spec.lowpass) || 0, levelAuto: !Number.isFinite(spec.level),
+    opacity: Number.isFinite(spec.opacity) ? clamp(spec.opacity, 0.05, 1) : 0.45,
     color: Number.isInteger(spec.color) ? spec.color : otype === 'mask' ? MASK_COLOR : MAP_COLORS[V.mapColors++ % MAP_COLORS.length],
-    style: otype === 'mask' ? 'transparent' : (withModel || V.items.some((i) => i.kind === 'model') ? 'mesh' : 'surface'),
+    style: MAP_STYLES.includes(spec.style) ? spec.style
+      : otype === 'mask' ? 'transparent' : (withModel || V.items.some((i) => i.kind === 'model') ? 'mesh' : 'surface'),
   };
   if (frames) initSeries(item, frames, spec.labels);
-  loading(`Loading ${item.label}${frames ? ` (${frames.length} volumes)` : item.full ? ' (full resolution)' : ''}…`);
+  item.box = Number.isFinite(spec.box) ? spec.box : frames ? defaultBox(item) : V.full ? 0 : DEFAULT_BOX;
+  try { item.info = await mapInfo(V.project, item.path); } catch { item.info = null; } // detail choices: optional
+  const coarse = !frames && previewFirst(item);
+  let fine = null; // the detail asked for, downloading while the quick look is shown
+  loading(`Loading ${item.label}${frames ? ` (${frames.length} volumes)` : coarse ? ' (quick look first)' : ''}…`);
   try {
     if (frames) {
       await player.loadFirst(item);
+    } else if (coarse) {
+      const refining = `Refining ${item.label} (${fmtDims(item.info.box.map((d) => Math.floor(d / binning(item.info, item.box))))})`;
+      const quick = fetchMap(mapUrl(item, { box: COARSE_BOX, encoding: 'i8' }));
+      fine = { text: refining, bytes: fetchMap(mapUrl(item), progress(refining)) };
+      fine.bytes.catch(() => {}); // reported by the refinement
+      setVolume(item, await scene.loadVolume(await quick, item.label), { coarse: true });
     } else {
-      const r = await scene.loadVolume(mapUrl(item), item.label);
-      item.refs = { data: r.dataRef, volume: r.volumeRef, repr: null };
-      item.volume = r.volume;
-      item.stats = mapStatistics(r.volume);
+      setVolume(item, await loadMapData(item, { onProgress: progress(`Loading ${item.label}`) }));
     }
-    item.level = defaultLevel(item);
+    item.level = item.levelAuto ? defaultLevel(item) : clamp(spec.level, item.stats.min, item.stats.max);
     item.id = V.nextId++;
     V.items.push(item);
     await scene.showMap(item);
@@ -126,9 +212,14 @@ async function addMap(spec, withModel) {
     loaded();
   }
   if (frames) {
-    item.series.frames[0].version = item.series.version;
-    player.loadRest(item).then(() => log(`#${item.id}: ${item.series.loaded} of ${frames.length} volumes ready to play`));
+    item.series.frames[item.series.index].version = item.series.version;
+    item.series.rest = player.loadRest(item);
+    item.series.rest.then(() => {
+      const s = item.series;
+      if (!s.closed) log(`#${item.id}: ${s.loaded} of ${s.frames.length} volumes ready to play${s.failed ? ` (${s.failed} could not be read)` : ''}`);
+    });
   }
+  if (fine) reloadMap(item, { keep: 'fraction', text: fine.text, bytes: fine.bytes }).catch((err) => fail(err, `${item.label}: `));
   if (spec.colorBy) {
     const kind = spec.colorKind in COLOR_KINDS ? spec.colorKind : 'locres';
     const source = V.sources.find((s) => s.path === spec.colorBy)
@@ -171,10 +262,11 @@ async function applyColorBy(item, source) {
   if (source) {
     loading(`Loading ${source.label}…`);
     try {
-      const r = await scene.loadVolume(api.previewUrl(V.project, source.path), source.label);
+      const bytes = await fetchMap(api.previewUrl(V.project, source.path, DEFAULT_BOX, { encoding: 'i16' }));
+      const r = await scene.loadVolume(bytes, source.label);
       const [min, max] = source.range && source.range[1] > source.range[0] ? source.range : scene.colorRange(r.volume);
       const kind = source.kind || 'locres';
-      item.colorBy = { path: source.path, label: source.label, refs: { data: r.dataRef, volume: r.volumeRef }, min, max,
+      item.colorBy = { path: source.path, label: source.label, refs: { data: r.dataRef, volume: r.volumeRef }, volume: r.volume, min, max,
         kind, unit: source.unit || COLOR_KINDS[kind][1] };
     } finally {
       loaded();
@@ -186,14 +278,17 @@ async function applyColorBy(item, source) {
   else await scene.showMap(item);
   if (old) await scene.remove(old.refs.data);
   panel.renderItem(item);
+  slices.refresh(item);
+  refreshLegend();
   syncHash();
 }
 
 async function addModel(spec, withMap) {
   const item = {
-    kind: 'model', label: spec.label || spec.path.split('/').pop(), path: spec.path, visible: true, expanded: true, refs: {},
-    color: MODEL_COLOR, colorMode: 'chain', waters: false,
-    display: withMap || V.items.some((i) => i.kind === 'map') ? 'both' : 'cartoon',
+    kind: 'model', label: spec.label || spec.path.split('/').pop(), path: spec.path, visible: spec.visible !== false, expanded: true, refs: {},
+    color: Number.isInteger(spec.color) ? spec.color : MODEL_COLOR, colorMode: spec.colorMode || 'chain', waters: !!spec.waters,
+    display: MODEL_DISPLAYS.includes(spec.display) ? spec.display : withMap || V.items.some((i) => i.kind === 'map') ? 'both' : 'cartoon',
+    ...(Number.isFinite(spec.surfaceOpacity) ? { surfaceOpacity: clamp(spec.surfaceOpacity, 0.05, 1) } : {}),
   };
   loading(`Loading ${item.label}…`);
   try {
@@ -210,7 +305,7 @@ async function addModel(spec, withMap) {
   }
 }
 
-async function openItems(specs) {
+async function openItems(specs, { view = null } = {}) {
   const withModel = specs.some((s) => s.kind === 'model') || V.items.some((i) => i.kind === 'model');
   const withMap = specs.some((s) => s.kind !== 'model') || V.items.some((i) => i.kind === 'map');
   const wasEmpty = !V.items.length;
@@ -227,8 +322,10 @@ async function openItems(specs) {
     if (!V.active) V.active = added.find((i) => i.kind === 'map') || added[0];
     panel.render();
     playerBar.refresh();
-    syncHash();
-    if (wasEmpty) {
+    refreshLegend();
+    if (wasEmpty && view) {
+      requestAnimationFrame(() => scene.setCameraState(view)); // the view of the link
+    } else if (wasEmpty) {
       // frame the model when there is one (density fit), otherwise the maps
       const model = added.find((i) => i.kind === 'model');
       if (model) scene.focusItem(model);
@@ -236,23 +333,44 @@ async function openItems(specs) {
     } else {
       added.forEach((i) => scene.keepInView(i)); // not clipped away, the view stays where it is
     }
+    syncHash();
     log(`Opened ${added.map((i) => `#${i.id} ${i.label}`).join(', ')}`);
   }
   return added;
 }
 
-async function reloadMap(item) {
-  if (item.series) return; // frames are previews; zone and full resolution do not apply
-  loading(`Loading ${item.label}${item.zone ? ` (zone ${item.zone.radius} Å)` : item.full ? ' (full resolution)' : ''}…`);
+// Load a map again (another detail, filter or zone; bytes: a download already started). The previous one stays
+// shown until the new one is there. One reload at a time per map, the last settings asked for winning.
+function reloadMap(item, opts = {}) {
+  item.reloadNext = opts;
+  if (!item.reloading) {
+    item.reloading = (async () => {
+      try {
+        while (item.reloadNext) {
+          const next = item.reloadNext;
+          item.reloadNext = null;
+          if (!V.items.includes(item)) return; // closed meanwhile
+          await (item.series ? reloadSeriesOnce(item) : reloadMapOnce(item, next));
+        }
+      } finally {
+        item.reloading = null;
+        item.reloadNext = null;
+      }
+    })();
+  }
+  return item.reloading;
+}
+
+async function reloadMapOnce(item, { keep = 'fraction', text = '', bytes = null } = {}) {
+  const what = text || `Loading ${item.label}${item.zone ? ` (zone ${item.zone.radius} Å)` : ''}`;
+  loading(`${what}…`);
   try {
+    const r = bytes ? await scene.loadVolume(await bytes, item.label) : await loadMapData(item, { onProgress: progress(what) });
+    if (!V.items.includes(item)) { await scene.remove(r.dataRef); return; } // closed meanwhile
     const old = item.refs.data;
-    const r = await scene.loadVolume(mapUrl(item), item.label);
-    item.refs = { data: r.dataRef, volume: r.volumeRef, repr: null };
-    item.volume = r.volume;
-    if (!item.zone) {
-      item.stats = mapStatistics(r.volume);
-      item.level = clamp(item.level, item.stats.min, item.stats.max);
-    }
+    const fraction = item.stats ? item.stats.fractionAbove(item.level) : 0; // the level may have moved meanwhile
+    setVolume(item, r);
+    keepLevel(item, keep, fraction);
     await scene.showMap(item);
     await scene.remove(old);
   } finally {
@@ -260,6 +378,23 @@ async function reloadMap(item) {
   }
   panel.renderItem(item);
   if (slices.item === item) slices.show(item);
+  syncHash();
+}
+
+async function reloadSeriesOnce(item) {
+  const fraction = item.stats.fractionAbove(item.level);
+  loading(`Loading ${item.label} (${item.series.frames.length} volumes)…`);
+  try {
+    await player.reload(item, (it) => keepLevel(it, 'fraction', fraction));
+  } finally {
+    loaded();
+  }
+  panel.renderItem(item);
+  playerBar.refresh();
+  if (slices.item === item) slices.show(item);
+  syncHash();
+  const s = item.series;
+  s.rest?.then(() => { if (!s.closed) log(`#${item.id}: ${s.loaded} of ${s.frames.length} volumes ready to play`); });
 }
 
 async function closeItem(item) {
@@ -273,10 +408,11 @@ async function closeItem(item) {
   for (const m of V.items) {
     if (m.kind === 'map' && m.zone?.model === item.id) {
       m.zone = null;
-      reloadMap(m).catch((err) => fail(err));
+      reloadMap(m, { keep: 'absolute' }).catch((err) => fail(err));
     }
   }
   panel.render();
+  refreshLegend();
   syncHash();
 }
 
@@ -287,8 +423,157 @@ function goTo(model, text) {
   const loci = scene.residueLoci(model, m[1], m[2] !== undefined ? Number(m[2]) : undefined);
   if (!loci) return `/${m[1]}${m[2] !== undefined ? `:${m[2]}` : ''} not found in #${model.id}`;
   scene.centerOn(loci, { zoom: true });
+  scene.reapplySlab(400);
   scene.select(m[2] !== undefined ? loci : null);
   return '';
+}
+
+function describeDetail(item) {
+  const dims = fmtDims(item.volume.grid.cells.space.dimensions);
+  const vox = Math.abs(scene.voxelAxes(item.volume).scale[0]);
+  return `${dims} voxels of ${vox.toFixed(2)} Å${item.full ? ' (full resolution)' : ''}`;
+}
+
+// ---------------------------------------------------------- colour scale
+// Colour scale of the coloured map over the view (also drawn into saved images).
+function legendItem() {
+  if (V.active?.kind === 'map' && V.active.colorBy && V.active.visible) return V.active;
+  return V.items.find((i) => i.kind === 'map' && i.visible && i.colorBy) || null;
+}
+
+function refreshLegend() {
+  const el = $('vw-legend');
+  const item = legendItem();
+  el.hidden = !item;
+  if (!item) return;
+  const by = item.colorBy;
+  clear(el, h('div', { class: 'vw-l3-title' }, `${COLOR_KINDS[by.kind][0]} (${by.unit}) · #${item.id}`), colorLegend(by));
+}
+
+function drawLegend(ctx, width, height, scale) {
+  const item = legendItem();
+  if (!item) return;
+  const by = item.colorBy;
+  const s = Math.max(1, scale);
+  const w = 220 * s;
+  const x = width - w - 18 * s;
+  const y = height - 64 * s;
+  const light = (V.background >> 16) + ((V.background >> 8) & 255) + (V.background & 255) > 380;
+  ctx.fillStyle = light ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.6)';
+  ctx.fillRect(x - 10 * s, y - 22 * s, w + 20 * s, 74 * s);
+  const grad = ctx.createLinearGradient(x, 0, x + w, 0);
+  scene.RESOLUTION_COLORS.forEach((c, i) => grad.addColorStop(i / (scene.RESOLUTION_COLORS.length - 1), hex(c)));
+  ctx.fillStyle = grad;
+  ctx.fillRect(x, y, w, 12 * s);
+  ctx.fillStyle = light ? '#111' : '#f2f2f2';
+  ctx.font = `${12 * s}px system-ui, sans-serif`;
+  const fmt = (v) => v.toFixed(by.unit === 'σ' ? 2 : 1);
+  ctx.textAlign = 'left';
+  ctx.fillText(`${COLOR_KINDS[by.kind][0]} (${by.unit})`, x, y - 7 * s);
+  ctx.fillText(fmt(by.min), x, y + 27 * s);
+  ctx.textAlign = 'right';
+  ctx.fillText(fmt(by.max), x + w, y + 27 * s);
+  ctx.font = `${10.5 * s}px system-ui, sans-serif`;
+  const ends = by.kind === 'variability' ? ['stable', 'variable'] : ['best', 'worst'];
+  ctx.fillText(ends[1], x + w, y + 42 * s);
+  ctx.textAlign = 'left';
+  ctx.fillText(ends[0], x, y + 42 * s);
+}
+
+// ------------------------------------------------------------- recording
+const rec = { recorder: null, chunks: [], timer: 0, clock: 0, started: 0, spun: false, name: '' };
+
+function videoType() {
+  if (typeof MediaRecorder === 'undefined') return null;
+  return ['video/mp4;codecs=avc1.42E01E', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+    .find((t) => MediaRecorder.isTypeSupported(t)) || null;
+}
+
+// Record the view as a video: one pass of the series, a full turn, or until stopped.
+async function startRecording(kind = 'free', seconds) {
+  if (rec.recorder) { fail('Already recording: record stop'); return; }
+  const canvas = scene.canvas();
+  const type = videoType();
+  if (!type || !canvas.captureStream) { fail('This browser cannot record videos of the view'); return; }
+  const series = kind === 'series' ? activeSeries() : null;
+  if (kind === 'series' && !series) { fail('No volume series displayed'); return; }
+  if (series) { // a smooth video: every volume ready, the first one shown
+    const s = series.series;
+    if (s.loaded + s.failed < s.frames.length) { log('The recording starts once every volume is loaded…'); await s.rest; }
+    player.pause(series);
+    await player.go(series, 0);
+    if (rec.recorder) return;
+  }
+  const stream = canvas.captureStream(30);
+  const recorder = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 12e6 });
+  rec.chunks = [];
+  rec.name = `cryoplug_${V.project}_${(series || activeMap() || activeModel())?.label || 'view'}`.replace(/[^\w.-]+/g, '_');
+  recorder.ondataavailable = (e) => { if (e.data.size) rec.chunks.push(e.data); };
+  recorder.onstop = () => {
+    stream.getTracks().forEach((t) => t.stop());
+    const blob = new Blob(rec.chunks, { type: type.split(';')[0] });
+    const name = `${rec.name}.${type.startsWith('video/mp4') ? 'mp4' : 'webm'}`;
+    const a = h('a', { href: URL.createObjectURL(blob), download: name });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    log(`Saved ${name} (${fmtBytes(blob.size)}, ${((performance.now() - rec.started) / 1000).toFixed(1)} s)`);
+    rec.recorder = null;
+    clearInterval(rec.clock);
+    $('vw-rec').hidden = true;
+    toolbar.refresh();
+  };
+  rec.recorder = recorder;
+  rec.started = performance.now();
+  recorder.start(500);
+  $('vw-rec').hidden = false;
+  rec.clock = setInterval(() => { $('vw-rec').textContent = `● REC ${((performance.now() - rec.started) / 1000).toFixed(0)} s`; }, 250);
+  $('vw-rec').textContent = '● REC 0 s';
+  toolbar.refresh();
+  if (series) {
+    log(`Recording one pass of #${series.id} at ${series.series.fps} volumes per second…`);
+    player.play(series, null, { once: true, onEnd: () => setTimeout(stopRecording, 400) });
+  } else if (kind === 'spin') {
+    const secs = clamp(seconds || 12, 2, 120);
+    rec.spun = !V.spin;
+    scene.setSpin(true, 1 / secs);
+    log(`Recording a full turn (${secs} s)…`);
+    rec.timer = setTimeout(stopRecording, secs * 1000);
+  } else {
+    log(seconds ? `Recording for ${seconds} s…` : 'Recording… (record stop, or the Movie button, to finish)');
+    if (seconds) rec.timer = setTimeout(stopRecording, clamp(seconds, 1, 600) * 1000);
+  }
+}
+
+function stopRecording() {
+  clearTimeout(rec.timer);
+  if (!rec.recorder) return;
+  if (rec.spun || V.spin) scene.setSpin(V.spin && !rec.spun); // back to how it was (spin speed restored)
+  rec.spun = false;
+  if (rec.recorder.state !== 'inactive') rec.recorder.stop();
+}
+
+// --------------------------------------------------------- measurements
+let firstAtom = null;
+async function measure(d) {
+  const name = (x) => `/${x.chain} ${x.resn} ${x.resi}${x.ins} ${x.atom}`;
+  if (!firstAtom) {
+    firstAtom = d;
+    scene.select(d.loci);
+    log(`Distance from ${name(d)}: Shift + click the second atom`);
+    return;
+  }
+  const a = firstAtom;
+  firstAtom = null;
+  scene.select(null);
+  const dist = scene.atomDistance(a.loci, d.loci);
+  try {
+    await scene.addDistance(a.loci, d.loci);
+    log(`Distance ${name(a)} — ${name(d)}: ${dist.toFixed(2)} Å`);
+  } catch (err) {
+    fail(err, 'Distance: ');
+  }
 }
 
 // -------------------------------------------------------------- actions
@@ -306,11 +591,14 @@ const ctl = {
     panel.markActive();
     if (slices.item && item.kind === 'map') slices.show(item);
     playerBar.refresh();
+    refreshLegend();
   },
   setVisible(item, on) {
     item.visible = on;
     scene.setHidden(item.kind === 'map' ? item.refs.repr : item.refs.structure, !on);
     panel.renderItem(item);
+    refreshLegend();
+    syncHashSoon();
   },
   setColor(item, color) {
     item.color = color;
@@ -327,6 +615,7 @@ const ctl = {
   },
   setLevel(item, value) {
     item.level = clamp(value, item.stats.min, item.stats.max);
+    item.levelAuto = false;
     redraw(item);
     panel.refreshLevel(item);
     slices.refresh(item);
@@ -334,6 +623,13 @@ const ctl = {
   stepLevel(item, sigmas) {
     const unit = item.stats.sigma > 0 ? item.stats.sigma : (item.stats.max - item.stats.min) / 100;
     ctl.setLevel(item, item.level + sigmas * unit);
+  },
+  // level enclosing a protein mass (kDa); false when the box cannot hold it
+  setLevelByMass(item, kda) {
+    const level = levelForMass(item, kda, voxelVolume(item));
+    if (level === null) return false;
+    ctl.setLevel(item, level);
+    return true;
   },
   setStyle(item, style) {
     item.style = style;
@@ -353,6 +649,17 @@ const ctl = {
     item.display = display;
     redraw(item);
     panel.renderItem(item);
+  },
+  setSurfaceOpacity(item, opacity, { show = false } = {}) {
+    item.surfaceOpacity = clamp(opacity, 0.05, 1);
+    if (!scene.hasSurface(item.display)) {
+      if (!show) return;
+      ctl.setDisplay(item, 'cartoon-surface');
+      return;
+    }
+    scene.schedule(item, fail, 'alpha'); // the surface itself is not computed again
+    panel.syncSurfaceOpacity(item);
+    syncHashSoon();
   },
   setColorMode(item, mode) {
     item.colorMode = mode;
@@ -376,25 +683,42 @@ const ctl = {
     item.colorBy.max = max;
     redraw(item);
     panel.renderItem(item);
-    syncHash();
+    slices.refresh(item);
+    refreshLegend();
   },
   setWaters(item, on) {
     item.waters = on;
     redraw(item);
   },
+  // detail: largest side in voxels (0: full size, null: the default, { step: n }: binning n as ChimeraX's step)
+  setDetail(item, box) {
+    let want = box;
+    if (want && typeof want === 'object') want = item.info ? Math.ceil(Math.max(...item.info.box) / want.step) : DEFAULT_BOX;
+    if (want === null || want === undefined) want = defaultBox(item);
+    const same = item.info && binning(item.info, want) === binning(item.info, item.box) && !item.coarse;
+    item.box = want;
+    if (same) { panel.renderItem(item); syncHash(); return; }
+    reloadMap(item, { keep: 'fraction' }).then(() => log(`#${item.id}: ${describeDetail(item)}`)).catch((err) => fail(err));
+  },
   setFullRes(item, on) {
-    if (item.series) { fail('The volumes of a series are shown as previews (full resolution: extract one volume as a map)'); return; }
-    if (item.full === on) return;
-    item.full = on;
-    reloadMap(item).then(() => log(`#${item.id} ${on ? 'at full resolution' : 'as a binned preview'}`)).catch((err) => fail(err));
+    if (item.series) { fail('Pick a finer detail in the card of the series (full resolution: extract one volume as a map)'); return; }
+    if (!!item.full === on) return;
+    ctl.setDetail(item, on ? 0 : null);
+  },
+  setLowpass(item, resolution) {
+    if ((item.lowpass || 0) === resolution) return;
+    item.lowpass = resolution;
+    reloadMap(item, { keep: 'fraction' })
+      .then(() => log(resolution ? `#${item.id} low-pass filtered to ${resolution} Å` : `#${item.id}: no filter`))
+      .catch((err) => fail(err));
   },
   setZone(item, zone) {
     if (item.series) { fail('Zones are not available for a volume series'); return; }
     item.zone = zone;
-    reloadMap(item).then(() => log(zone ? `Zone: #${item.id} within ${zone.radius} Å of #${zone.model}` : `Zone off for #${item.id}`))
+    reloadMap(item, { keep: 'absolute' }).then(() => log(zone ? `Zone: #${item.id} within ${zone.radius} Å of #${zone.model}` : `Zone off for #${item.id}`))
       .catch((err) => { item.zone = null; fail(err, 'Zone: '); panel.renderItem(item); });
   },
-  focus: (item) => scene.focusItem(item),
+  focus: (item) => { scene.focusItem(item); scene.reapplySlab(400); },
   goTo(model, text) {
     const error = goTo(model, text);
     if (error) fail(error);
@@ -413,7 +737,14 @@ const ctl = {
     $('vw-stage').classList.toggle('light', lum > 140);
     toolbar.refresh();
   },
-  setSlab(percent) { V.slab = percent; scene.setSlab(percent); toolbar.refresh(); },
+  // slab: null (off), a percentage of the thickness of what is shown, or { angstrom }
+  setSlab(value) {
+    V.slab = value;
+    scene.setSlab(value === null ? null : slabThickness(value), V.items);
+    toolbar.refresh();
+    syncHashSoon();
+  },
+  slabThickness: () => (V.slab === null ? null : slabThickness(V.slab)),
   setSpin(on) { V.spin = on; scene.setSpin(on); toolbar.refresh(); },
   setProjection(mode) { V.ortho = mode === 'orthographic'; scene.setProjection(mode); toolbar.refresh(); },
   setSoftLighting(on) {
@@ -421,9 +752,28 @@ const ctl = {
     V.soft = on;
     toolbar.refresh();
   },
-  showSlices(item) { slices.show(item); toolbar.refresh(); },
+  // enlarge: true for the large slices beside the view, false for the small ones, undefined as they were
+  showSlices(item, { enlarge } = {}) {
+    slices.show(item);
+    if (enlarge === true) slices.enlarge();
+    else if (enlarge === false) slices.setSplit(false);
+    toolbar.refresh();
+  },
   hideSlices,
-  saveImage: (name, opts) => scene.saveImage(name, opts),
+  saveImage: (name, opts = {}) => scene.saveImage(name, { ...opts, overlay: legendItem() ? drawLegend : null }),
+  record: (kind, seconds) => startRecording(kind, seconds),
+  stopRecording,
+  clearDistances: () => scene.clearDistances(),
+  async copyLink() {
+    syncHash();
+    try {
+      await navigator.clipboard.writeText(location.href);
+      toast('Link to this view copied', 'success', 3000);
+      return 'Link to this view copied to the clipboard';
+    } catch {
+      return `Link to this view: ${location.href}`;
+    }
+  },
   // volume series
   play(item, fps) { player.play(item, fps); },
   pause(item) { player.pause(item); },
@@ -439,6 +789,7 @@ const fmtScale = (v, unit) => v.toFixed(unit === 'σ' ? 2 : 1);
 // A frame of a series is now displayed (or playback started or stopped).
 function frameShown(item) {
   scene.keepInView(item);
+  if (statusText.startsWith(`#${item.id}  ${item.label}`)) { statusText = mapStatus(item); setStatus(); } // the volume under the pointer changed
   playerBar.refresh();
   panel.refreshLevel(item);
   if (slices.item === item) slices.refresh(item);
@@ -449,6 +800,11 @@ function hideSlices() {
   toolbar.refresh();
 }
 
+function toggleSlices() {
+  if (slices.item) hideSlices();
+  else { const m = activeMap(); if (m) ctl.showSlices(m); else fail('No map displayed'); }
+}
+
 // ------------------------------------------------------------- toolbar
 function buildToolbar() {
   const root = $('vw-tools');
@@ -457,20 +813,30 @@ function buildToolbar() {
   const t = {
     reset: tool('Reset', 'refresh', 'Reset the view (R)', () => resetView()),
     spin: tool('Spin', 'rotate', 'Rotate continuously (S)', () => ctl.setSpin(!V.spin)),
-    slab: tool('Slab', 'layers', 'Clip the scene to a slab around the centre', () => ctl.setSlab(V.slab === null ? 30 : null)),
+    slab: tool('Slab', 'layers', 'Keep only a slab around the centre (the cut density is drawn filled)', () => {
+      ctl.setSlab(V.slab === null ? 30 : null);
+      if (V.slab !== null) log(`Slab: 30 % of the thickness shown (${ctl.slabThickness().toFixed(0)} Å) — slider beside the button, or slab 10A`);
+    }),
     ortho: tool('Ortho', 'cube', 'Orthographic projection', () => ctl.setProjection(V.ortho ? 'perspective' : 'orthographic')),
     soft: tool('Soft light', 'sun', 'Ambient occlusion (soft lighting)', () => ctl.setSoftLighting(!V.soft)),
-    slices: tool('Slices', 'grid', 'Orthogonal 2D slices of the active map', () => {
-      if (slices.item) hideSlices();
-      else { const m = activeMap(); if (m) ctl.showSlices(m); else fail('No map displayed'); }
+    slices: tool('Slices', 'grid', 'Orthogonal 2D slices of the active map (L)', () => toggleSlices()),
+    image: tool('Image', 'camera', 'Save a PNG image of the view (2× the window size, with the colour scale)', async () => {
+      try { const s = await ctl.saveImage('cryoplug.png'); log(`Saved cryoplug.png (${s.width}×${s.height})`); } catch (err) { fail(err); }
     }),
-    image: tool('Image', 'camera', 'Save a PNG image of the view (2× the window size)', async () => {
-      try { const s = await scene.saveImage('cryoplug.png'); log(`Saved cryoplug.png (${s.width}×${s.height})`); } catch (err) { fail(err); }
+    movie: tool('Movie', 'record', 'Record a video of the view', (e) => {
+      if (rec.recorder) { stopRecording(); return; }
+      const series = activeSeries();
+      popupMenu(e.currentTarget, [
+        { label: series ? `Play #${series.id} once and record it` : 'Record a series (none open)', disabled: !series, ic: 'play', action: () => startRecording('series') },
+        { label: 'Record a full turn (12 s)', ic: 'rotate', action: () => startRecording('spin', 12) },
+        { label: 'Record until stopped', ic: 'record', action: () => startRecording('free') },
+      ]);
     }),
+    link: tool('Link', 'link', 'Copy a link to this view (items, settings, camera)', async () => { log(await ctl.copyLink()); }),
     help: tool('Help', 'help', 'Mouse, keys and commands (?)', () => helpDialog()),
   };
   const slab = h('input', {
-    type: 'range', class: 'vw-slab', min: 3, max: 99, step: 1, value: 30, hidden: true, 'aria-label': 'Slab thickness (% of the scene)',
+    type: 'range', class: 'vw-slab', min: 2, max: 99, step: 1, value: 30, hidden: true, 'aria-label': 'Slab thickness (% of the thickness shown)',
     oninput: (e) => ctl.setSlab(Number(e.target.value)),
   });
   const bgs = h('div', { class: 'vw-bgs', role: 'group', 'aria-label': 'Background' }, BACKGROUNDS.map(([name, color]) => h('button', {
@@ -478,22 +844,43 @@ function buildToolbar() {
     dataset: { color: String(color) }, onclick: () => ctl.setBackground(color),
   })));
   clear(root, t.reset, t.spin, t.slab, slab, t.ortho, t.soft, h('span', { class: 'vw-sep' }), bgs, h('span', { class: 'vw-sep' }),
-    t.slices, t.image, t.help);
+    t.slices, t.image, t.movie, t.link, t.help);
   return {
     refresh() {
       t.spin.classList.toggle('on', V.spin);
       t.slab.classList.toggle('on', V.slab !== null);
       slab.hidden = V.slab === null;
-      if (V.slab !== null && document.activeElement !== slab) slab.value = String(V.slab);
+      if (typeof V.slab === 'number' && document.activeElement !== slab) slab.value = String(V.slab);
+      slab.title = V.slab === null ? '' : `Slab: ${ctl.slabThickness().toFixed(0)} Å`;
       t.ortho.classList.toggle('on', V.ortho);
       t.soft.classList.toggle('on', V.soft);
       t.slices.classList.toggle('on', !!slices.item);
+      t.movie.classList.toggle('rec', !!rec.recorder);
+      t.movie.querySelector('.lbl').textContent = rec.recorder ? 'Stop' : 'Movie';
+      t.movie.title = rec.recorder ? 'Stop recording and save the video' : 'Record a video of the view';
       bgs.querySelectorAll('.vw-bg').forEach((b) => b.classList.toggle('on', Number(b.dataset.color) === V.background));
     },
   };
 }
 
 // ---------------------------------------------------------------- player
+// Track of the slider: one block per volume, bright once loaded (red when it could not be read), aligned with the
+// positions of the thumb (14 px wide).
+function bufferGradient(s) {
+  const n = s.frames.length;
+  const colour = (f) => (f.volume ? 'rgba(134, 182, 239, 0.9)' : f.state === 'failed' ? 'rgba(229, 96, 80, 0.9)' : 'rgba(255, 255, 255, 0.2)');
+  const at = (t) => `calc(7px + (100% - 14px) * ${t.toFixed(4)})`;
+  const stops = [];
+  let start = 0;
+  for (let i = 1; i <= n; i++) {
+    if (i < n && colour(s.frames[i]) === colour(s.frames[start])) continue;
+    const c = colour(s.frames[start]);
+    stops.push(`${c} ${start === 0 ? '0%' : at((start - 0.5) / (n - 1))}`, `${c} ${i === n ? '100%' : at((i - 0.5) / (n - 1))}`);
+    start = i;
+  }
+  return `linear-gradient(to right, ${stops.join(', ')})`;
+}
+
 // Transport bar over the 3D view for the series being played (the active one, or the first).
 function buildPlayerBar() {
   const root = $('vw-player');
@@ -502,41 +889,60 @@ function buildPlayerBar() {
   const play = control('play', 'Play (space)', () => { const it = target(); if (it) ctl.togglePlay(it); });
   const prev = control('skip-back', 'Previous volume (,)', () => { const it = target(); if (it) ctl.stepFrame(it, -1); });
   const next = control('skip-fwd', 'Next volume (.)', () => { const it = target(); if (it) ctl.stepFrame(it, 1); });
-  const slider = h('input', {
-    type: 'range', class: 'vw-pslider', min: 1, max: 2, step: 1, value: 1, 'aria-label': 'Volume of the series',
-    oninput: (e) => { const it = target(); if (it) { player.pause(it); player.go(it, Number(e.target.value) - 1); } },
+  // While the thumb is held, the bar does not move it: the volume follows the thumb, not the other way round.
+  let dragging = false;
+  const slider = h('input', { type: 'range', class: 'vw-pslider', min: 1, max: 2, step: 1, value: 1, 'aria-label': 'Volume of the series' });
+  slider.addEventListener('pointerdown', () => { dragging = true; const it = target(); if (it) player.pause(it); });
+  const release = () => { if (dragging) { dragging = false; bar.refresh(); } };
+  window.addEventListener('pointerup', release);
+  window.addEventListener('pointercancel', release);
+  slider.addEventListener('change', release);
+  slider.addEventListener('input', () => {
+    const it = target();
+    if (!it) return;
+    player.pause(it);
+    player.go(it, Number(slider.value) - 1);
+    bar.refresh();
   });
   const which = h('span', { class: 'vw-pid' });
   const label = h('span', { class: 'vw-plabel', 'aria-live': 'off' });
   const speed = h('select', { class: 'vw-pspeed', 'aria-label': 'Playback speed', title: 'Volumes per second',
-    onchange: (e) => { const it = target(); if (it) ctl.setSpeed(it, Number(e.target.value)); } },
-  SPEEDS.map((f) => h('option', { value: f }, `${f}/s`)));
+    onchange: (e) => { const it = target(); if (it) ctl.setSpeed(it, Number(e.target.value)); } });
   const mode = h('button', { type: 'button', class: 'vw-pmode', title: 'Loop, or play back and forth',
     onclick: () => { const it = target(); if (it) ctl.setPlayMode(it, it.series.mode === 'loop' ? 'bounce' : 'loop'); } });
   clear(root, which, prev, play, next, slider, label, speed, mode);
-  return {
+  const bar = {
     refresh() {
       const it = target();
       root.hidden = !it;
       if (!it) return;
       const s = it.series;
       const n = s.frames.length;
-      const frame = s.frames[s.index];
+      const shown = s.want; // the volume asked for: shown, or being prepared
+      const frame = s.frames[shown];
       which.textContent = `#${it.id}`;
       which.title = it.label;
-      clear(play, icon(s.playing ? 'pause' : 'play'));
-      play.title = s.playing ? 'Pause (space)' : 'Play (space)';
-      play.setAttribute('aria-label', play.title);
-      play.classList.toggle('on', s.playing);
+      if (play.dataset.state !== String(s.playing)) {
+        play.dataset.state = String(s.playing);
+        clear(play, icon(s.playing ? 'pause' : 'play'));
+        play.title = s.playing ? 'Pause (space)' : 'Play (space)';
+        play.setAttribute('aria-label', play.title);
+        play.classList.toggle('on', s.playing);
+      }
       slider.max = String(n);
-      if (document.activeElement !== slider) slider.value = String(s.index + 1);
-      slider.setAttribute('aria-valuetext', `${s.index + 1} of ${n}: ${frame.label}`);
-      label.textContent = `${s.index + 1}/${n} · ${frame.label}${s.loaded < n ? ` · loading ${s.loaded}/${n}` : ''}`;
+      if (!dragging) slider.value = String(shown + 1);
+      slider.style.setProperty('--buffer', bufferGradient(s));
+      slider.setAttribute('aria-valuetext', `${shown + 1} of ${n}: ${frame.label}`);
+      const waiting = shown !== s.index && !frame.volume;
+      label.textContent = `${shown + 1}/${n} · ${frame.label}${waiting ? ' · loading…' : ''}${s.loaded < n ? ` · ${s.loaded}/${n} loaded` : ''}`;
       label.title = frame.path;
+      const speeds = SPEEDS.includes(s.fps) ? SPEEDS : [...SPEEDS, s.fps].sort((a, b) => a - b);
+      if (speed.options.length !== speeds.length) clear(speed, speeds.map((f) => h('option', { value: f }, `${f}/s`)));
       speed.value = String(s.fps);
       mode.textContent = s.mode === 'loop' ? 'Loop' : 'Back & forth';
     },
   };
+  return bar;
 }
 
 // --------------------------------------------------------------- dialogs
@@ -589,47 +995,47 @@ function helpDialog() {
     body: h('div', { class: 'vw-help' },
       h('h4', {}, 'Mouse'),
       table([['Left drag', 'Rotate'], ['Right drag, or Ctrl + left drag', 'Move'], ['Ctrl + Shift + left drag', 'Roll around the viewing axis'],
-        ['Wheel', 'Zoom'], ['Shift + wheel', 'Move the clipping planes'], ['Click an atom', 'Centre on its residue (Coot-like)'],
-        ['Histogram', 'Drag the line to set the contour level of a map']]),
+        ['Wheel', 'Zoom'], ['Shift + wheel', 'Move the clipping planes (the cut density is drawn filled)'], ['Click an atom', 'Centre on its residue (Coot-like)'],
+        ['Shift + click two atoms', 'Measure their distance (distance clear removes the measurements)'],
+        ['Histogram', 'Drag the line to set the contour level of a map'],
+        ['Slices', 'Click: move the crosshair · wheel: next slice (large slices: zoom; Shift + wheel: next slice) · drag: pan · double-click: enlarge or fit']]),
       h('h4', {}, 'Keys'),
       table([['+  /  −', 'Raise / lower the level of the active map by 0.1 σ (Shift: 0.5 σ)'], ['M', 'Next map style (surface, mesh, transparent)'],
         ['R', 'Reset the view'], ['S', 'Spin on / off'], ['L', 'Slices on / off'], ['Space', 'Play / pause a volume series'],
-        [',  /  .', 'Previous / next volume of the series'], [':', 'Go to the command line'], ['Esc', 'Clear the selection'],
-        ['↑ / ↓ in the command line', 'Previous / next command']]),
+        [',  /  .', 'Previous / next volume of the series'], ['↑ / ↓ on a slice', 'Next / previous slice (Page Up / Down: 5 slices)'],
+        [':', 'Go to the command line'], ['Esc', 'Clear the selection'], ['↑ / ↓ in the command line', 'Previous / next command']]),
       h('h4', {}, 'Commands'),
       table(COMMAND_HELP),
-      h('p', { class: 'muted small' }, 'Maps open as binned previews (at most 200 voxels per side) for speed; “Load at full resolution” in a map’s menu, or fullres #1, loads the original file. '
-        + 'The volumes of a series (cryoDRGN clusters, trajectories, 3D variability frames) are previews of at most 128 voxels per side, all loaded once so that they play smoothly.')),
+      h('p', { class: 'muted small' }, 'Maps arrive as binned copies (at most 200 voxels per side, half-size 16-bit transfers) for speed: “Detail” in a map’s card picks '
+        + 'a finer grid, up to the original one, and “Filter” shows it at a lower resolution. The volumes of a series are binned more (80–128 voxels) and all '
+        + 'loaded once, the one asked for first, so that they play smoothly. The address of the page keeps what is open, the settings and the camera.')),
   });
 }
 
 // ------------------------------------------------------------- keyboard
 function bindKeys() {
   document.addEventListener('keydown', (e) => {
-    if (e.target.closest('input, textarea, select, [contenteditable]') || e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key;
+    // the series slider keeps the player keys (its own arrows move it)
+    const onSlider = e.target.classList?.contains('vw-pslider') && [' ', ',', '.', '<', '>'].includes(k);
+    if ((!onSlider && e.target.closest('input, textarea, select, [contenteditable]')) || e.ctrlKey || e.metaKey || e.altKey) return;
     if (document.querySelector('.modal-backdrop')) return;
     const map = activeMap();
-    const k = e.key;
     if ((k === '+' || k === '=') && map) ctl.stepLevel(map, e.shiftKey ? 0.5 : 0.1);
     else if ((k === '-' || k === '_') && map) ctl.stepLevel(map, e.shiftKey ? -0.5 : -0.1);
     else if (k === 'r' || k === 'R') resetView();
     else if (k === 's' || k === 'S') ctl.setSpin(!V.spin);
     else if ((k === 'm' || k === 'M') && map) ctl.setStyle(map, { surface: 'mesh', mesh: 'transparent', transparent: 'surface' }[map.style]);
-    else if (k === 'l' || k === 'L') toolbarClickSlices();
+    else if (k === 'l' || k === 'L') toggleSlices();
     else if (k === ' ' && activeSeries()) ctl.togglePlay(activeSeries());
     else if ((k === ',' || k === '<') && activeSeries()) ctl.stepFrame(activeSeries(), -1);
     else if ((k === '.' || k === '>') && activeSeries()) ctl.stepFrame(activeSeries(), 1);
     else if (k === ':') { e.preventDefault(); $('vw-cmdline').focus(); }
     else if (k === '?') helpDialog();
-    else if (k === 'Escape') scene.select(null);
+    else if (k === 'Escape') { firstAtom = null; scene.select(null); }
     else return;
     e.preventDefault();
   });
-}
-
-function toolbarClickSlices() {
-  if (slices.item) hideSlices();
-  else { const m = activeMap(); if (m) ctl.showSlices(m); }
 }
 
 function bindCommandLine() {
@@ -662,24 +1068,31 @@ function bindCommandLine() {
 }
 
 // -------------------------------------------------------------- hover/click
+let statusText = HINT;
+function setStatus(text) { $('vw-status').textContent = text || statusText; }
+function mapStatus(item) {
+  const frame = item.series ? `  ·  ${item.series.frames[item.series.index].label}` : '';
+  return `#${item.id}  ${item.label}${frame}  ·  level ${fmtLevel(item.level)}  (${toSigma(item.stats, item.level).toFixed(2)} σ)`;
+}
+
 function bindPointer() {
-  const status = $('vw-status');
-  status.textContent = HINT;
+  setStatus(HINT);
   scene.onHover((d) => {
-    if (!d) { status.textContent = HINT; return; }
+    if (!d) { statusText = HINT; setStatus(); return; }
     if (d.kind === 'atom') {
       const item = V.items.find((i) => i.kind === 'model' && i.structure === d.root);
-      status.textContent = d.chain === undefined ? `${item ? `#${item.id} ` : ''}atom`
+      statusText = d.chain === undefined ? `${item ? `#${item.id} ` : ''}atom`
         : `${item ? `#${item.id}  ` : ''}/${d.chain} ${d.resn} ${d.resi}${d.ins}  ${d.atom}  ·  ${d.element}  ·  B ${Number(d.b).toFixed(1)}`;
     } else {
       const item = V.items.find((i) => i.kind === 'map' && i.volume === d.volume);
-      const frame = item?.series ? `  ·  ${item.series.frames[item.series.index].label}` : '';
-      status.textContent = item ? `#${item.id}  ${item.label}${frame}  ·  level ${fmtLevel(item.level)}  (${toSigma(item.stats, item.level).toFixed(2)} σ)` : 'Map';
+      statusText = item ? mapStatus(item) : 'Map';
     }
+    setStatus();
   });
   scene.onClick((d, e) => {
     if (e.button !== undefined && e.button !== 0 && e.button !== 1) return;
     if (d?.kind !== 'atom' || d.chain === undefined) return;
+    if (e.modifiers?.shift) { measure(d); return; }
     const residue = scene.wholeResidue(d.loci);
     scene.centerOn(residue);
     scene.select(residue);
@@ -740,10 +1153,16 @@ async function main() {
       h('span', {}, 'WebGL may be disabled in this browser (check hardware acceleration).'));
     return;
   }
-  slices = createSlices($('vw-slices'));
+  let layoutTimer = 0;
+  slices = createSlices($('vw-slices'), {
+    stage: $('vw-stage'),
+    onLayout: () => { cancelAnimationFrame(layoutTimer); layoutTimer = requestAnimationFrame(() => scene.resize()); toolbar?.refresh(); },
+    onHover: (text) => setStatus(text),
+    onClose: () => hideSlices(),
+  });
   toolbar = buildToolbar();
   player = createSeriesPlayer({
-    url: (path, n) => api.previewUrl(V.project, path, seriesBox(n)),
+    fetch: (item, frame) => fetchMap(mapUrl(item, { path: frame.path })),
     onFrame: frameShown,
     onLoad: (item) => { playerBar.refresh(); panel.refreshLevel(item); },
     onError: (err, what = '') => fail(err, what),
@@ -759,14 +1178,18 @@ async function main() {
   let resizeTimer = 0;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => panel.render(), 200); // histograms are drawn at the panel's width
+    resizeTimer = setTimeout(() => { panel.render(); slices.redraw(); }, 200); // histograms are drawn at the panel's width
   });
   log('Type help for the commands, ? for mouse and keys.', 'echo');
   try { collectColorSources(await api.jobs(V.project)); } catch { /* colouring sources are optional */ }
   panel.render();
-  await openItems(spec.items || []);
+  await openItems(spec.items || [], { view: spec.view });
   if (!V.items.length) panel.render();
+  if (V.items.length && (typeof spec.slab === 'number' || spec.slab?.angstrom > 0)) setTimeout(() => ctl.setSlab(spec.slab), 300);
   playerBar.refresh();
+  V.ready = true;
+  syncHash();
+  scene.onCamera(syncHashSoon);
 }
 
 main().catch((err) => showError(err));

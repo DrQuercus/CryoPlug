@@ -1,7 +1,6 @@
 """HTTP API and static web interface."""
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import socket
@@ -24,6 +23,7 @@ from cryoplug.monitor import Monitor, detect_gpus
 from cryoplug.scheduler import Scheduler
 from cryoplug.server.accounts import author, can_access, can_manage, current_user, install as install_accounts, is_admin, require_admin
 from cryoplug.server.auth import install as install_auth, is_loopback
+from cryoplug.server.mapview import MapViews, map_header, map_response
 from cryoplug.users import UserError, Users, path_allowed
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -45,6 +45,7 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     app.state.manager = manager
     app.state.scheduler = scheduler
     monitor = Monitor(config, manager)
+    mapviews = MapViews(manager.project_dir)
     manager.monitor = monitor
     app.state.monitor = monitor
 
@@ -435,38 +436,27 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
                             content_disposition_type="attachment" if download else "inline")
 
     @app.get("/api/projects/{puid}/preview")
-    def map_preview(puid: str, path: str, max_box: int = 200) -> FileResponse:
-        """Binned copy of a map for the browser viewer (cached)."""
-        from cryoplug.mrc import MapVolume, bin_map
-        p = manager.safe_path(puid, path)
-        factor = _view_factor(p, max_box)
-        if factor <= 1:
-            return FileResponse(p, media_type="application/octet-stream")
-        out = _cache_file(puid, f"{p.resolve()}:{p.stat().st_mtime}:{factor}")
-        if not out.exists():
-            bin_map(MapVolume.read(p), factor).write(out)
-        return FileResponse(out, media_type="application/octet-stream")
+    def map_preview(request: Request, puid: str, path: str, max_box: int = 200, enc: str = "f32", lowpass: float = 0.0) -> Response:
+        """Copy of a map for the browser viewer (cached): binned to at most ``max_box`` voxels per side (0: full size),
+        low-pass filtered to ``lowpass`` A if asked, as float32 (f32), 16-bit (i16, half the transfer, decoded by the
+        viewer) or 8-bit (i8, read as such by Mol*: a quick first look)."""
+        return map_response(request, mapviews.preview(puid, manager.safe_path(puid, path), max_box, enc, lowpass))
 
     @app.get("/api/projects/{puid}/zone")
-    def map_zone(puid: str, map: str, model: str, radius: float = 3.0, max_box: int = 200) -> FileResponse:
-        """The map (binned like the preview; max_box=0 for full size) restricted to within ``radius``
+    def map_zone(request: Request, puid: str, map: str, model: str, radius: float = 3.0, max_box: int = 200,
+                 enc: str = "f32", lowpass: float = 0.0) -> Response:
+        """The map (binned and encoded like the preview; max_box=0 for full size) restricted to within ``radius``
         of the model's atoms, as ChimeraX `volume zone` (cached)."""
-        from cryoplug.modelio import atom_arrays, read_structure
-        from cryoplug.mrc import MapVolume, bin_map, zone_map
-        if not 0.5 <= radius <= 30:
-            raise HTTPException(400, "radius must be between 0.5 and 30 A")
         mp, md = manager.safe_path(puid, map), manager.safe_path(puid, model)
-        factor = _view_factor(mp, max_box) if max_box > 0 else 1
-        out = _cache_file(puid, f"zone:{mp.resolve()}:{mp.stat().st_mtime}:{md.resolve()}:{md.stat().st_mtime}:{radius:.2f}:{factor}")
-        if not out.exists():
-            try:
-                xyz = atom_arrays(read_structure(md))["xyz"]
-            except Exception as exc:  # noqa: BLE001 - unreadable model
-                raise HTTPException(400, f"Cannot read the model: {exc}") from None
-            if not len(xyz):
-                raise HTTPException(400, "The model has no atoms")
-            zone_map(bin_map(MapVolume.read(mp), factor), xyz, radius).write(out)
-        return FileResponse(out, media_type="application/octet-stream")
+        return map_response(request, mapviews.zone(puid, mp, md, radius, max_box, enc, lowpass))
+
+    @app.get("/api/projects/{puid}/map-info")
+    def map_info_endpoint(puid: str, path: str) -> dict[str, Any]:
+        """Header of a map (box, voxel size, origin, file size): the viewer's detail choices."""
+        try:
+            return map_header(manager.safe_path(puid, path))
+        except (OSError, ValueError) as exc:
+            raise HTTPException(400, f"Not a readable map: {exc}") from None
 
     @app.get("/api/projects/{puid}/jobs/{juid}/particle-images")
     def particle_images(puid: str, juid: str, ids: str, output: str = "latent", size: int = 96, per_row: int = 8) -> Response:
@@ -488,15 +478,6 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
         except (ValueError, OSError, IndexError, KeyError) as exc:
             raise HTTPException(400, f"Particle images not available: {exc}") from None
         return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
-
-    def _view_factor(p: Path, max_box: int) -> int:
-        from cryoplug.mrc import MapVolume, preview_factor
-        return preview_factor(MapVolume.read(p, header_only=True).shape_xyz, max(64, min(max_box, 512)))
-
-    def _cache_file(puid: str, key: str) -> Path:
-        cache = manager.project_dir(puid) / ".cryoplug_cache"
-        cache.mkdir(exist_ok=True)
-        return cache / f"{hashlib.sha1(key.encode()).hexdigest()[:16]}.mrc"
 
     # ----------------------------------------------------------- workflows
     @app.post("/api/projects/{puid}/workflows/{wid}")

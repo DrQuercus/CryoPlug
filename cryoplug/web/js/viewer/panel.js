@@ -1,8 +1,9 @@
 // Models panel (ChimeraX-like): one card per map or model with visibility, colour and display settings.
 // Maps get ChimeraX's Volume Viewer histogram: drag the line to set the contour level (absolute or σ).
 import { clear, h, icon, popupMenu } from '../ui.js';
-import { RESOLUTION_COLORS } from './scene.js';
-import { fmtLevel, fromSigma, toSigma } from './stats.js';
+import { binning, detailChoices, fmtBytes, fmtDims, lowpassChoices, MAP_BOXES, SERIES_BOXES } from './mapdata.js';
+import { hasSurface, RESOLUTION_COLORS, voxelAxes } from './scene.js';
+import { enclosed, fmtLevel, fromSigma, toSigma } from './stats.js';
 
 export const hex = (c) => `#${(c >>> 0).toString(16).padStart(6, '0').slice(-6)}`;
 export const fromHex = (s) => parseInt(s.replace('#', ''), 16);
@@ -12,9 +13,14 @@ export const COLOR_KINDS = { locres: ['Local resolution', 'Å'], variability: ['
 const fmtScale = (v, unit) => v.toFixed(unit === 'σ' ? 2 : 1);
 
 const MAP_STYLES = [['surface', 'Surface'], ['mesh', 'Mesh'], ['transparent', 'Transparent']];
-const MODEL_STYLES = [['cartoon', 'Cartoon'], ['both', 'Cartoon + side chains'], ['sticks', 'Sticks']];
+const MODEL_STYLES = [['cartoon', 'Cartoon'], ['both', 'Cartoon + side chains'], ['sticks', 'Sticks'], ['spheres', 'Spheres'],
+  ['surface', 'Surface'], ['cartoon-surface', 'Cartoon + surface']];
 const MODEL_COLORS = [['chain', 'By chain'], ['ss', 'Secondary structure'], ['element', 'By element'],
-  ['bfactor', 'B-factor'], ['rainbow', 'Rainbow (N→C)'], ['uniform', 'Single colour']];
+  ['bfactor', 'B-factor'], ['rainbow', 'Rainbow (N→C)'], ['hydrophobicity', 'Hydrophobicity'], ['uniform', 'Single colour']];
+
+export const voxelSize = (item) => Math.abs(voxelAxes(item.volume).scale[0]);
+const voxelVolume = (item) => voxelAxes(item.volume).scale.reduce((a, b) => a * Math.abs(b), 1);
+const fmtVolume = (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(2)} M` : `${Math.round(v / 1e3)} k`);
 
 function seg(options, current, onPick, label) {
   return h('div', { class: 'seg', role: 'group', 'aria-label': label }, options.map(([value, text]) => h('button', {
@@ -28,7 +34,7 @@ function row(label, ...children) {
 }
 
 // Colour bar of the scale with its end values: best resolution or least variable (blue) to worst or most variable (red).
-function legend(by) {
+export function colorLegend(by) {
   const stops = RESOLUTION_COLORS.map((c, i) => `${hex(c)} ${Math.round((100 * i) / (RESOLUTION_COLORS.length - 1))}%`).join(', ');
   const u = by.unit || 'Å';
   const [lo, mid, hi] = [by.min, (by.min + by.max) / 2, by.max].map((v) => fmtScale(v, u));
@@ -127,7 +133,10 @@ export function createPanel(root, ctl) {
     } else if (item.kind === 'map') {
       items.push({ label: item.full ? 'Use the binned preview' : 'Load at full resolution', action: () => ctl.setFullRes(item, !item.full) });
     }
-    if (item.kind === 'map') items.push({ label: 'Show slices', action: () => ctl.showSlices(item) });
+    if (item.kind === 'map') {
+      items.push({ label: 'Show slices', action: () => ctl.showSlices(item) });
+      items.push({ label: 'Large slices beside the 3D view', action: () => ctl.showSlices(item, { enlarge: true }) });
+    }
     items.push({ label: 'Close', action: () => ctl.close(item) });
     return items;
   }
@@ -141,7 +150,12 @@ export function createPanel(root, ctl) {
       onchange: (e) => { const v = Number(e.target.value); if (Number.isFinite(v)) ctl.setLevel(item, v); } });
     const sig = h('input', { type: 'number', step: '0.1', 'aria-label': 'Contour level in σ',
       onchange: (e) => { const v = Number(e.target.value); if (Number.isFinite(v)) ctl.setLevel(item, fromSigma(item.stats, v)); } });
-    const enclosed = h('div', { class: 'vw-meta' });
+    const meta = h('div', { class: 'vw-meta' });
+    const mass = h('input', { type: 'number', min: 0, step: 'any', style: { width: '74px' },
+      'aria-label': 'Protein mass enclosed by the surface (kDa): type one to set the level',
+      title: 'Mass of protein the surface encloses (1.21 Å³ per dalton); type a mass to set the level',
+      onchange: (e) => { const v = Number(e.target.value); if (v > 0) ctl.setLevelByMass(item, v); } });
+    const volume = h('span', { class: 'unit' });
     const scale = [h('span'), h('span'), h('span')];
     const frameInfo = item.series ? h('span', { class: 'vw-frame' }) : null;
     const playBtn = item.series ? h('button', { type: 'button', class: 'icon-btn', onclick: () => ctl.togglePlay(item) }) : null;
@@ -168,8 +182,13 @@ export function createPanel(root, ctl) {
           playBtn.setAttribute('aria-label', what);
         }
       }
-      enclosed.textContent = `${(st.fractionAbove(item.level) * 100).toFixed(2)} % of the voxels above the level · `
-        + `${item.volume.grid.cells.space.dimensions.join('×')} voxels${item.full ? '' : ' (preview)'}${item.zone ? ` · zone ${item.zone.radius} Å around #${item.zone.model}` : ''}`
+      const vox = voxelSize(item);
+      const inside = enclosed(item, voxelVolume(item));
+      if (document.activeElement !== mass) mass.value = inside.kda >= 100 ? inside.kda.toFixed(0) : inside.kda.toPrecision(3);
+      volume.textContent = `kDa · ${fmtVolume(inside.volume)} Å³`;
+      meta.textContent = `${(st.fractionAbove(item.level) * 100).toFixed(2)} % of the voxels above the level · `
+        + `${fmtDims(item.volume.grid.cells.space.dimensions)} voxels of ${vox.toFixed(2)} Å (details down to ${(2 * vox).toFixed(1)} Å)`
+        + `${item.lowpass ? ` · low-pass ${item.lowpass} Å` : ''}${item.zone ? ` · zone ${item.zone.radius} Å around #${item.zone.model}` : ''}`
         + `${s ? ' · same level for every volume of the series' : ''}`;
       if (hist.isConnected) drawHistogram(hist, item);
     };
@@ -193,6 +212,7 @@ export function createPanel(root, ctl) {
       hist,
       h('div', { class: 'vw-hist-scale' }, scale),
       row('Level', abs, sig, h('span', { class: 'unit' }, 'σ')),
+      row('Encloses', mass, volume),
       row('Style', seg(MAP_STYLES, item.style, (v) => ctl.setStyle(item, v), 'Map style')),
       row('Opacity', h('input', {
         type: 'range', min: 0.05, max: 0.95, step: 0.05, value: item.opacity, disabled: item.style !== 'transparent',
@@ -223,7 +243,7 @@ export function createPanel(root, ctl) {
         };
         lo.addEventListener('change', apply);
         hi.addEventListener('change', apply);
-        parts.push(row('Scale', lo, h('span', { class: 'unit' }, 'to'), hi, h('span', { class: 'unit' }, u)), legend(by));
+        parts.push(row('Scale', lo, h('span', { class: 'unit' }, 'to'), hi, h('span', { class: 'unit' }, u)), colorLegend(by));
       }
     }
     const models = item.series ? [] : ctl.items().filter((i) => i.kind === 'model');
@@ -238,8 +258,35 @@ export function createPanel(root, ctl) {
       radius.addEventListener('change', () => { if (on.checked) apply(); });
       parts.push(row('Zone', on, pick, radius, h('span', { class: 'unit' }, 'Å')));
     }
-    parts.push(enclosed);
+    parts.push(detailRow(item), filterRow(item), meta);
     return parts.filter(Boolean);
+  }
+
+  // How finely the map is shown: one choice per binning the server can apply (series: memory for all the volumes).
+  function detailRow(item) {
+    if (!item.info?.box) return null;
+    const frames = item.series ? item.series.frames.length : 0;
+    const choices = detailChoices(item.info, frames ? SERIES_BOXES : MAP_BOXES);
+    const now = binning(item.info, item.box);
+    const label = (c) => `${fmtDims(c.dims)} · ${c.voxel.toFixed(2)} Å${c.factor > 1 ? ` (${c.factor}× binned)` : ' (full)'}`
+      + (frames ? ` · ${fmtBytes(c.voxels * 4 * frames)} for ${frames}` : ` · ${fmtBytes(c.voxels * 2)}`);
+    if (choices.length < 2) return row('Detail', h('span', { class: 'vw-static' }, label(choices[0])));
+    return row('Detail', h('select', {
+      'aria-label': 'Detail: voxels shown (binning)', title: 'Finer: sharper surfaces, slower to load',
+      onchange: (e) => ctl.setDetail(item, Number(e.target.value)),
+    }, choices.map((c) => h('option', { value: String(c.box), selected: c.factor === now }, label(c)))));
+  }
+
+  // Low-pass filter applied by the server: the map as seen at a lower resolution (flexible parts, weak density).
+  function filterRow(item) {
+    if (!item.volume) return null;
+    const options = lowpassChoices(voxelSize(item));
+    if (item.lowpass && !options.includes(item.lowpass)) options.push(item.lowpass);
+    if (options.length < 2) return null;
+    return row('Filter', h('select', {
+      'aria-label': 'Low-pass filter', title: 'Show the map at a lower resolution: smoother, flexible regions easier to see',
+      onchange: (e) => ctl.setLowpass(item, Number(e.target.value)),
+    }, options.map((d) => h('option', { value: String(d), selected: d === (item.lowpass || 0) }, d ? `Low-pass ${d} Å` : 'None (as computed)'))));
   }
 
   function modelBody(item) {
@@ -250,8 +297,12 @@ export function createPanel(root, ctl) {
         MODEL_STYLES.map(([v, t]) => h('option', { value: v, selected: v === item.display }, t)))),
       row('Colour', h('select', { 'aria-label': 'Model colouring', onchange: (e) => ctl.setColorMode(item, e.target.value) },
         MODEL_COLORS.map(([v, t]) => h('option', { value: v, selected: v === item.colorMode }, t)))),
+      hasSurface(item.display) ? row('Opacity', h('input', {
+        type: 'range', min: 0.1, max: 1, step: 0.05, value: item.surfaceOpacity ?? (item.display === 'surface' ? 1 : 0.35),
+        'aria-label': 'Opacity of the molecular surface', oninput: (e) => ctl.setSurfaceOpacity(item, Number(e.target.value)),
+      })) : null,
       row('Go to', goto),
-    ];
+    ].filter(Boolean);
     if (item.refs.components.water) {
       parts.push(row('', h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: item.waters, onchange: (e) => ctl.setWaters(item, e.target.checked) }), 'Show waters')));
     }
@@ -268,6 +319,11 @@ export function createPanel(root, ctl) {
     syncColorMode(item) {
       const select = root.querySelector(`[data-vid="${item.id}"] select[aria-label="Model colouring"]`);
       if (select) select.value = item.colorMode;
+    },
+    // the opacity slider of a model surface follows a command without rebuilding the card (nor stopping a drag)
+    syncSurfaceOpacity(item) {
+      const input = root.querySelector(`[data-vid="${item.id}"] input[aria-label="Opacity of the molecular surface"]`);
+      if (input && document.activeElement !== input) input.value = String(item.surfaceOpacity);
     },
     // selection only restyles the cards: rebuilding them would interrupt a drag on a histogram
     markActive() {

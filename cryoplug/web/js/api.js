@@ -32,6 +32,7 @@ async function request(method, url, body, isForm = false) {
 }
 
 const enc = encodeURIComponent;
+const viewOptions = (encoding, lowpass) => `${encoding ? `&enc=${encoding}` : ''}${lowpass ? `&lowpass=${lowpass}` : ''}`;
 
 export const api = {
   info: () => request('GET', '/api/info'),
@@ -92,7 +93,11 @@ export const api = {
 
   fileUrl: (p, path, download = false) => `/api/projects/${p}/file?path=${enc(path)}${download ? '&download=true' : ''}`,
   particleImagesUrl: (p, j, ids, size = 96) => `/api/projects/${p}/jobs/${j}/particle-images?ids=${ids.join(',')}&size=${size}`,
-  previewUrl: (p, path, maxBox) => `/api/projects/${p}/preview?path=${enc(path)}${maxBox ? `&max_box=${maxBox}` : ''}`,
-  zoneUrl: (p, map, model, radius, maxBox) => `/api/projects/${p}/zone?map=${enc(map)}&model=${enc(model)}&radius=${radius}&max_box=${maxBox}`,
+  // maps for the 3D viewer: maxBox voxels per side at most (0: full size), encoding f32 / i16 / i8, low-pass in A
+  previewUrl: (p, path, maxBox, { encoding, lowpass } = {}) => `/api/projects/${p}/preview?path=${enc(path)}`
+    + `${maxBox !== undefined && maxBox !== null ? `&max_box=${maxBox}` : ''}${viewOptions(encoding, lowpass)}`,
+  zoneUrl: (p, map, model, radius, maxBox, { encoding, lowpass } = {}) => `/api/projects/${p}/zone?map=${enc(map)}`
+    + `&model=${enc(model)}&radius=${radius}&max_box=${maxBox}${viewOptions(encoding, lowpass)}`,
+  mapInfo: (p, path) => request('GET', `/api/projects/${p}/map-info?path=${enc(path)}`),
   bundleUrl: (p, j) => `/api/projects/${p}/jobs/${j}/interactive/bundle`,
 };

@@ -27,8 +27,10 @@ local :
 | ![](docs/images/isolde.png) | ![](docs/images/graph.png) |
 | **Workflows** | **Checklist avant dépôt** |
 | ![](docs/images/workflows.png) | ![](docs/images/checklist.png) |
-| **Visualiseur 3D** : panneau de modèles, histogramme de seuil, zone autour du modèle, ligne de commande | **Coupes 2D** (et thème sombre) |
+| **Visualiseur 3D** : panneau de modèles, histogramme de seuil, masse enfermée, zone autour du modèle, détail et filtre, ligne de commande | **Coupes 2D en grand** à côté de la vue : zoom, valeur sous la souris, couleurs de la variabilité (thème sombre) |
 | ![](docs/images/viewer.png) | ![](docs/images/viewer_slices.png) |
+| **Coupe pleine** : avec le slab (ou en zoomant dans la carte), la densité coupée est dessinée pleine | **Surface du modèle** (ici *Cartoon + surface*, opacité réglable) |
+| ![](docs/images/viewer_section.png) | ![](docs/images/viewer_surface.png) |
 | **Lignée du job ouvert** : ses entrées en violet, les jobs qui l'utilisent en vert | **Mode sombre** |
 | ![](docs/images/lineage.png) | ![](docs/images/dark.png) |
 
@@ -42,10 +44,10 @@ local :
 | **Résolution locale par chaîne et par résidu** | **Registre de séquence** (checkMySequence) |
 | ![](docs/images/local_resolution.png) | ![](docs/images/checkmysequence.png) |
 
-| **Explorateur de l'espace latent** (cryoDRGN) : clusters choisis → *Play in 3D*, *Keep…*, *Remove…*, *Trajectory…*, *Particle images* | **Série de volumes** jouée dans le visualiseur (barre de lecture, même seuil pour tous) |
+| **Explorateur de l'espace latent** (cryoDRGN) : clusters choisis → *Play in 3D*, *Keep…*, *Remove…*, *Trajectory…*, *Particle images* | **Série de volumes** jouée dans le visualiseur (barre de lecture : un bloc par volume chargé, même seuil pour tous, enregistrement vidéo) |
 |---|---|
 | ![](docs/images/latent_explorer.png) | ![](docs/images/viewer_series.png) |
-| **Carte de variabilité** sur la carte moyenne (bleu = stable, rouge = variable) | **Analyse de série** : densité de chaque chaîne dans chaque volume (une hélice disparaît) |
+| **Carte de variabilité** sur la carte moyenne (bleu = stable, rouge = variable ; échelle sur la vue) | **Analyse de série** : densité de chaque chaîne dans chaque volume (une hélice disparaît) |
 | ![](docs/images/viewer_variability.png) | ![](docs/images/series_analysis.png) |
 
 | **Entraînement cryoDRGN en direct** : époque, temps par époque, temps restant, courbes de perte redessinées à chaque époque | **Contrôle des entrées** : rétroprojection de 10 000 particules (FSC entre demi-lots, signe de la densité, verdict) |
@@ -271,20 +273,29 @@ Une interface entre CryoSPARC et ChimeraX, dessinée par Mol\* (qui fonctionne h
 - **Panneau Models** à droite : chaque carte ou modèle porte un numéro (`#1`, `#2`…), un œil pour le
   masquer et une pastille de couleur. Pour une carte : **histogramme** des densités (échelle log) dont on
   fait glisser le trait pour régler le **seuil**, saisie en valeur absolue ou en **σ** avec le pourcentage
-  de voxels au-dessus, style **Surface / Mesh / Transparent**, et **Zone** : n'afficher la densité qu'à
-  moins de *r* Å du modèle (comme `volume zone` de ChimeraX, calculée sur le serveur). Pour un modèle :
-  **Cartoon**, **Cartoon + chaînes latérales** ou **Sticks**, couleur par chaîne, structure secondaire,
-  élément, B-factor ou arc-en-ciel, et « Go to » `A:45`.
+  de voxels au-dessus et la **masse de protéine enfermée** (saisir une masse fixe le seuil), style
+  **Surface / Mesh / Transparent**, **Zone** : n'afficher la densité qu'à moins de *r* Å du modèle (comme
+  `volume zone` de ChimeraX, calculée sur le serveur), **Detail** (finesse : de 128 voxels de côté au fichier
+  d'origine, avec la taille du voxel et la résolution représentable) et **Filter** (passe-bas à 3–30 Å). Pour un
+  modèle : **Cartoon**, **Cartoon + chaînes latérales**, **Sticks**, **Spheres**, **Surface** ou
+  **Cartoon + surface** (opacité réglable), couleur par chaîne, structure secondaire, élément, B-factor,
+  arc-en-ciel ou hydrophobicité, et « Go to » `A:45`.
 - **Souris** : clic gauche-glisser tourne, clic droit (ou Ctrl + gauche) déplace, molette zoome,
   Maj + molette déplace les plans de coupe ; **cliquer sur un atome recentre la vue sur son résidu**
-  (comme Coot) et la barre d'état affiche l'atome survolé (`/A LYS 45 CA · B 32.1`).
-- **Barre d'outils** : réinitialiser la vue, rotation continue, *slab* (tranche autour du centre),
-  projection orthographique, éclairage doux (occlusion ambiante), fond noir / gris / blanc, **coupes 2D**
-  XY/XZ/YZ de la carte active (comme CryoSPARC, voxels au-dessus du seuil teintés), image PNG à 2× la
-  taille de la fenêtre. **Open…** ajoute d'autres cartes, masques, demi-cartes ou modèles du projet.
+  (comme Coot), **Maj + clic sur deux atomes mesure leur distance**, et la barre d'état affiche l'atome
+  survolé (`/A LYS 45 CA · B 32.1`).
+- **Barre d'outils** : réinitialiser la vue, rotation continue, *slab* (tranche autour du centre, en % de
+  l'épaisseur montrée ou en Å — **la densité coupée est dessinée pleine**, un ton plus sombre, comme quand on
+  zoome dedans), projection orthographique, éclairage doux (occlusion ambiante), fond noir / gris / blanc,
+  **coupes 2D** XY/XZ/YZ de la carte active (comme CryoSPARC : à côté de la vue, ou **en grand** dans une vue
+  partagée avec zoom, déplacement, valeur sous la souris, seuil en teinte ou en contours, contraste, moyenne de
+  plusieurs coupes, couleurs de la résolution locale ou de la variabilité), image PNG à 2× la taille de la
+  fenêtre (avec l'échelle de couleur), **vidéo** (une lecture de série ou un tour complet, MP4/WebM) et
+  **lien** vers la vue. **Open…** ajoute d'autres cartes, masques, demi-cartes ou modèles du projet.
 - **Ligne de commande** façon ChimeraX (↑/↓ pour l'historique, `help` pour la liste) :
-  `level 3σ`, `style mesh`, `color #2 bychain`, `view /A:45`, `zone 3`, `volume #1 level 0.5 style mesh`,
-  `bg white`, `slab 30`, `lighting soft`, `slices`, `fullres #1`, `save figure.png scale 3`…
+  `level 3σ`, `level 250kDa`, `style mesh`, `style #2 surface`, `color #2 bychain`, `view /A:45`, `zone 3`,
+  `detail 300`, `lowpass 8`, `volume #1 level 0.5 style mesh`, `bg white`, `slab 8A`, `lighting soft`,
+  `slices big`, `fullres #1`, `record spin`, `save figure.png scale 3`…
 - **Clavier** : **+ / −** seuil de la carte active (0,1 σ, Maj : 0,5 σ), **M** style suivant, **R** vue
   initiale, **S** rotation, **L** coupes, **:** ligne de commande, **?** aide.
 - **Coloration par résolution locale** : menu *Colour* d'une carte (ou `color #1 localres 3 6`), échelle bleu
@@ -292,12 +303,17 @@ Une interface entre CryoSPARC et ChimeraX, dessinée par Mol\* (qui fonctionne h
   d'un import CryoSPARC avec carte de résolution locale) ouvre directement la carte coloriée.
 - **Coloration par variabilité** (sortie d'un job *Volume series analysis*) : même principe, en σ (bleu = stable, rouge =
   variable) ; `color #1 variability`.
-- **Séries de volumes** (clusters et trajectoires cryoDRGN, frames de 3DVA) : *Play in 3D* charge tous les volumes puis
-  les joue comme un film — barre de lecture sur la vue (lecture/pause, précédent/suivant, curseur, vitesse, boucle ou
-  aller-retour), **Espace**, **,** et **.**, commandes `play 10`, `stop`, `frame 5`, `vseries play #1`. Le seuil est
-  commun à tous les volumes.
-- Les cartes arrivent en **aperçu binné** (au plus 200 voxels de côté, 128 pour les séries) pour la rapidité ; le menu
-  **⋯** d'une carte (ou `fullres #1`) charge le fichier d'origine.
+- **Séries de volumes** (clusters et trajectoires cryoDRGN, frames de 3DVA) : *Play in 3D* charge les volumes (trois
+  à la fois, celui qu'on vise avec le curseur d'abord) puis les joue comme un film — barre de lecture sur la vue
+  (lecture/pause, précédent/suivant, curseur dont la piste montre les volumes chargés, vitesse, boucle ou
+  aller-retour), **Espace**, **,** et **.**, commandes `play 10`, `stop`, `frame 5`, `vseries play #1`,
+  `record series`. Le seuil est commun à tous les volumes.
+- **Chargement** : les cartes arrivent en **aperçu binné** (au plus 200 voxels de côté, 80–128 pour les séries) et en
+  16 bits — deux fois moins de données à transférer, mis en cache sur le serveur et revalidés par le navigateur ; une
+  grande carte s'affiche d'abord en aperçu grossier puis s'affine. *Detail* (ou `fullres #1`) charge plus fin,
+  jusqu'au fichier d'origine.
+- **L'adresse de la page garde la vue** : cartes et modèles ouverts, réglages et caméra — recharger la page ou
+  envoyer le lien (bouton *Link*) redonne la même vue.
 
 ### Hétérogénéité et variabilité 3D (cryoDRGN, CryoSPARC 3DVA)
 

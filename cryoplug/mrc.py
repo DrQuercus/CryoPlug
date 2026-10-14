@@ -63,16 +63,19 @@ class MapVolume:
         arr = np.ascontiguousarray(self.data if data is None else data, dtype=np.float32)
         with mrcfile.new(str(path), overwrite=True) as mrc:
             mrc.set_data(arr)
-            mrc.voxel_size = tuple(float(v) for v in self.voxel)
-            start = self.origin / self.voxel
-            if np.allclose(start, np.round(start), atol=1e-3):
-                mrc.header.nxstart, mrc.header.nystart, mrc.header.nzstart = (int(round(s)) for s in start)
-                mrc.header.origin = (0.0, 0.0, 0.0)
-            else:
-                mrc.header.nxstart = mrc.header.nystart = mrc.header.nzstart = 0
-                mrc.header.origin = tuple(float(o) for o in self.origin)
+            self._write_geometry(mrc)
             mrc.update_header_stats()
         return path
+
+    def _write_geometry(self, mrc: Any) -> None:
+        mrc.voxel_size = tuple(float(v) for v in self.voxel)
+        start = self.origin / self.voxel
+        if np.allclose(start, np.round(start), atol=1e-3):
+            mrc.header.nxstart, mrc.header.nystart, mrc.header.nzstart = (int(round(s)) for s in start)
+            mrc.header.origin = (0.0, 0.0, 0.0)
+        else:
+            mrc.header.nxstart = mrc.header.nystart = mrc.header.nzstart = 0
+            mrc.header.origin = tuple(float(o) for o in self.origin)
 
     # ------------------------------------------------------------ properties
     @property
@@ -381,6 +384,57 @@ def bin_map(vol: MapVolume, factor: int) -> MapVolume:
 
 def preview_factor(shape_xyz: tuple[int, int, int], max_box: int = 256) -> int:
     return max(1, int(math.ceil(max(shape_xyz) / float(max_box))))
+
+
+# Maps sent to the browser viewer. f32: a plain float32 MRC file. i16: 16-bit integers, value = offset + scale ×
+# stored, with the tag 'CPQ1', the scale and the offset (float32) in the free header words 42-44: half the transfer,
+# decoded by the CryoPlug viewer before Mol* reads it (65 535 levels: invisible on a contour). i8: the 'mapmode2to0'
+# convention of UglyMol that Mol* reads natively (words 40-41 = -128, 127; values spread over AMIN-AMAX), a quarter of
+# the transfer for a quick first look.
+VIEW_ENCODINGS = ("f32", "i16", "i8")
+VIEW_TAG = b"CPQ1"
+
+
+def write_view_map(vol: MapVolume, path: str | Path, enc: str = "f32") -> Path:
+    import struct
+    import sys
+    path = Path(path)
+    if enc == "f32":
+        return vol.write(path)
+    if enc not in VIEW_ENCODINGS:
+        raise ValueError(f"Unknown map encoding '{enc}'")
+    data = np.ascontiguousarray(vol.data, dtype=np.float32)
+    lo, hi = float(data.min()), float(data.max())
+    span = hi - lo or 1.0
+    if enc == "i16":
+        scale, offset = span / 65534.0, (lo + hi) / 2.0
+        stored = np.clip(np.rint((data - offset) / scale), -32767, 32767).astype("<i2")
+    else:
+        step = span / 255.0
+        stored = np.clip(np.rint((data - 0.5 * (lo + hi + step)) / step), -128, 127).astype(np.int8)
+    with mrcfile.new(str(path), overwrite=True) as mrc:
+        mrc.set_data(stored)
+        vol._write_geometry(mrc)
+        # statistics of the real values: Mol* takes them from the header (and i8 spreads over AMIN-AMAX)
+        mrc.header.dmin, mrc.header.dmax = lo, hi
+        mrc.header.dmean, mrc.header.rms = float(data.mean(dtype=np.float64)), float(data.std(dtype=np.float64))
+        byteorder = mrc.header.mode.dtype.byteorder
+        order = ">" if byteorder == ">" or (byteorder in "=|" and sys.byteorder == "big") else "<"
+    with open(path, "r+b") as fh:
+        fh.seek(39 * 4)
+        if enc == "i8":
+            fh.write(struct.pack(f"{order}ii", -128, 127))
+        else:
+            fh.write(struct.pack(f"{order}8x4sff", VIEW_TAG, scale, offset))
+    return path
+
+
+def view_lowpass(vol: MapVolume, resolution: float) -> MapVolume:
+    """The map as seen at ``resolution`` (A): a smooth low-pass (cosine edge centred on 1/resolution, no ringing)
+    for the viewer; unchanged when the grid cannot hold finer details anyway."""
+    if not resolution or resolution <= 2.0 * float(np.max(vol.voxel)):
+        return vol
+    return vol.like(fourier_filter(vol, lowpass=resolution * 1.15, edge_width=0.3 / resolution))
 
 
 def zone_mask(vol: MapVolume, xyz: np.ndarray, radius: float) -> np.ndarray:

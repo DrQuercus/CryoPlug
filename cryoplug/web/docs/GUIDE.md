@@ -193,8 +193,9 @@ Corrigez avec **Map operations → Flip handedness** sur la carte utilisée pour
   Coot ou PyMOL).
 - Dans le visualiseur 3D : menu **Colour** de la carte → *Local resolution* (bleu = meilleure, rouge = moins
   bonne ; échelle réglable, par défaut du 5e au 95e centile), ou `color #1 localres 3 6`. Le bouton *View 3D* du
-  job ouvre directement la carte coloriée. Une carte de résolution locale importée de CryoSPARC s'utilise de la
-  même façon.
+  job ouvre directement la carte coloriée ; l'échelle s'affiche sur la vue et dans les images enregistrées, et les
+  **coupes 2D** (*Slices*) colorient aussi les voxels de densité, comme les coupes de ResMap. Une carte de résolution
+  locale importée de CryoSPARC s'utilise de la même façon.
 - Elle sert à choisir les régions à raffiner localement, à décider où construire les chaînes latérales, et à faire
   la figure de résolution locale de l'article.
 
@@ -256,8 +257,9 @@ explorateur, nettoyage du junk, convergence, paysage des états et validation ; 
 3. **Volume series analysis** sur une composante (ou sur des volumes cryoDRGN : clusters, états, trajectoire), avec le
    modèle ajusté dans la carte consensus :
    - la **carte de variabilité** (écart-type entre volumes, en σ de la densité de la molécule) ; *View 3D* l'affiche
-     en couleur sur la carte moyenne (bleu = stable, rouge = variable), et le menu *Colour* l'applique à n'importe
-     quelle carte ou série ouverte ;
+     en couleur sur la carte moyenne (bleu = stable, rouge = variable : une grande valeur est une densité qui change
+     d'un volume à l'autre), et le menu *Colour* l'applique à n'importe quelle carte ou série ouverte, coupes 2D
+     comprises ;
    - la **matrice de corrélation** entre volumes : des **blocs** = des états distincts, un **dégradé** le long de la
      diagonale = un mouvement continu ;
    - avec un modèle, la **densité de chaque chaîne dans chaque volume** (1 = aussi dense que le reste du modèle,
@@ -265,11 +267,16 @@ explorateur, nettoyage du junk, convergence, paysage des états et validation ; 
      partie des particules ou se déplace hors de sa place dans le modèle — la série jouée dans le visualiseur tranche.
 4. **Extract volume from series** (ou *Extract map…* dans l'explorateur) : la carte d'un état pour y ajuster le modèle.
 
-**Lire une série dans le visualiseur 3D.** Le bouton *Play in 3D* d'une sortie *Volume series* charge tous les volumes
-(aperçus de 128 voxels de côté au plus) puis les joue : barre de lecture sur la vue (lecture/pause, volume précédent
-/ suivant, curseur, vitesse, boucle ou aller-retour), touches **Espace**, **,** et **.** ; commandes `play 10`,
-`stop`, `frame 5`, `frame next`, ou à la ChimeraX `vseries play #1 direction oscillate`. Le seuil est le même pour tous
-les volumes de la série, et la coloration par variabilité ou résolution locale s'applique à chacun.
+**Lire une série dans le visualiseur 3D.** Le bouton *Play in 3D* d'une sortie *Volume series* charge les volumes
+(aperçus de 80 à 128 voxels de côté selon leur nombre ; *Detail* dans la carte de la série en choisit d'autres, avec
+la mémoire nécessaire) trois par trois, celui qu'on demande en premier, puis les joue : barre de lecture sur la vue
+(lecture/pause, volume précédent / suivant, curseur, vitesse, boucle ou aller-retour), touches **Espace**, **,** et
+**.** ; commandes `play 10`, `stop`, `frame 5`, `frame next`, ou à la ChimeraX `vseries play #1 direction oscillate`.
+La piste du curseur montre un bloc par volume, clair une fois chargé : on peut faire glisser le curseur pendant le
+chargement, le volume visé passe avant les autres. Le seuil est le même pour tous les volumes de la série, et la
+coloration par variabilité ou résolution locale s'applique à chacun. **Movie** (ou `record series`) joue la série une
+fois en l'enregistrant en vidéo (MP4 ou WebM selon le navigateur), pour une présentation ; `record spin` enregistre
+un tour complet.
 
 > ⚠️ Les volumes cryoDRGN et les frames de 3DVA sont **générés** (par le réseau, ou par une combinaison linéaire) :
 > ce ne sont pas des reconstructions gold-standard. Ne déposez pas leur résolution et confirmez tout état important
@@ -631,14 +638,39 @@ l'ajustement comme dans Coot ou ChimeraX :
 1. le modèle s'ouvre avec la carte dans laquelle il a été construit, en maillage (*Mesh*) ;
 2. cochez **Zone** (3 Å) : seule la densité autour du modèle reste, le bruit disparaît (`zone 3`) ;
 3. réglez le seuil en faisant glisser le trait de l'histogramme, ou avec **+ / −** ; le panneau indique le
-   niveau en σ et le pourcentage de voxels au-dessus ;
+   niveau en σ, le pourcentage de voxels au-dessus et la **masse de protéine enfermée** (saisissez une masse en kDa
+   pour fixer le seuil : `level 250kDa`) ;
 4. **cliquez sur un résidu** pour recentrer la vue dessus, ou tapez `view /A:45` (« Go to » `A:45` dans le
-   panneau du modèle) ; **Slab** limite l'affichage à une tranche autour du centre ;
-5. **Slices** affiche des coupes 2D de la carte : pratique pour repérer un masque trop serré, une
-   anisotropie ou une boîte décentrée.
+   panneau du modèle) ; **Slab** limite l'affichage à une tranche autour du centre (`slab 20` = 20 % de
+   l'épaisseur de ce qui est montré, `slab 8A` = 8 Å) : la densité coupée apparaît **pleine**, un ton plus sombre,
+   ce qui distingue bien l'intérieur ; même rendu quand on zoome dans la carte ou avec Maj + molette ;
+5. **Maj + clic** sur deux atomes mesure leur distance (`distance clear` efface les mesures) ;
+6. **Slices** affiche des coupes 2D de la carte : pratique pour repérer un masque trop serré, une
+   anisotropie ou une boîte décentrée. Le bouton d'agrandissement d'une coupe (ou double-clic, ou `slices big`)
+   la montre en grand à côté de la vue 3D (un plan ou les trois) : molette pour zoomer, glisser pour déplacer,
+   clic pour placer la croix, Maj + molette ou ↑/↓ pour la coupe suivante ; la valeur sous la souris (en σ, et la
+   résolution locale ou la variabilité si la carte est coloriée) s'affiche en bas ; seuil en teinte ou en lignes de
+   contour, contraste, moyenne de quelques coupes pour réduire le bruit.
 
-`help` dans la ligne de commande liste les commandes (`level`, `style`, `color`, `view`, `zone`, `volume`,
-`bg`, `slab`, `save`…), **?** les gestes souris et les touches.
+**Détail et filtre.** Les cartes arrivent binnées (200 voxels de côté au plus) et en 16 bits (deux fois moins de
+données que le fichier) ; une grande carte montre d'abord un aperçu grossier en une fraction de seconde, affiné dès
+que la version demandée est là. **Detail** dans la carte d'une map choisit la finesse — de 128 voxels au fichier
+d'origine (`detail 300`, `detail full`, ou `volume #1 step 2` comme dans ChimeraX), avec la taille du voxel, la
+résolution la plus fine représentable et le volume à transférer ; **Filter** montre la carte filtrée à une résolution
+plus basse (`lowpass 8`) : régions flexibles et densité faible deviennent lisibles. Le seuil garde le même volume
+enfermé quand on change l'un ou l'autre.
+
+**Modèles.** Styles *Cartoon*, *Cartoon + side chains*, *Sticks*, *Spheres*, **Surface** (surface moléculaire) et
+*Cartoon + surface* (surface transparente sur le cartoon), avec un curseur d'opacité (`style #2 surface`,
+`transparency #2 50`) ; couleurs par chaîne, structure secondaire, élément, B-factor, arc-en-ciel ou
+**hydrophobicité**.
+
+**Partager une vue.** L'adresse de la page garde ce qui est ouvert, les réglages (seuils, styles, détail, couleurs,
+slab) et la caméra : recharger la page redonne la même vue, et **Link** copie un lien à envoyer à un collègue qui a
+accès au projet. **Image** enregistre un PNG (avec l'échelle de couleur d'une carte coloriée), **Movie** une vidéo.
+
+`help` dans la ligne de commande liste les commandes (`level`, `style`, `color`, `view`, `zone`, `detail`,
+`lowpass`, `volume`, `bg`, `slab`, `record`, `distance`, `save`…), **?** les gestes souris et les touches.
 
 ### 5.3 Assembler
 
@@ -893,7 +925,9 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | « Wrong access token » à la connexion | Jeton mal copié ou renouvelé | `cryoplug url` sur le serveur réaffiche le lien de connexion |
 | Le visualiseur 3D reste vide | Mol* non installé et pas d'accès internet | `cryoplug fetch-viewer` sur le serveur |
 | Le visualiseur affiche « The 3D view could not start » | WebGL désactivé dans le navigateur | Activer l'accélération matérielle du navigateur |
-| Carte pleine de bruit dans le visualiseur | Seuil trop bas ou boîte très grande | Monter le seuil (+, ou histogramme), cocher **Zone** autour du modèle |
+| Carte pleine de bruit dans le visualiseur | Seuil trop bas ou boîte très grande | Monter le seuil (+, ou histogramme), cocher **Zone** autour du modèle, ou **Filter** (`lowpass 6`) |
+| Carte lente à s'afficher (tunnel SSH, VPN) | Transfert d'une grande carte | L'aperçu grossier s'affiche d'abord ; **Detail** plus bas (`detail 128`) pour travailler, plus fin pour la figure finale |
+| Densité anguleuse, chaînes latérales invisibles | Aperçu binné (voxel ≥ 2 Å) | **Detail** plus fin ou `fullres #1` ; la résolution représentable est indiquée sous la carte |
 | « The program finished but wrote no map / model in J… » | Le programme s'est arrêté sur une erreur sans signaler d'échec | Cherchez sa dernière erreur dans le log, corrigez, puis **Clear** et relancez |
 | Avertissement « … was written next to an input … moved to … » dans le log | Le programme a écrit son résultat dans le dossier d'un autre job (celui de ses entrées) | Rien à faire : CryoPlug a ramené le fichier dans le dossier du job, l'autre job reste intact |
 | Coot / ISOLDE : « No saved model found in the job folder » | Modèle enregistré dans un autre dossier | Enregistrez-le dans le dossier du job (chemin donné par le message) ou envoyez-le (*Upload*), puis *Finish* |
@@ -905,7 +939,7 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | « These particles have no poses » | Particules d'une extraction ou d'une classification 2D | Importez le job de **raffinement** (champs `alignments3D`) |
 | « … uses CryoSPARC's compressed format » | Fichiers `.cs` compressés des versions récentes de CryoSPARC | `pip install cryosparc-tools` dans l'environnement de CryoPlug |
 | Import d'un job 3DVA : « only the 3D variability coordinates are imported » | Le fichier `passthrough` du job manque | L'explorateur fonctionne ; pour entraîner ou réutiliser les particules, importez le raffinement consensus |
-| La série se charge lentement dans le visualiseur | Beaucoup de volumes, carte graphique logicielle | Normal la première fois (chaque volume est chargé une fois) ; la lecture est ensuite fluide |
+| La série se charge lentement dans le visualiseur | Beaucoup de volumes, carte graphique logicielle | Normal la première fois (chaque volume est chargé une fois, trois à la fois) ; faites glisser le curseur vers un volume pour le charger d'abord ; **Detail** plus bas pour une longue série |
 | Relancer un job à l'identique hors CryoPlug | — | `commands.sh` dans le dossier du job contient les commandes exactes |
 
 Le **log** (onglet *Log*) montre la commande exécutée, la sortie du programme et l'erreur en rouge.

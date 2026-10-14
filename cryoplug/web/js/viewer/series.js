@@ -1,63 +1,87 @@
 // Volume series (cryoDRGN cluster volumes and trajectories, 3D variability frames): every frame is loaded once
 // with its own isosurface, all hidden but the current one, so that playing only switches visibility.
-// A display change (level, style, colour) redraws the current frame at once and the others in the background.
+// Frames load a few at a time, the frame asked for (slider, playback) first; a display change (level, style,
+// colour) redraws the current frame at once and the others in the background.
 import * as scene from './scene.js';
 import { mapStatistics } from './stats.js';
 
 export const SPEEDS = [1, 2, 4, 6, 10, 15, 24];
+const WORKERS = 3; // frames downloaded and prepared at the same time
 
-// Frames are binned previews: smaller grids for longer series keep the memory reasonable.
-export const seriesBox = (n) => (n > 40 ? 80 : n > 24 ? 96 : 128);
-
-export function initSeries(item, paths, labels = []) {
+export function initSeries(item, paths, labels = [], keep = null) {
   item.series = {
-    frames: paths.map((path, i) => ({ path, label: labels[i] || `Frame ${i + 1}`, refs: {}, volume: null, stats: null, version: -1 })),
-    index: 0, want: 0, fps: 6, mode: 'loop', dir: 1, playing: false, version: 0, loaded: 0, closed: false,
+    frames: paths.map((path, i) => ({ path, index: i, label: labels[i] || `Frame ${i + 1}`, refs: {}, volume: null, stats: null,
+      version: -1, state: 'pending' })),
+    index: keep?.index ?? 0, want: keep?.index ?? 0, fps: keep?.fps ?? 6, mode: keep?.mode ?? 'loop', dir: 1, playing: false,
+    version: 0, loaded: 0, failed: 0, closed: false,
   };
   return item.series;
 }
 
-// ctx: { url(path, n) -> preview URL, onFrame(item), onLoad(item), onError(err) }
+// ctx: { fetch(item, frame) -> bytes of the map, onFrame(item), onLoad(item), onError(err, what) }
 export function createSeriesPlayer(ctx) {
   const current = (item) => item.series.frames[item.series.index];
 
   async function loadFrame(item, frame) {
     const s = item.series;
-    const r = await scene.loadVolume(ctx.url(frame.path, s.frames.length), `${item.label} · ${frame.label}`);
+    frame.state = 'loading';
+    const bytes = await ctx.fetch(item, frame);
+    if (s.closed) return;
+    const r = await scene.loadVolume(bytes, `${item.label} · ${frame.label}`);
     if (s.closed) { await scene.remove(r.dataRef); return; }
     frame.refs = { data: r.dataRef, volume: r.volumeRef, repr: null };
     frame.volume = r.volume;
     frame.stats = mapStatistics(r.volume);
+    frame.state = 'ready';
     s.loaded += 1;
   }
 
-  // First frame: becomes the item's map (refs, volume, statistics) before the item is shown.
+  // The frame shown first (the current one): becomes the item's map (refs, volume, statistics) before it is drawn.
   async function loadFirst(item) {
-    const frame = item.series.frames[0];
+    const frame = current(item);
+    frame.ready = Promise.resolve();
     await loadFrame(item, frame);
     item.refs = frame.refs;
     item.volume = frame.volume;
     item.stats = frame.stats;
   }
 
-  // The other frames, one after the other, each drawn (hidden) as soon as it is there.
+  // Next frame to load: the nearest after the one wanted, in the direction of playback.
+  function nextPending(s) {
+    const n = s.frames.length;
+    let best = null;
+    let bestD = Infinity;
+    for (const f of s.frames) {
+      if (f.state !== 'pending') continue;
+      const d = s.dir < 0 ? (s.want - f.index + n) % n : (f.index - s.want + n) % n;
+      if (d < bestD) { bestD = d; best = f; }
+    }
+    if (best) best.state = 'queued';
+    return best;
+  }
+
+  // The other frames, WORKERS at a time, each drawn (hidden) as soon as it is there.
   function loadRest(item) {
     const s = item.series;
-    let chain = Promise.resolve();
-    for (const frame of s.frames.slice(1)) {
-      frame.ready = chain = chain.then(async () => {
-        if (s.closed) return;
-        try {
-          await loadFrame(item, frame);
-          if (!s.closed) await drawFrame(item, frame);
-        } catch (err) {
-          frame.error = err;
-          ctx.onError(err, `Frame ${frame.label}: `);
-        }
-        ctx.onLoad(item);
-      });
+    for (const f of s.frames) {
+      if (f.state === 'pending') f.ready = new Promise((resolve) => { f.done = resolve; });
     }
-    return chain;
+    const work = async () => {
+      for (let f = nextPending(s); f && !s.closed; f = nextPending(s)) {
+        try {
+          await loadFrame(item, f);
+          if (!s.closed && f.volume) await drawFrame(item, f);
+        } catch (err) {
+          f.state = 'failed';
+          f.error = err;
+          s.failed += 1;
+          if (!s.closed) ctx.onError(err, `Volume ${f.label}: `);
+        }
+        f.done?.();
+        if (!s.closed) ctx.onLoad(item);
+      }
+    };
+    return Promise.all(Array.from({ length: WORKERS }, work));
   }
 
   // Build or update the isosurface of a frame with the item's settings (one update at a time per frame,
@@ -121,7 +145,7 @@ export function createSeriesPlayer(ctx) {
     }
   }
 
-  // Switch to frame i (the last request wins while a frame is being prepared).
+  // Switch to frame i. The last request wins: scrubbing over frames still loading only waits for the last one asked.
   async function go(item, i) {
     const s = item.series;
     const n = s.frames.length;
@@ -132,7 +156,11 @@ export function createSeriesPlayer(ctx) {
       while (s.want !== s.index && !s.closed) {
         const target = s.want;
         const next = s.frames[target];
-        if (!next.volume && next.ready) await next.ready;
+        if (!next.volume && next.ready) {
+          ctx.onLoad(item); // the bar shows which volume is awaited
+          await next.ready;
+          if (s.want !== target) continue;
+        }
         if (!next.volume) { s.want = s.index; break; } // could not be loaded
         if (next.version !== s.version || !next.refs.repr) await drawFrame(item, next);
         const prev = current(item);
@@ -156,13 +184,17 @@ export function createSeriesPlayer(ctx) {
     return s.index + s.dir;
   }
 
-  function play(item, fps) {
+  // Play; `once` stops after one pass (the last frame, or back to the first in back-and-forth), for recordings.
+  function play(item, fps, { once = false, onEnd = null } = {}) {
     const s = item.series;
     if (fps) s.fps = fps;
     if (s.playing) return;
     s.playing = true;
+    let steps = once ? (s.mode === 'bounce' ? 2 * (s.frames.length - 1) : s.frames.length - 1) : Infinity;
     const tick = async () => {
       if (!s.playing || s.closed) return;
+      if (steps <= 0) { pause(item); onEnd?.(); return; }
+      steps -= 1;
       const start = performance.now();
       await go(item, nextIndex(s));
       if (!s.playing || s.closed) return;
@@ -174,19 +206,41 @@ export function createSeriesPlayer(ctx) {
 
   function pause(item) {
     const s = item.series;
+    if (!s.playing) return;
     s.playing = false;
     clearTimeout(s.timer);
     ctx.onFrame(item);
   }
 
-  async function dispose(item) {
-    const s = item.series;
-    s.closed = true;
-    s.playing = false;
-    clearTimeout(s.timer);
-    clearTimeout(s.refreshTimer);
-    for (const frame of s.frames) if (frame.refs.data) await scene.remove(frame.refs.data);
+  async function dispose(item, series = item.series) {
+    series.closed = true;
+    series.playing = false;
+    clearTimeout(series.timer);
+    clearTimeout(series.refreshTimer);
+    for (const frame of series.frames) if (frame.refs.data) await scene.remove(frame.refs.data);
   }
 
-  return { loadFirst, loadRest, redraw, redrawAll, go, play, pause, dispose, step: (item, d) => go(item, item.series.index + d) };
+  // Load the series again (another detail or filter): the current volume first, shown as soon as it is ready
+  // (adjust(item) sets the level for it before it is drawn), then the old volumes go and the others follow.
+  async function reload(item, adjust = null) {
+    const old = item.series;
+    const wasPlaying = old.playing;
+    pause(item);
+    old.closed = true; // stops its loaders
+    initSeries(item, old.frames.map((f) => f.path), old.frames.map((f) => f.label), old);
+    try {
+      await loadFirst(item);
+      adjust?.(item);
+      await drawFrame(item, current(item));
+    } catch (err) {
+      await dispose(item, old);
+      throw err;
+    }
+    await dispose(item, old);
+    ctx.onFrame(item);
+    item.series.rest = loadRest(item);
+    if (wasPlaying) play(item);
+  }
+
+  return { loadFirst, loadRest, redraw, redrawAll, go, play, pause, dispose, reload, step: (item, d) => go(item, item.series.index + d) };
 }

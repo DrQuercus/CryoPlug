@@ -25,15 +25,23 @@ const VIEWER_OPTIONS = {
   illumination: false,
 };
 
-// Atoms drawn for each model display style: [component, Mol* representation].
+// Atoms drawn for each model display style: [component, Mol* representation]. 'surface' is replaced by a gaussian
+// surface for very large models (the molecular surface would take too long).
 const DISPLAY_PLAN = {
   cartoon: [['polymer', 'cartoon'], ['ligand', 'ball-and-stick'], ['branched', 'ball-and-stick'], ['ion', 'ball-and-stick']],
   sticks: [['polymer', 'ball-and-stick'], ['ligand', 'ball-and-stick'], ['branched', 'ball-and-stick'], ['ion', 'ball-and-stick']],
   both: [['polymer', 'cartoon'], ['sidechain', 'ball-and-stick'], ['ligand', 'ball-and-stick'], ['branched', 'ball-and-stick'], ['ion', 'ball-and-stick']],
+  spheres: [['polymer', 'spacefill'], ['ligand', 'spacefill'], ['branched', 'spacefill'], ['ion', 'spacefill']],
+  surface: [['polymer', 'surface'], ['ligand', 'ball-and-stick'], ['branched', 'ball-and-stick'], ['ion', 'ball-and-stick']],
+  'cartoon-surface': [['polymer', 'cartoon'], ['polymer', 'surface'], ['ligand', 'ball-and-stick'], ['branched', 'ball-and-stick'], ['ion', 'ball-and-stick']],
 };
+export const hasSurface = (display) => display === 'surface' || display === 'cartoon-surface';
+const GAUSSIAN_SURFACE_ATOMS = 60000;
 
 // Local resolution colour scale, best (blue) to worst (red): the same stops as the job thumbnails (imaging.py).
 export const RESOLUTION_COLORS = [0x2b4ba0, 0x2f8fd8, 0x3cc0c0, 0x7dd36b, 0xf2e04a, 0xf39c34, 0xd7352b];
+
+const SUBSTANCE = { metalness: 0, roughness: 1, bumpiness: 0 };
 
 let plugin = null;
 let lib = null;
@@ -66,17 +74,33 @@ export async function createScene(element) {
 }
 
 // ------------------------------------------------------------------- maps
-export async function loadVolume(url, label) {
-  const data = await plugin.builders.data.download({ url, isBinary: true, label }, { state: { isGhost: true } });
+// A map from a URL or from the bytes of an MRC file (see mapdata.js). The entry id keeps Mol* from looking the label
+// up in the EMDB (it does for names starting with "emd").
+export async function loadVolume(source, label) {
+  const data = typeof source === 'string'
+    ? await plugin.builders.data.download({ url: source, isBinary: true, label }, { state: { isGhost: true } })
+    : await plugin.builders.data.rawData({ data: source, label }, { state: { isGhost: true } });
   try {
-    const parsed = await plugin.dataFormats.get('ccp4').parse(plugin, data, { entryId: label });
+    const parsed = await plugin.dataFormats.get('ccp4').parse(plugin, data, { entryId: `cryoplug ${label}` });
     const volume = parsed.volume || parsed.volumes?.[0];
     if (!volume?.isOk) throw new Error('not a readable MRC/CCP4 map');
+    releaseBytes(data.ref);
     return { dataRef: data.ref, volumeRef: volume.ref, volume: volume.cell.obj.data };
   } catch (err) {
     await remove(data.ref);
     throw err;
   }
+}
+
+// The file bytes are no longer needed once the map is parsed (its values live in their own array): drop them, which
+// halves the memory of a map, a lot for the volumes of a series. The cell is never updated again, so nothing re-reads it.
+function releaseBytes(ref) {
+  const cell = plugin.state.data.cells.get(ref);
+  try {
+    if (cell?.obj?.data instanceof Uint8Array) cell.obj.data = new Uint8Array(0);
+    const params = cell?.transform?.params;
+    if (params && (params.data instanceof Uint8Array || params.data instanceof ArrayBuffer)) params.data = new Uint8Array(0);
+  } catch { /* read-only in this Mol* version: keep them */ }
 }
 
 // Single colour, or the values of another map (local resolution) sampled at the surface.
@@ -112,6 +136,9 @@ function isosurfaceParams(volume, s) {
         alpha: s.style === 'transparent' ? s.opacity : 1,
         sizeFactor: 1.5,
         tryUseGpu: !s.colorBy, // colouring by another map samples the vertices on the CPU
+        // where the view cuts the surface (slab, zoom, Shift + wheel), the inside is drawn filled, a shade darker
+        solidInterior: true,
+        interior: { color: 0x000000, colorStrength: 0.3, substance: SUBSTANCE, substanceStrength: 0 },
       },
     },
     colorTheme: mapColorTheme(volume, s),
@@ -152,15 +179,17 @@ export async function showMap(item) {
 // Latest-wins update queue per item: dragging a threshold or a colour picker sends many requests,
 // only the last state matters.
 const queues = new WeakMap();
-export function schedule(item, onError) {
-  let q = queues.get(item);
-  if (!q) queues.set(item, q = { running: false, dirty: false });
+export function schedule(item, onError, kind = 'show') {
+  let all = queues.get(item);
+  if (!all) queues.set(item, all = {});
+  const q = all[kind] ||= { running: false, dirty: false };
   if (q.running) { q.dirty = true; return; }
   q.running = true;
+  const task = kind === 'alpha' ? () => setSurfaceAlpha(item) : () => (item.kind === 'map' ? showMap(item) : showModel(item));
   (async () => {
     do {
       q.dirty = false;
-      try { await (item.kind === 'map' ? showMap(item) : showModel(item)); } catch (err) { onError?.(err); }
+      try { await task(); } catch (err) { onError?.(err); }
     } while (q.dirty);
     q.running = false;
   })();
@@ -192,22 +221,36 @@ export async function loadModel(url, label, format) {
   }
 }
 
+const SURFACES = ['molecular-surface', 'gaussian-surface'];
+
 function modelColor(item, type) {
-  const cartoon = type === 'cartoon';
+  // cartoons and surfaces take the colour of the scheme; atoms (sticks, spheres) keep the element colours of
+  // their heteroatoms, the carbons following the scheme
+  const whole = type === 'cartoon' || SURFACES.includes(type);
   const uniform = { value: item.color, saturation: 0, lightness: 0 };
   switch (item.colorMode) {
-    case 'ss': return cartoon ? { color: 'secondary-structure' } : { color: 'element-symbol' };
+    case 'ss': return whole ? { color: 'secondary-structure' } : { color: 'element-symbol' };
     case 'element': return { color: 'element-symbol' };
     case 'bfactor': return { color: 'uncertainty' };
     case 'rainbow': return { color: 'sequence-id' };
+    case 'hydrophobicity': return { color: 'hydrophobicity' };
     case 'uniform':
-      return cartoon ? { color: 'uniform', colorParams: uniform }
+      return whole ? { color: 'uniform', colorParams: uniform }
         : { color: 'element-symbol', colorParams: { carbonColor: { name: 'uniform', params: uniform } } };
-    default: return cartoon ? { color: 'chain-id' } : { color: 'element-symbol' };
+    default: return whole ? { color: 'chain-id' } : { color: 'element-symbol' };
   }
 }
 
-// (Re)build the representations of a model item ({ display, colorMode, color, waters, refs }).
+function modelTypeParams(item, type) {
+  if (type === 'ball-and-stick') return { sizeFactor: item.display === 'sticks' ? 0.17 : 0.2 };
+  if (SURFACES.includes(type)) {
+    const alpha = item.display === 'cartoon-surface' ? item.surfaceOpacity ?? 0.35 : item.surfaceOpacity ?? 1;
+    return { quality: 'auto', alpha, solidInterior: true, ...(type === 'molecular-surface' ? { probeRadius: 1.4 } : {}) };
+  }
+  return {};
+}
+
+// (Re)build the representations of a model item ({ display, colorMode, color, waters, surfaceOpacity, refs }).
 export async function showModel(item) {
   await plugin.dataTransaction(async () => {
     const old = (item.refs.reprs || []).filter(hasCell);
@@ -217,20 +260,59 @@ export async function showModel(item) {
       await b.commit();
     }
     item.refs.reprs = [];
-    const plan = DISPLAY_PLAN[item.display].map((step) => (step[0] === 'sidechain' && !item.refs.components.sidechain ? ['polymer', 'ball-and-stick'] : step));
-    if (item.waters) plan.push(['water', 'ball-and-stick']);
+    item.refs.surfaces = [];
+    const surface = (item.structure?.elementCount || 0) > GAUSSIAN_SURFACE_ATOMS ? 'gaussian-surface' : 'molecular-surface';
+    const plan = DISPLAY_PLAN[item.display || 'cartoon']
+      .map((step) => (step[0] === 'sidechain' && !item.refs.components.sidechain ? ['polymer', 'ball-and-stick'] : step))
+      .map(([key, type]) => [key, type === 'surface' ? surface : type]);
+    if (item.waters) plan.push(['water', item.display === 'spheres' ? 'spacefill' : 'ball-and-stick']);
     for (const [key, type] of plan) {
       const component = item.refs.components[key];
       if (!component) continue;
       const repr = await plugin.builders.structure.representation.addRepresentation(component, {
         type,
-        typeParams: type === 'ball-and-stick' ? { sizeFactor: item.display === 'sticks' ? 0.17 : 0.2 } : {},
+        typeParams: modelTypeParams(item, type),
         ...modelColor(item, type),
       });
       item.refs.reprs.push(repr.ref);
+      if (SURFACES.includes(type)) item.refs.surfaces.push(repr.ref);
     }
   });
   if (!item.visible) setHidden(item.refs.structure, true);
+}
+
+// Opacity of the molecular surface of a model, without computing the surface again; false when it has none.
+export async function setSurfaceAlpha(item) {
+  const refs = (item.refs.surfaces || []).filter(hasCell);
+  if (!refs.length) return false;
+  const alpha = modelTypeParams(item, 'molecular-surface').alpha;
+  const b = plugin.build();
+  for (const ref of refs) b.to(ref).update((old) => ({ ...old, type: { ...old.type, params: { ...old.type.params, alpha } } }));
+  await b.commit();
+  return true;
+}
+
+// ---------------------------------------------------------- measurements
+export function atomDistance(a, b) {
+  const { StructureElement: SE, StructureProperties: SP } = lib.structure;
+  const la = SE.Loci.getFirstLocation(a);
+  const lb = SE.Loci.getFirstLocation(b);
+  if (!la || !lb) return NaN;
+  return Math.hypot(SP.atom.x(la) - SP.atom.x(lb), SP.atom.y(la) - SP.atom.y(lb), SP.atom.z(la) - SP.atom.z(lb));
+}
+
+// A dashed line between two atoms with its length (a Mol* measurement, removed with its model).
+export async function addDistance(a, b) {
+  return !!(await plugin.managers.structure.measurement.addDistance(a, b));
+}
+
+export async function clearDistances() {
+  const cells = plugin.managers.structure.measurement.state.distances || [];
+  if (!cells.length) return 0;
+  const b = plugin.build();
+  cells.forEach((c) => b.delete(c.transform.ref));
+  await b.commit();
+  return cells.length;
 }
 
 export function residueLoci(item, chain, resno) {
@@ -338,6 +420,13 @@ function gridToCartesian(grid) {
   return M.mul(M(), M.mul(M(), t.cell.fromFractional, M.fromTranslation(M(), t.fractionalBox.min)), scale);
 }
 
+// Voxel (i, j, k) of a map to Cartesian Å as Mol* places it. EM maps are axis-aligned: a scale and an offset per axis
+// (x = offset[0] + scale[0] * i, ...).
+export function voxelAxes(volume) {
+  const T = gridToCartesian(volume.grid);
+  return { scale: [T[0], T[5], T[10]], offset: [T[12], T[13], T[14]] };
+}
+
 // Sphere around the voxels above the contour level: isosurfaces computed on the GPU only know their box,
 // which would frame a small molecule in a large box from far away. Cached per volume and level.
 const spheres = new WeakMap();
@@ -395,6 +484,38 @@ function union(spheres) {
   return { center: c, radius: r };
 }
 
+const sphereOf = (item) => (item.kind === 'map' ? item.volume && isoSphere(item)
+  : item.structure && lib.loci.Loci.getBoundingSphere(lib.structure.Structure.toStructureElementLoci(item.structure)));
+
+// Sphere around what is shown: the models and the isosurfaces of the maps.
+export function contentSphere(items) {
+  const found = items.filter((i) => i.visible).map(sphereOf).filter((sp) => sp && sp.radius > 0);
+  return found.length ? union(found) : null;
+}
+
+// ------------------------------------------------------------------ slab
+// Coot-like slab: only what lies within ±thickness/2 of the centre of rotation, along the view, is drawn (the cut
+// density filled). Mol* clips at the camera distance ± the radius of its focus, which the slab sets; framing or
+// zooming on something resets that radius, hence reapplySlab.
+let slab = null; // thickness in Å, or null
+
+export function setSlab(thickness, items = []) {
+  slab = thickness;
+  const camera = plugin.canvas3d.camera;
+  if (thickness !== null) {
+    camera.setState({ radius: Math.max(0.5, thickness / 2) });
+    return;
+  }
+  const sphere = contentSphere(items);
+  const need = sphere ? lib.math.LinearAlgebra.Vec3.distance(camera.state.target, sphere.center) + sphere.radius + 2 : camera.state.radiusMax;
+  camera.setState({ radius: Math.max(1, need), radiusMax: Math.max(camera.state.radiusMax, need) });
+}
+
+export function reapplySlab(delayMs = 0) {
+  if (slab === null) return;
+  setTimeout(() => { if (slab !== null) plugin.canvas3d.camera.setState({ radius: Math.max(0.5, slab / 2) }); }, delayMs);
+}
+
 // Frame the isosurfaces of these maps; false when none is above its level.
 export function frameMaps(items, durationMs = 250) {
   const found = items.filter((i) => i.kind === 'map' && i.visible && i.volume).map(isoSphere).filter(Boolean);
@@ -407,9 +528,8 @@ export function frameMaps(items, durationMs = 250) {
 // The clipping planes and the fog follow the radius of the camera focus: widen it (without moving the camera)
 // when an item, e.g. another volume of a series or a map opened later, reaches beyond it.
 export function keepInView(item) {
-  let sphere = null;
-  if (item.kind === 'map') sphere = item.volume && isoSphere(item);
-  else if (item.structure) sphere = lib.loci.Loci.getBoundingSphere(lib.structure.Structure.toStructureElementLoci(item.structure));
+  if (slab !== null) return; // the slab decides what is clipped
+  const sphere = sphereOf(item);
   if (!sphere || !(sphere.radius > 0)) return;
   const camera = plugin.canvas3d.camera;
   const need = lib.math.LinearAlgebra.Vec3.distance(camera.state.target, sphere.center) + sphere.radius + 2;
@@ -441,11 +561,10 @@ function canvasProps(key, value) {
 
 export function setBackground(color) { canvasProps('renderer', { backgroundColor: color }); }
 export function setProjection(mode) { canvasProps('camera', { mode }); }
-export function setSlab(percent) { canvasProps('cameraClipping', { radius: percent === null ? 100 : Math.max(1, Math.min(99, percent)), far: true }); }
 
-export function setSpin(on) {
+export function setSpin(on, speed = 0.12) {
   const V = lib.math.LinearAlgebra.Vec3;
-  plugin.canvas3d.setProps({ trackball: { animate: on ? { name: 'spin', params: { speed: 0.12, axis: V.create(0, -1, 0) } } : { name: 'off', params: {} } } });
+  plugin.canvas3d.setProps({ trackball: { animate: on ? { name: 'spin', params: { speed, axis: V.create(0, -1, 0) } } : { name: 'off', params: {} } } });
 }
 
 export function setSoftLighting(on) {
@@ -454,12 +573,67 @@ export function setSoftLighting(on) {
   return true;
 }
 
-export async function saveImage(filename, { scale = 2, transparent = false } = {}) {
+// The 3D view changed size (split with the slices): Mol* resizes its drawing buffer.
+export function resize() { plugin.handleResize?.(); }
+
+export const canvas = () => plugin.canvas3d.webgl.gl.canvas;
+
+// ---------------------------------------------------------------- camera
+export function onCamera(fn) {
+  return plugin.canvas3d.camera.stateChanged.subscribe(() => fn());
+}
+
+const round = (v, d = 3) => Math.round(v * 10 ** d) / 10 ** d;
+export function cameraState() {
+  const c = plugin.canvas3d.camera.getSnapshot();
+  return { position: [...c.position].map((v) => round(v)), target: [...c.target].map((v) => round(v)), up: [...c.up].map((v) => round(v, 5)),
+    radius: round(c.radius), radiusMax: round(c.radiusMax), fov: round(c.fov, 5), mode: c.mode };
+}
+
+export function setCameraState(v, durationMs = 0) {
+  if (!v || !Array.isArray(v.position) || !Array.isArray(v.target)) return false;
+  const V = lib.math.LinearAlgebra.Vec3;
+  const state = { position: V.create(...v.position), target: V.create(...v.target) };
+  if (Array.isArray(v.up)) state.up = V.create(...v.up);
+  for (const k of ['radius', 'radiusMax', 'fov']) if (Number.isFinite(v[k])) state[k] = v[k];
+  plugin.canvas3d.camera.setState(state, durationMs);
+  return true;
+}
+
+// ----------------------------------------------------------------- images
+function screenshotHelper(scale, transparent) {
   const helper = plugin.helpers.viewportScreenshot;
-  const canvas = plugin.canvas3d.webgl.gl.canvas;
-  const width = Math.round(canvas.clientWidth * scale);
-  const height = Math.round(canvas.clientHeight * scale);
+  const c = canvas();
+  const width = Math.round(c.clientWidth * scale);
+  const height = Math.round(c.clientHeight * scale);
   helper.behaviors.values.next({ ...helper.values, transparent, resolution: { name: 'custom', params: { width, height } } });
-  await helper.download(filename);
-  return { width, height };
+  return { helper, width, height };
+}
+
+// PNG of the view at `scale` × the window size; overlay(ctx, width, height, scale) draws on top of it (a colour
+// scale), in which case the image is composed here instead of by Mol*.
+export async function saveImage(filename, { scale = 2, transparent = false, overlay = null } = {}) {
+  const { helper, width, height } = screenshotHelper(scale, transparent);
+  if (!overlay) {
+    await helper.download(filename);
+    return { width, height };
+  }
+  const uri = await helper.getImageDataUri();
+  const img = new Image();
+  await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = () => reject(new Error('Could not compose the image')); img.src = uri; });
+  const out = document.createElement('canvas');
+  out.width = img.width;
+  out.height = img.height;
+  const ctx = out.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  overlay(ctx, out.width, out.height, out.width / Math.max(1, canvas().clientWidth));
+  const blob = await new Promise((resolve) => out.toBlob(resolve, 'image/png'));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  return { width: out.width, height: out.height };
 }

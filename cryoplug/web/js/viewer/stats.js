@@ -58,3 +58,21 @@ export function fmtLevel(value) {
   const text = value.toPrecision(4);
   return text.includes('.') && !text.includes('e') ? text.replace(/0+$/, '').replace(/\.$/, '') : text;
 }
+
+// Volume (Å³) of the voxels above the level, and the protein mass it would hold (1.21 Å³ per dalton).
+export const PROTEIN_A3_PER_DA = 1.21;
+export function enclosed(item, voxelVolume) {
+  const st = item.stats;
+  const n = st.dims[0] * st.dims[1] * st.dims[2];
+  const volume = st.fractionAbove(item.level) * n * voxelVolume;
+  return { volume, kda: volume / PROTEIN_A3_PER_DA / 1000 };
+}
+
+// Level enclosing `kda` kilodaltons of protein (ChimeraX: volume #1 encloseVolume), or null when out of reach.
+export function levelForMass(item, kda, voxelVolume) {
+  const st = item.stats;
+  const n = st.dims[0] * st.dims[1] * st.dims[2];
+  const fraction = (kda * 1000 * PROTEIN_A3_PER_DA) / voxelVolume / n;
+  if (!(fraction > 0) || fraction >= 1) return null;
+  return st.percentile(1 - fraction);
+}

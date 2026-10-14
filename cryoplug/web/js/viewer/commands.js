@@ -1,31 +1,36 @@
 // ChimeraX-like command line. Each command maps onto the same actions as the buttons and the models panel.
 
 export const COMMAND_HELP = [
-  ['level <value>[σ] [#id]', 'Contour level of a map, absolute or in σ (level 0.42 · level 3σ)'],
+  ['level <value>[σ] [#id] · level <mass>kDa', 'Contour level of a map, absolute, in σ or enclosing a protein mass (level 3σ · level 250kDa)'],
   ['style [#id] surface | mesh | transparent', 'Map style'],
-  ['style [#id] cartoon | both | sticks', 'Model style (both = cartoon + side chains)'],
-  ['transparency [#id] <0–100>', 'Transparency of a map surface'],
+  ['style [#id] cartoon | both | sticks | spheres | surface | cartoon+surface', 'Model style (both = cartoon + side chains)'],
+  ['transparency [#id] <0–100>', 'Transparency of a map surface, or of the surface of a model'],
   ['color [#id] <name | #hex>', 'Single colour for a map or a model'],
-  ['color [#id] bychain | byss | byelement | bfactor | rainbow', 'Model colouring'],
+  ['color [#id] bychain | byss | byelement | bfactor | rainbow | hydrophobicity', 'Model colouring'],
   ['color [#id] localres [min max]', 'Colour a map by local resolution (blue best → red worst, in Å)'],
   ['color [#id] variability [min max]', 'Colour a map by the variability of a volume series (blue stable → red variable, in σ)'],
   ['show | hide [#id]', 'Show or hide items (all of them without #id)'],
   ['view', 'Reset the view'],
   ['view #id | /A:45 | /A', 'Centre on an item, a residue or a chain'],
   ['zone [#map] [#model] [radius] | zone off', 'Show the map only near the model (ChimeraX volume zone)'],
-  ['volume [#id] level <v> style <s> color <c> transparency <t>', 'Several map settings at once, ChimeraX syntax'],
+  ['detail [#id] <voxels> | full | default', 'How finely a map is shown: largest side in voxels (fewer: faster), or the original grid'],
+  ['lowpass [#id] <Å> | off', 'Show a map low-pass filtered to a resolution (flexible regions, weak density)'],
+  ['volume [#id] level <v> style <s> color <c> transparency <t>', 'Several map settings at once, ChimeraX syntax (also step <n>, sdLevel, rmsLevel, encloseVolume)'],
   ['volume zone #map nearAtoms #model range <r>', 'Same as zone, ChimeraX syntax'],
   ['bg black | white | gray | <colour>', 'Background (also: set bgColor white)'],
-  ['slab <1–99> | slab off', 'Keep only a slab around the centre, Coot-like (also: clip off)'],
+  ['slab <1–99> | slab <Å>A | slab off', 'Keep only a slab around the centre, Coot-like: % of the thickness shown, or Å (slab 12A); the cut density is drawn filled'],
   ['spin [off]', 'Rotate continuously'],
   ['camera ortho | persp', 'Projection'],
   ['lighting soft | simple', 'Ambient occlusion on or off'],
-  ['slices [#id] [off]', 'Orthogonal 2D slices of a map'],
+  ['slices [#id] [big | small | off]', 'Orthogonal 2D slices of a map, small beside the view or large in a split view'],
   ['fullres [#id] [off]', 'Full-resolution map instead of the binned preview'],
   ['play [#id] [volumes per second]', 'Play a volume series (cryoDRGN clusters, trajectory, 3D variability frames)'],
   ['stop', 'Stop playing (also: pause; ChimeraX: vseries play #1 · vseries stop)'],
   ['frame [#id] <n> | next | prev | first | last', 'Show one volume of a series'],
-  ['save [name.png] [scale <n>] [transparent]', 'Save an image of the view'],
+  ['record series | spin [seconds] | stop', 'Record a video of the view: one pass of the series, a full turn, or until stopped (also: movie record)'],
+  ['distance | distance clear', 'Shift + click two atoms to measure their distance; clear removes the measurements'],
+  ['save [name.png] [scale <n>] [transparent]', 'Save an image of the view (with the colour scale of a coloured map)'],
+  ['link', 'Copy a link to this view (items, settings, camera)'],
   ['open', 'Open other maps or models of the project'],
   ['close #id | close all', 'Remove items'],
 ];
@@ -33,9 +38,14 @@ export const COMMAND_HELP = [
 const MODEL_COLOR_WORDS = {
   bychain: 'chain', chain: 'chain', byss: 'ss', bysecondary: 'ss', ss: 'ss', byelement: 'element', byhetero: 'element',
   element: 'element', byatom: 'element', bfactor: 'bfactor', byattribute: 'bfactor', rainbow: 'rainbow', bypolymer: 'chain',
+  hydrophobicity: 'hydrophobicity', byhydrophobicity: 'hydrophobicity', hydrophobic: 'hydrophobicity',
 };
 const MAP_STYLE_WORDS = { surface: 'surface', solid: 'surface', mesh: 'mesh', wire: 'mesh', wireframe: 'mesh', transparent: 'transparent' };
-const MODEL_STYLE_WORDS = { cartoon: 'cartoon', ribbon: 'cartoon', both: 'both', sidechains: 'both', sticks: 'sticks', stick: 'sticks', atoms: 'sticks' };
+const MODEL_STYLE_WORDS = {
+  cartoon: 'cartoon', ribbon: 'cartoon', both: 'both', sidechains: 'both', sticks: 'sticks', stick: 'sticks', atoms: 'sticks',
+  spheres: 'spheres', sphere: 'spheres', spacefill: 'spheres', surface: 'surface', surf: 'surface',
+  'cartoon+surface': 'cartoon-surface', 'cartoon-surface': 'cartoon-surface', ribbonsurface: 'cartoon-surface',
+};
 
 let colorCtx = null;
 export function parseColor(word) {
@@ -50,9 +60,11 @@ export function parseColor(word) {
 }
 
 function parseLevel(words) {
-  const text = words.join('');
+  const text = words.join('').replace(/^mass/i, '');
+  const mass = /^((?:\d+\.?\d*|\.\d+))(kda|kd|mda)$/i.exec(text);
+  if (mass) return { mass: Number(mass[1]) * (/^mda$/i.test(mass[2]) ? 1000 : 1) };
   const m = /^(-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)(σ|s|sd|sigma|rms)?$/i.exec(text);
-  if (!m) throw new Error(`Expected a level such as 0.42 or 3σ, got '${words.join(' ')}'`);
+  if (!m) throw new Error(`Expected a level such as 0.42, 3σ or 250kDa, got '${words.join(' ')}'`);
   return { value: Number(m[1]), sigma: !!m[2] };
 }
 
@@ -97,9 +109,31 @@ export function createCommands(ctl) {
   };
 
   function setLevels(list, words) {
-    const { value, sigma } = parseLevel(words);
+    const { value, sigma, mass } = parseLevel(words);
+    if (mass) {
+      const missed = list.filter((m) => !ctl.setLevelByMass(m, mass));
+      if (missed.length) throw new Error(`${ids(missed)}: ${mass} kDa is more than the box holds`);
+      return `Level of ${ids(list)}: encloses ${mass} kDa of protein`;
+    }
     list.forEach((m) => ctl.setLevel(m, sigma ? m.stats.mean + value * m.stats.sigma : value));
     return `Level of ${ids(list)} set to ${words.join('')}`;
+  }
+
+  // ChimeraX conventions: sdLevel in SD from zero, rmsLevel in RMS from zero, encloseVolume in Å³
+  function chimeraLevel(list, key, value) {
+    const v = Number(value);
+    if (!Number.isFinite(v)) throw new Error(`${key} needs a number`);
+    if (key === 'enclosevolume') return setLevels(list, [`${(v / 1.21 / 1000).toFixed(3)}kDa`]);
+    list.forEach((m) => ctl.setLevel(m, key === 'sdlevel' ? v * m.stats.sigma : v * Math.hypot(m.stats.mean, m.stats.sigma)));
+    return `${key} ${v}`;
+  }
+
+  function detail(list, word) {
+    const w = (word || '').toLowerCase();
+    const box = w === 'full' || w === '0' ? 0 : w === 'default' || w === 'preview' ? null : Number(w);
+    if (box !== null && box !== 0 && !(box >= 32 && box <= 2048)) throw new Error('detail [#id] <voxels per side, e.g. 128 or 300> | full | default');
+    list.forEach((m) => ctl.setDetail(m, box)); // reported once reloaded
+    return null;
   }
 
   function colorBySource(list, rest, kind) {
@@ -180,17 +214,29 @@ export function createCommands(ctl) {
     },
     level: ({ items, rest }) => setLevels(maps(items), rest),
     style: ({ items, rest }) => {
-      const word = (rest[0] || '').toLowerCase();
-      if (MAP_STYLE_WORDS[word]) { const ms = maps(items); ms.forEach((m) => ctl.setStyle(m, MAP_STYLE_WORDS[word])); return `Style of ${ids(ms)}: ${MAP_STYLE_WORDS[word]}`; }
+      const word = rest.join('').toLowerCase();
+      const targets = items.length ? items : [ctl.active()].filter(Boolean);
+      // 'surface' is a style of both: the items named (or the active one) decide
+      const forModels = targets.length ? targets.every((i) => i.kind === 'model') : !MAP_STYLE_WORDS[word];
+      if (MAP_STYLE_WORDS[word] && !forModels) { const ms = maps(items); ms.forEach((m) => ctl.setStyle(m, MAP_STYLE_WORDS[word])); return `Style of ${ids(ms)}: ${MAP_STYLE_WORDS[word]}`; }
       if (MODEL_STYLE_WORDS[word]) { const ms = models(items); ms.forEach((m) => ctl.setDisplay(m, MODEL_STYLE_WORDS[word])); return `Style of ${ids(ms)}: ${MODEL_STYLE_WORDS[word]}`; }
-      throw new Error('Style: surface, mesh or transparent for maps; cartoon, both or sticks for models');
+      throw new Error('Style: surface, mesh or transparent for maps; cartoon, both, sticks, spheres, surface or cartoon+surface for models');
     },
     transparency: ({ items, rest }) => {
       const t = Number(rest[0]);
       if (!(t >= 0 && t <= 100)) throw new Error('Transparency is a percentage, 0–100');
-      const ms = maps(items);
+      const targets = items.length ? items : [ctl.active()].filter(Boolean);
+      const surfaces = targets.filter((i) => i.kind === 'model');
+      surfaces.forEach((m) => ctl.setSurfaceOpacity(m, 1 - t / 100, { show: true }));
+      const ms = targets.some((i) => i.kind === 'map') || !targets.length ? maps(items) : [];
       ms.forEach((m) => ctl.setTransparency(m, t));
-      return `Transparency of ${ids(ms)}: ${t} %`;
+      return `Transparency of ${ids([...ms, ...surfaces])}: ${t} %`;
+    },
+    surface: ({ items, rest }) => {
+      const ms = models(items);
+      const off = rest[0] && /^(hide|off)$/i.test(rest[0]);
+      ms.forEach((m) => ctl.setDisplay(m, off ? 'cartoon' : 'surface'));
+      return off ? `Surface hidden for ${ids(ms)}` : `Surface of ${ids(ms)}`;
     },
     color: ({ items, rest }) => {
       if (!rest[0]) throw new Error('Which colour?');
@@ -219,7 +265,13 @@ export function createCommands(ctl) {
           done.push(`style ${s}`);
         } else if (key === 'color') { const c = parseColor(value); ms.forEach((m) => ctl.setColor(m, c)); done.push(`color ${value}`); }
         else if (key === 'transparency') { ms.forEach((m) => ctl.setTransparency(m, Number(value))); done.push(`transparency ${value}`); }
-        else throw new Error(`Unknown volume option '${rest[k]}' (level, style, color, transparency, show, hide, zone)`);
+        else if (key === 'sdlevel' || key === 'rmslevel' || key === 'enclosevolume') done.push(chimeraLevel(ms, key, value));
+        else if (key === 'step') {
+          const n = Number(value);
+          if (!(n >= 1 && n <= 16)) throw new Error('step: binning of the display, 1 (full) to 16');
+          ms.forEach((m) => ctl.setDetail(m, n === 1 ? 0 : { step: n }));
+          done.push(`step ${n}`);
+        } else throw new Error(`Unknown volume option '${rest[k]}' (level, style, color, transparency, step, sdLevel, rmsLevel, encloseVolume, show, hide, zone)`);
       }
       if (!done.length) throw new Error('Nothing to do: volume #1 level 0.5 style mesh');
       return `${ids(ms)}: ${done.join(' · ')}`;
@@ -232,10 +284,16 @@ export function createCommands(ctl) {
     },
     slab: ({ rest }) => {
       if (!rest[0] || /^off$/i.test(rest[0])) { ctl.setSlab(null); return 'Slab off'; }
-      const v = Number(rest[0]);
-      if (!(v >= 1 && v <= 99)) throw new Error('Slab: 1–99 (percent of the scene kept around the centre) or off');
+      const m = /^(\d+(?:\.\d+)?)(a|å|angstroms?)?$/i.exec(rest.join(''));
+      const v = m ? Number(m[1]) : NaN;
+      if (m?.[2]) {
+        if (!(v >= 1 && v <= 1000)) throw new Error('Slab thickness in Å: 1–1000');
+        ctl.setSlab({ angstrom: v });
+        return `Slab: ${v} Å`;
+      }
+      if (!(v >= 1 && v <= 99)) throw new Error('Slab: 1–99 (percent of the thickness shown, kept around the centre), a thickness such as 12A, or off');
       ctl.setSlab(v);
-      return `Slab: ${v} %`;
+      return `Slab: ${v} % (${ctl.slabThickness().toFixed(0)} Å)`;
     },
     clip: ({ rest }) => { if (rest[0] && /^off$/i.test(rest[0])) { ctl.setSlab(null); return 'Clipping off'; } throw new Error('Use slab <1–99> for a slab, clip off to remove it'); },
     spin: ({ rest }) => { const on = onOff(rest[0], ctl.state().spin); ctl.setSpin(on); return on ? 'Spinning' : 'Spin off'; },
@@ -252,11 +310,33 @@ export function createCommands(ctl) {
       throw new Error('lighting soft or lighting simple');
     },
     slices: ({ items, rest }) => {
-      if (rest[0] && /^off$/i.test(rest[0])) { ctl.hideSlices(); return 'Slices hidden'; }
+      const w = (rest[0] || '').toLowerCase();
+      if (w === 'off' || w === 'hide') { ctl.hideSlices(); return 'Slices hidden'; }
       const m = maps(items)[0];
-      ctl.showSlices(m);
+      ctl.showSlices(m, { enlarge: w === 'big' || w === 'large' || w === 'split' ? true : w === 'small' ? false : undefined });
       return `Slices of #${m.id}`;
     },
+    detail: ({ items, rest }) => detail(maps(items), rest[0]),
+    lowpass: ({ items, rest }) => {
+      const w = (rest[0] || '').toLowerCase().replace(/å|a$/i, '');
+      const d = w === 'off' || w === 'none' || w === '0' ? 0 : Number(w);
+      if (!(d === 0 || (d >= 2 && d <= 60))) throw new Error('lowpass [#id] <resolution in Å, 2–60> | off');
+      maps(items).forEach((m) => ctl.setLowpass(m, d)); // reported once reloaded
+      return null;
+    },
+    record: async ({ rest }) => {
+      const w = (rest[0] || '').toLowerCase();
+      if (w === 'stop' || w === 'end' || w === 'encode') { ctl.stopRecording(); return null; }
+      const seconds = Number(rest[1] ?? rest[0]);
+      const kind = w === 'series' || w === 'play' ? 'series' : w === 'spin' || w === 'turn' ? 'spin' : 'free';
+      await ctl.record(kind, Number.isFinite(seconds) && seconds > 0 ? seconds : undefined);
+      return null;
+    },
+    distance: async ({ rest }) => {
+      if (rest[0] && /^(clear|off|delete|remove)$/i.test(rest[0])) { const n = await ctl.clearDistances(); return n ? `Removed ${n} measurement${n > 1 ? 's' : ''}` : 'No measurement to remove'; }
+      return 'Shift + click two atoms to measure their distance (distance clear to remove them)';
+    },
+    link: async () => ctl.copyLink(),
     fullres: ({ items, rest }) => {
       const on = rest[0] ? onOff(rest[0]) : true;
       const ms = maps(items);
@@ -320,6 +400,10 @@ export function createCommands(ctl) {
     return handlers.play({ items: list, rest: [] });
   };
   handlers.ribbon = handlers.cartoon;
+  handlers.movie = ({ items, rest }) => handlers.record({ items, rest: /^record$/i.test(rest[0] || '') ? rest.slice(1) : rest });
+  handlers.filter = handlers.lowpass;
+  handlers.measure = handlers.distance;
+  handlers.spheres = ({ items }) => { const ms = models(items); ms.forEach((m) => ctl.setDisplay(m, 'spheres')); return `Spheres for ${ids(ms)}`; };
   handlers.windowsize = () => 'The view follows the window size';
 
   async function run(line) {
