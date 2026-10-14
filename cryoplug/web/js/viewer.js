@@ -4,7 +4,7 @@
 import { api } from './api.js';
 import { clear, h, icon, modal, popupMenu, showError, toast } from './ui.js';
 import { COMMAND_HELP, createCommands } from './viewer/commands.js';
-import { binning, COARSE_BOX, DEFAULT_BOX, expectedSeconds, fetchMap, fmtBytes, fmtDims, mapInfo, seriesBox } from './viewer/mapdata.js';
+import { binning, COARSE_BOX, DEFAULT_BOX, expectedSeconds, fetchMap, fmtBytes, fmtDims, mapInfo, SERIES_BOXES, seriesBox } from './viewer/mapdata.js';
 import { COLOR_KINDS, colorLegend, createPanel, hex } from './viewer/panel.js';
 import * as scene from './viewer/scene.js';
 import { createSeriesPlayer, initSeries, SPEEDS } from './viewer/series.js';
@@ -116,8 +116,8 @@ let hashTimer = 0;
 const syncHashSoon = () => { clearTimeout(hashTimer); hashTimer = setTimeout(syncHash, 500); };
 
 // URL of a map as the viewer loads it: binned to the item's detail, filtered, 16-bit (zone: only near its model).
-function mapUrl(item, { path = item.path, box = item.box, encoding = 'i16' } = {}) {
-  const opts = { encoding, lowpass: item.lowpass || 0 };
+function mapUrl(item, { path = item.path, box = item.box, lowpass = item.lowpass, encoding = 'i16' } = {}) {
+  const opts = { encoding, lowpass: lowpass || 0 };
   const model = !item.series && item.zone && byId(item.zone.model);
   if (model) return api.zoneUrl(V.project, path, model.path, item.zone.radius, box, opts);
   return api.previewUrl(V.project, path, box, opts);
@@ -128,13 +128,21 @@ async function loadMapData(item, opts = {}) {
   return scene.loadVolume(bytes, item.label);
 }
 
-function setVolume(item, r, { coarse = false } = {}) {
+// settings: those the map was fetched with (the item's may have changed while it downloaded).
+function setVolume(item, r, { coarse = false, settings = shownSettings(item) } = {}) {
   item.refs = { data: r.dataRef, volume: r.volumeRef, repr: null };
   item.volume = r.volume;
   item.stats = mapStatistics(r.volume);
   item.coarse = coarse;
-  item.full = !coarse && (item.info ? binning(item.info, item.box) === 1 : item.box === 0);
+  item.shown = settings;
+  item.full = !coarse && (item.info ? binning(item.info, settings.box) === 1 : settings.box === 0);
 }
+
+// Settings of the map on screen: put back when loading other settings fails.
+const shownSettings = (item) => ({ box: item.box, lowpass: item.lowpass, zone: item.zone });
+
+// A series is shown 64-256 voxels per side: every volume is held in memory.
+const seriesLimit = (box) => clamp(box > 0 ? box : SERIES_BOXES[SERIES_BOXES.length - 1], SERIES_BOXES[0], SERIES_BOXES[SERIES_BOXES.length - 1]);
 
 // A quick 8-bit look at 96 voxels first when the map asked for would take a while to arrive.
 function previewFirst(item) {
@@ -146,9 +154,11 @@ function previewFirst(item) {
 }
 
 // Level after the map changed. keep: 'fraction' (another binning or filter changes the values: same volume enclosed),
-// 'absolute' (a zone only hides voxels). A level never set by the user follows the map's own default.
+// 'absolute' (a zone only hides voxels), 'refine' (the finer copy after a quick look: the level of the link, or the
+// one set meanwhile, as it is). A level never set by the user follows the map's own default.
 function keepLevel(item, keep, fraction) {
   if (item.levelAuto && keep !== 'absolute') item.level = defaultLevel(item);
+  else if (keep === 'refine' && Number.isFinite(item.linkLevel)) item.level = item.linkLevel;
   else if (keep === 'fraction' && fraction > 0 && fraction < 1) item.level = item.stats.percentile(1 - fraction);
   item.level = clamp(item.level, item.stats.min, item.stats.max);
 }
@@ -181,13 +191,19 @@ async function addMap(spec, withModel) {
   const item = {
     kind: 'map', otype, label: spec.label || spec.path.split('/').pop(), path: frames ? frames[0] : spec.path, visible: spec.visible !== false,
     expanded: true, zone: null, refs: {}, lowpass: Number(spec.lowpass) || 0, levelAuto: !Number.isFinite(spec.level),
+    linkLevel: Number.isFinite(spec.level) ? spec.level : null, // the level of a link, until the user sets another
     opacity: Number.isFinite(spec.opacity) ? clamp(spec.opacity, 0.05, 1) : 0.45,
     color: Number.isInteger(spec.color) ? spec.color : otype === 'mask' ? MASK_COLOR : MAP_COLORS[V.mapColors++ % MAP_COLORS.length],
     style: MAP_STYLES.includes(spec.style) ? spec.style
       : otype === 'mask' ? 'transparent' : (withModel || V.items.some((i) => i.kind === 'model') ? 'mesh' : 'surface'),
   };
-  if (frames) initSeries(item, frames, spec.labels);
-  item.box = Number.isFinite(spec.box) ? spec.box : frames ? defaultBox(item) : V.full ? 0 : DEFAULT_BOX;
+  if (frames) {
+    item.box = seriesLimit(Number.isFinite(spec.box) ? spec.box : seriesBox(frames.length));
+    initSeries(item, frames, spec.labels, null, { box: item.box, lowpass: item.lowpass });
+    item.shown = shownSettings(item);
+  } else {
+    item.box = Number.isFinite(spec.box) ? spec.box : V.full ? 0 : DEFAULT_BOX;
+  }
   try { item.info = await mapInfo(V.project, item.path); } catch { item.info = null; } // detail choices: optional
   const coarse = !frames && previewFirst(item);
   let fine = null; // the detail asked for, downloading while the quick look is shown
@@ -219,7 +235,7 @@ async function addMap(spec, withModel) {
       if (!s.closed) log(`#${item.id}: ${s.loaded} of ${s.frames.length} volumes ready to play${s.failed ? ` (${s.failed} could not be read)` : ''}`);
     });
   }
-  if (fine) reloadMap(item, { keep: 'fraction', text: fine.text, bytes: fine.bytes }).catch((err) => fail(err, `${item.label}: `));
+  if (fine) reloadMap(item, { keep: 'refine', text: fine.text, bytes: fine.bytes }).catch((err) => fail(err, `${item.label}: `));
   if (spec.colorBy) {
     const kind = spec.colorKind in COLOR_KINDS ? spec.colorKind : 'locres';
     const source = V.sources.find((s) => s.path === spec.colorBy)
@@ -257,23 +273,27 @@ function colorKindOf(o) {
 }
 
 // Colour a map by the values of another ({ path, label, range, kind, unit }), or back to a single colour (null).
+// The last request wins: false when a later one (or closing the map) made this one moot.
 async function applyColorBy(item, source) {
-  const old = item.colorBy;
+  const token = (item.colorToken || 0) + 1;
+  item.colorToken = token;
+  let next = null;
   if (source) {
     loading(`Loading ${source.label}…`);
     try {
       const bytes = await fetchMap(api.previewUrl(V.project, source.path, DEFAULT_BOX, { encoding: 'i16' }));
       const r = await scene.loadVolume(bytes, source.label);
+      if (token !== item.colorToken || !V.items.includes(item)) { await scene.remove(r.dataRef); return false; }
       const [min, max] = source.range && source.range[1] > source.range[0] ? source.range : scene.colorRange(r.volume);
       const kind = source.kind || 'locres';
-      item.colorBy = { path: source.path, label: source.label, refs: { data: r.dataRef, volume: r.volumeRef }, volume: r.volume, min, max,
+      next = { path: source.path, label: source.label, refs: { data: r.dataRef, volume: r.volumeRef }, volume: r.volume, min, max,
         kind, unit: source.unit || COLOR_KINDS[kind][1] };
     } finally {
       loaded();
     }
-  } else {
-    item.colorBy = null;
   }
+  const old = item.colorBy;
+  item.colorBy = next;
   if (item.series) await player.redrawAll(item);
   else await scene.showMap(item);
   if (old) await scene.remove(old.refs.data);
@@ -281,6 +301,7 @@ async function applyColorBy(item, source) {
   slices.refresh(item);
   refreshLegend();
   syncHash();
+  return true;
 }
 
 async function addModel(spec, withMap) {
@@ -340,36 +361,48 @@ async function openItems(specs, { view = null } = {}) {
 }
 
 // Load a map again (another detail, filter or zone; bytes: a download already started). The previous one stays
-// shown until the new one is there. One reload at a time per map, the last settings asked for winning.
+// shown until the new one is there. One reload at a time per map: requests made meanwhile are merged into the next
+// one (the last settings win) and settle with it; a failed reload puts back the settings of the map shown.
 function reloadMap(item, opts = {}) {
-  item.reloadNext = opts;
-  if (!item.reloading) {
-    item.reloading = (async () => {
+  return new Promise((resolve, reject) => {
+    item.reloadNext = { opts, waiting: [...(item.reloadNext?.waiting || []), { resolve, reject }] };
+    if (!item.reloading) item.reloading = runReloads(item);
+  });
+}
+
+async function runReloads(item) {
+  try {
+    while (item.reloadNext) {
+      const { opts, waiting } = item.reloadNext;
+      item.reloadNext = null;
+      if (!V.items.includes(item)) { waiting.forEach((w) => w.resolve()); continue; } // closed meanwhile
       try {
-        while (item.reloadNext) {
-          const next = item.reloadNext;
-          item.reloadNext = null;
-          if (!V.items.includes(item)) return; // closed meanwhile
-          await (item.series ? reloadSeriesOnce(item) : reloadMapOnce(item, next));
+        await (item.series ? reloadSeriesOnce(item) : reloadMapOnce(item, opts));
+        waiting.forEach((w) => w.resolve());
+      } catch (err) {
+        if (item.shown && !item.reloadNext) { // nothing else asked meanwhile: the settings of what is on screen
+          Object.assign(item, item.shown);
+          panel.renderItem(item);
+          syncHash();
         }
-      } finally {
-        item.reloading = null;
-        item.reloadNext = null;
+        waiting.forEach((w) => w.reject(err));
       }
-    })();
+    }
+  } finally {
+    item.reloading = null;
   }
-  return item.reloading;
 }
 
 async function reloadMapOnce(item, { keep = 'fraction', text = '', bytes = null } = {}) {
   const what = text || `Loading ${item.label}${item.zone ? ` (zone ${item.zone.radius} Å)` : ''}`;
+  const settings = shownSettings(item);
   loading(`${what}…`);
   try {
     const r = bytes ? await scene.loadVolume(await bytes, item.label) : await loadMapData(item, { onProgress: progress(what) });
     if (!V.items.includes(item)) { await scene.remove(r.dataRef); return; } // closed meanwhile
     const old = item.refs.data;
     const fraction = item.stats ? item.stats.fractionAbove(item.level) : 0; // the level may have moved meanwhile
-    setVolume(item, r);
+    setVolume(item, r, { settings });
     keepLevel(item, keep, fraction);
     await scene.showMap(item);
     await scene.remove(old);
@@ -389,6 +422,8 @@ async function reloadSeriesOnce(item) {
   } finally {
     loaded();
   }
+  if (!V.items.includes(item)) return;
+  item.shown = shownSettings(item);
   panel.renderItem(item);
   playerBar.refresh();
   if (slices.item === item) slices.show(item);
@@ -614,8 +649,10 @@ const ctl = {
     if (item.kind === 'map') { panel.refreshLevel(item); slices.refresh(item); }
   },
   setLevel(item, value) {
+    if (!Number.isFinite(value)) return;
     item.level = clamp(value, item.stats.min, item.stats.max);
     item.levelAuto = false;
+    item.linkLevel = null;
     redraw(item);
     panel.refreshLevel(item);
     slices.refresh(item);
@@ -673,8 +710,11 @@ const ctl = {
       return;
     }
     applyColorBy(item, source)
-      .then(() => log(source ? `#${item.id} coloured by ${source.label} (${fmtScale(item.colorBy.min, item.colorBy.unit)}–${fmtScale(item.colorBy.max, item.colorBy.unit)} ${item.colorBy.unit})`
-        : `#${item.id}: single colour`))
+      .then((applied) => {
+        if (!applied) return; // a later choice replaced it
+        log(item.colorBy ? `#${item.id} coloured by ${item.colorBy.label} (${fmtScale(item.colorBy.min, item.colorBy.unit)}–${fmtScale(item.colorBy.max, item.colorBy.unit)} ${item.colorBy.unit})`
+          : `#${item.id}: single colour`);
+      })
       .catch((err) => fail(err, 'Colouring: '));
   },
   setColorRange(item, min, max) {
@@ -695,6 +735,10 @@ const ctl = {
     let want = box;
     if (want && typeof want === 'object') want = item.info ? Math.ceil(Math.max(...item.info.box) / want.step) : DEFAULT_BOX;
     if (want === null || want === undefined) want = defaultBox(item);
+    if (item.series) {
+      if (!(want > 0)) fail(`A volume series is shown at most ${seriesLimit(0)} voxels per side (every volume is held in memory): extract one volume for its full resolution`);
+      want = seriesLimit(want);
+    }
     const same = item.info && binning(item.info, want) === binning(item.info, item.box) && !item.coarse;
     item.box = want;
     if (same) { panel.renderItem(item); syncHash(); return; }
@@ -716,8 +760,9 @@ const ctl = {
     if (item.series) { fail('Zones are not available for a volume series'); return; }
     item.zone = zone;
     reloadMap(item, { keep: 'absolute' }).then(() => log(zone ? `Zone: #${item.id} within ${zone.radius} Å of #${zone.model}` : `Zone off for #${item.id}`))
-      .catch((err) => { item.zone = null; fail(err, 'Zone: '); panel.renderItem(item); });
+      .catch((err) => fail(err, 'Zone: ')); // the settings of the map shown are put back
   },
+  describeDetail: (item) => describeDetail(item),
   focus: (item) => { scene.focusItem(item); scene.reapplySlab(400); },
   goTo(model, text) {
     const error = goTo(model, text);
@@ -1162,7 +1207,8 @@ async function main() {
   });
   toolbar = buildToolbar();
   player = createSeriesPlayer({
-    fetch: (item, frame) => fetchMap(mapUrl(item, { path: frame.path })),
+    fetch: (item, frame, settings) => fetchMap(mapUrl(item, { path: frame.path, box: settings.box, lowpass: settings.lowpass })),
+    settings: (item) => ({ box: item.box, lowpass: item.lowpass }),
     onFrame: frameShown,
     onLoad: (item) => { playerBar.refresh(); panel.refreshLevel(item); },
     onError: (err, what = '') => fail(err, what),

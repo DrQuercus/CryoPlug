@@ -268,8 +268,8 @@ explorateur, nettoyage du junk, convergence, paysage des états et validation ; 
 4. **Extract volume from series** (ou *Extract map…* dans l'explorateur) : la carte d'un état pour y ajuster le modèle.
 
 **Lire une série dans le visualiseur 3D.** Le bouton *Play in 3D* d'une sortie *Volume series* charge les volumes
-(aperçus de 80 à 128 voxels de côté selon leur nombre ; *Detail* dans la carte de la série en choisit d'autres, avec
-la mémoire nécessaire) trois par trois, celui qu'on demande en premier, puis les joue : barre de lecture sur la vue
+(aperçus de 80 à 128 voxels de côté selon leur nombre ; *Detail* dans la carte de la série en choisit d'autres, de 64
+à 256, avec la mémoire nécessaire : tous les volumes restent en mémoire) trois par trois, celui qu'on demande en premier, puis les joue : barre de lecture sur la vue
 (lecture/pause, volume précédent / suivant, curseur, vitesse, boucle ou aller-retour), touches **Espace**, **,** et
 **.** ; commandes `play 10`, `stop`, `frame 5`, `frame next`, ou à la ChimeraX `vseries play #1 direction oscillate`.
 La piste du curseur montre un bloc par volume, clair une fois chargé : on peut faire glisser le curseur pendant le

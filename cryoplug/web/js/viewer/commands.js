@@ -62,7 +62,11 @@ export function parseColor(word) {
 function parseLevel(words) {
   const text = words.join('').replace(/^mass/i, '');
   const mass = /^((?:\d+\.?\d*|\.\d+))(kda|kd|mda)$/i.exec(text);
-  if (mass) return { mass: Number(mass[1]) * (/^mda$/i.test(mass[2]) ? 1000 : 1) };
+  if (mass) {
+    const kda = Number(mass[1]) * (/^mda$/i.test(mass[2]) ? 1000 : 1);
+    if (!(kda > 0)) throw new Error('The mass enclosed must be more than 0 kDa');
+    return { mass: kda };
+  }
   const m = /^(-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)(σ|s|sd|sigma|rms)?$/i.exec(text);
   if (!m) throw new Error(`Expected a level such as 0.42, 3σ or 250kDa, got '${words.join(' ')}'`);
   return { value: Number(m[1]), sigma: !!m[2] };
@@ -110,7 +114,7 @@ export function createCommands(ctl) {
 
   function setLevels(list, words) {
     const { value, sigma, mass } = parseLevel(words);
-    if (mass) {
+    if (mass !== undefined) {
       const missed = list.filter((m) => !ctl.setLevelByMass(m, mass));
       if (missed.length) throw new Error(`${ids(missed)}: ${mass} kDa is more than the box holds`);
       return `Level of ${ids(list)}: encloses ${mass} kDa of protein`;
@@ -130,6 +134,7 @@ export function createCommands(ctl) {
 
   function detail(list, word) {
     const w = (word || '').toLowerCase();
+    if (!w) return list.map((m) => `#${m.id}: ${ctl.describeDetail(m)}`).join(' · '); // what is shown now
     const box = w === 'full' || w === '0' ? 0 : w === 'default' || w === 'preview' ? null : Number(w);
     if (box !== null && box !== 0 && !(box >= 32 && box <= 2048)) throw new Error('detail [#id] <voxels per side, e.g. 128 or 300> | full | default');
     list.forEach((m) => ctl.setDetail(m, box)); // reported once reloaded
@@ -216,20 +221,27 @@ export function createCommands(ctl) {
     style: ({ items, rest }) => {
       const word = rest.join('').toLowerCase();
       const targets = items.length ? items : [ctl.active()].filter(Boolean);
-      // 'surface' is a style of both: the items named (or the active one) decide
+      // 'surface' is a style of both: the items named (or the active one) decide; a style only maps have is for maps
       const forModels = targets.length ? targets.every((i) => i.kind === 'model') : !MAP_STYLE_WORDS[word];
-      if (MAP_STYLE_WORDS[word] && !forModels) { const ms = maps(items); ms.forEach((m) => ctl.setStyle(m, MAP_STYLE_WORDS[word])); return `Style of ${ids(ms)}: ${MAP_STYLE_WORDS[word]}`; }
+      if (MAP_STYLE_WORDS[word] && (!forModels || (!items.length && !MODEL_STYLE_WORDS[word]))) {
+        const ms = maps(items);
+        ms.forEach((m) => ctl.setStyle(m, MAP_STYLE_WORDS[word]));
+        return `Style of ${ids(ms)}: ${MAP_STYLE_WORDS[word]}`;
+      }
       if (MODEL_STYLE_WORDS[word]) { const ms = models(items); ms.forEach((m) => ctl.setDisplay(m, MODEL_STYLE_WORDS[word])); return `Style of ${ids(ms)}: ${MODEL_STYLE_WORDS[word]}`; }
       throw new Error('Style: surface, mesh or transparent for maps; cartoon, both, sticks, spheres, surface or cartoon+surface for models');
     },
     transparency: ({ items, rest }) => {
       const t = Number(rest[0]);
       if (!(t >= 0 && t <= 100)) throw new Error('Transparency is a percentage, 0–100');
-      const targets = items.length ? items : [ctl.active()].filter(Boolean);
-      const surfaces = targets.filter((i) => i.kind === 'model');
+      // models named get a surface if they have none; without #id, the active model only if it shows one, else the maps
+      const active = ctl.active();
+      const surfaces = items.length ? items.filter((i) => i.kind === 'model')
+        : active?.kind === 'model' && /surface/.test(active.display) ? [active] : [];
       surfaces.forEach((m) => ctl.setSurfaceOpacity(m, 1 - t / 100, { show: true }));
-      const ms = targets.some((i) => i.kind === 'map') || !targets.length ? maps(items) : [];
+      const ms = items.length ? items.filter((i) => i.kind === 'map') : surfaces.length ? [] : maps(items);
       ms.forEach((m) => ctl.setTransparency(m, t));
+      if (!ms.length && !surfaces.length) throw new Error('Nothing to make transparent');
       return `Transparency of ${ids([...ms, ...surfaces])}: ${t} %`;
     },
     surface: ({ items, rest }) => {

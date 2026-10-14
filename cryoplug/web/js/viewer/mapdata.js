@@ -61,9 +61,12 @@ export const lowpassChoices = (voxel) => LOWPASS.filter((d) => !d || d > 2 * vox
 export const expectedSeconds = (bytes) => bytes / (speed || DEFAULT_SPEED);
 
 // Download a map; onProgress(received, total) while it arrives. Returns the bytes of an MRC file Mol* can read.
+const NETWORK_ERROR = 'The map could not be downloaded: connection to the server lost or blocked';
+const network = (promise) => promise.catch(() => { throw new Error(NETWORK_ERROR); });
+
 export async function fetchMap(url, onProgress) {
   const started = performance.now();
-  const res = await fetch(url);
+  const res = await network(fetch(url));
   if (!res.ok) {
     let detail = res.statusText;
     try { detail = (await res.json()).detail || detail; } catch { /* not JSON */ }
@@ -76,7 +79,7 @@ export async function fetchMap(url, onProgress) {
     let whole = new Uint8Array(total);
     let got = 0;
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await network(reader.read());
       if (done) break;
       if (got + value.length > whole.length) { // a server that announced less than it sends
         const grown = new Uint8Array(Math.max(whole.length * 2, got + value.length));
@@ -89,7 +92,7 @@ export async function fetchMap(url, onProgress) {
     }
     buffer = got === whole.length ? whole.buffer : whole.slice(0, got).buffer;
   } else {
-    buffer = await res.arrayBuffer();
+    buffer = await network(res.arrayBuffer());
   }
   const seconds = (performance.now() - started) / 1000;
   if (buffer.byteLength > 1.5e6 && seconds > 0.02) {

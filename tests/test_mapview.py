@@ -65,6 +65,19 @@ def test_view_lowpass_removes_fine_detail_only():
     assert view_lowpass(vol, 1.5) is vol  # finer than the grid: unchanged
 
 
+def test_view_lowpass_matches_the_fourier_filter_and_bins_large_grids(monkeypatch):
+    from cryoplug import mrc
+    rng = np.random.default_rng(5)
+    vol = MapVolume(data=rng.normal(0, 1, (40, 36, 32)).astype(np.float32), voxel=np.array([1.2, 1.2, 1.2]))
+    reference = mrc.fourier_filter(vol, lowpass=8.0 * 1.15, edge_width=0.3 / 8.0)  # the same filter, all in one go
+    assert np.allclose(view_lowpass(vol, 8.0).data, reference, atol=1e-4 * np.abs(reference).max())
+    # a grid too large for the memory budget is binned first while it still samples the result well
+    monkeypatch.setattr(mrc, "VIEW_FILTER_VOXELS", 20 ** 3)
+    binned = view_lowpass(vol, 8.0)
+    assert binned.data.shape == (20, 18, 16) and np.allclose(binned.voxel, 2.4)
+    assert view_lowpass(vol, 5.0).data.shape == (40, 36, 32)  # 5 Å needs the 1.2 Å grid: no binning
+
+
 def test_preview_endpoint_encodings_cache_and_revalidation(manager, synthetic, tmp_path):
     p = manager.create_project("Viewer maps")
     pdir = manager.project_dir(p["uid"])
@@ -109,12 +122,17 @@ def test_cache_trim_keeps_the_newest(tmp_path):
     for i in range(6):
         f = tmp_path / f"{i}.mrc"
         f.write_bytes(b"x" * 1000)
-        t = time.time() - 100 + i
+        t = time.time() - 1000 + i
         os.utime(f, (t, t))
     MapViews.trim(tmp_path, keep=tmp_path / "0.mrc", limit=3500)
     left = sorted(f.name for f in tmp_path.glob("*.mrc"))
     assert "0.mrc" in left and "5.mrc" in left and len(left) <= 3  # down to 3/4 of the limit, oldest first
     MapViews.trim(tmp_path, limit=10_000)  # under the limit: nothing goes
+    assert sorted(f.name for f in tmp_path.glob("*.mrc")) == left
+    # a map used a moment ago may be on its way to a browser: it stays even over the limit
+    for f in tmp_path.glob("*.mrc"):
+        os.utime(f)
+    MapViews.trim(tmp_path, limit=1000)
     assert sorted(f.name for f in tmp_path.glob("*.mrc")) == left
 
 

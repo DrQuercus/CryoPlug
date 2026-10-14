@@ -429,12 +429,29 @@ def write_view_map(vol: MapVolume, path: str | Path, enc: str = "f32") -> Path:
     return path
 
 
+VIEW_FILTER_VOXELS = 320 ** 3  # larger grids are binned before a low-pass coarse enough to allow it
+
+
 def view_lowpass(vol: MapVolume, resolution: float) -> MapVolume:
-    """The map as seen at ``resolution`` (A): a smooth low-pass (cosine edge centred on 1/resolution, no ringing)
-    for the viewer; unchanged when the grid cannot hold finer details anyway."""
+    """The map as seen at ``resolution`` (A) for the viewer: a smooth low-pass (cosine edge centred on 1/resolution,
+    no ringing); unchanged when the grid cannot hold finer details anyway. A large grid is first binned while it
+    still samples the result at 1.5 times its Nyquist rate (it would hold nothing more), and the filter runs in
+    float32 one plane at a time: about four times the map in memory at most."""
     if not resolution or resolution <= 2.0 * float(np.max(vol.voxel)):
         return vol
-    return vol.like(fourier_filter(vol, lowpass=resolution * 1.15, edge_width=0.3 / resolution))
+    from scipy import fft as sfft
+    while vol.data.size > VIEW_FILTER_VOXELS and resolution >= 6.0 * float(np.max(vol.voxel)):
+        vol = bin_map(vol, 2)
+    data = np.ascontiguousarray(vol.data, dtype=np.float32)
+    f = sfft.rfftn(data, workers=-1)
+    nz, ny, nx = data.shape
+    plane = ((np.fft.fftfreq(ny) / vol.voxel[1])[:, None] ** 2 + (np.fft.rfftfreq(nx) / vol.voxel[0])[None, :] ** 2).astype(np.float32)
+    kz2 = (np.fft.fftfreq(nz) / vol.voxel[2]) ** 2
+    fc, edge = 1.0 / (resolution * 1.15), 0.3 / resolution
+    for z in range(nz):
+        w = np.clip((np.sqrt(plane + np.float32(kz2[z])) - fc) / edge, 0, 1)
+        f[z] *= (0.5 + 0.5 * np.cos(np.pi * w)).astype(np.float32)
+    return vol.like(sfft.irfftn(f, s=data.shape, workers=-1, overwrite_x=True))
 
 
 def zone_mask(vol: MapVolume, xyz: np.ndarray, radius: float) -> np.ndarray:

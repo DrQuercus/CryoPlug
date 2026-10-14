@@ -20,23 +20,29 @@ from fastapi.responses import FileResponse, Response
 from cryoplug.mrc import VIEW_ENCODINGS, MapVolume, bin_map, preview_factor, view_lowpass, write_view_map, zone_map
 
 CACHE_LIMIT = 3 * 1024 ** 3  # bytes of cached maps per project before the oldest go
+CACHE_VERSION = 1  # part of every cache key (and so of the ETags): raise it when the files change format
+RECENT_SECONDS = 120  # a cached map used this recently is never trimmed (it may be on its way to a browser)
 MEMORY_LIMIT = 1.5e9  # largest map (float32 bytes) kept in memory between requests
 MEMORY_SECONDS = 150
+BUILDS = threading.BoundedSemaphore(2)  # copies computed at the same time (full-size maps, filters: memory)
 
 
 class MapViews:
     def __init__(self, project_dir: Callable[[str], Path]):
         self.project_dir = project_dir
         self._lock = threading.Lock()
+        self._trim_lock = threading.Lock()
         self._recent: tuple[tuple[str, int], MapVolume, float] | None = None
         self._reading: dict[tuple[str, int], _Reading] = {}
+        self._timer: threading.Timer | None = None
 
     # ---------------------------------------------------------------- reading
     def read(self, p: Path) -> MapVolume:
         """The map, read once for requests arriving together (a coarse look and the finer copy, a zone)."""
         key = (str(p.resolve()), p.stat().st_mtime_ns)
         with self._lock:
-            if self._recent and self._recent[0] == key and time.time() - self._recent[2] < MEMORY_SECONDS:
+            if self._recent and self._recent[0] == key:
+                self._recent = (key, self._recent[1], time.time())  # still in use: kept longer
                 return self._recent[1]
             reading = self._reading.get(key)
             owner = reading is None
@@ -57,17 +63,27 @@ class MapViews:
                 self._reading.pop(key, None)
                 if reading.volume is not None and reading.volume.data.nbytes <= MEMORY_LIMIT:
                     self._recent = (key, reading.volume, time.time())
+                    self._arm()
             reading.done.set()
-        if reading.volume.data.nbytes <= MEMORY_LIMIT:
-            timer = threading.Timer(MEMORY_SECONDS + 1, self._forget, args=(key,))
-            timer.daemon = True
-            timer.start()
         return reading.volume
 
-    def _forget(self, key: tuple[str, int]) -> None:
+    def _arm(self, delay: float = MEMORY_SECONDS + 1) -> None:
+        """One timer forgets the map kept in memory once unused for MEMORY_SECONDS (called with the lock held)."""
+        if self._timer is None:
+            self._timer = threading.Timer(delay, self._expire)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _expire(self) -> None:
         with self._lock:
-            if self._recent and self._recent[0] == key and time.time() - self._recent[2] >= MEMORY_SECONDS:
+            self._timer = None
+            if self._recent is None:
+                return
+            idle = time.time() - self._recent[2]
+            if idle >= MEMORY_SECONDS:
                 self._recent = None
+            else:
+                self._arm(MEMORY_SECONDS - idle + 1)
 
     @staticmethod
     def factor(p: Path, max_box: int) -> int:
@@ -89,16 +105,19 @@ class MapViews:
             return out
         tmp = out.with_name(f"{out.stem}.{os.getpid()}.{threading.get_ident()}.part")
         try:
-            write_view_map(build(), tmp, enc)
+            with BUILDS:
+                write_view_map(build(), tmp, enc)
             os.replace(tmp, out)
         finally:
             tmp.unlink(missing_ok=True)
-        self.trim(cache, keep=out)
+        with self._trim_lock:
+            self.trim(cache, keep=out)
         return out
 
     @staticmethod
     def trim(cache: Path, keep: Path | None = None, limit: int = CACHE_LIMIT) -> None:
-        """Remove the least recently used maps once the cache is over ``limit`` bytes, down to 3/4 of it."""
+        """Remove the least recently used maps once the cache is over ``limit`` bytes, down to 3/4 of it; a map used
+        in the last RECENT_SECONDS stays (it may be on its way to a browser)."""
         files = []
         for f in cache.glob("*.mrc"):
             try:
@@ -109,10 +128,11 @@ class MapViews:
         total = sum(size for _, size, _ in files)
         if total <= limit:
             return
-        for _, size, f in sorted(files, key=lambda t: t[0]):
+        recent = time.time() - RECENT_SECONDS
+        for mtime, size, f in sorted(files, key=lambda t: t[0]):
             if total <= 0.75 * limit:
                 break
-            if f == keep:
+            if f == keep or mtime > recent:
                 continue
             try:
                 f.unlink()
@@ -131,7 +151,7 @@ class MapViews:
         def build() -> MapVolume:
             return view_lowpass(bin_map(self.read(p), factor), lowpass)
 
-        return self.cached(puid, f"view:{p.resolve()}:{p.stat().st_mtime_ns}:{factor}:{lowpass}:{enc}", build, enc)
+        return self.cached(puid, f"v{CACHE_VERSION}:view:{p.resolve()}:{p.stat().st_mtime_ns}:{factor}:{lowpass}:{enc}", build, enc)
 
     def zone(self, puid: str, mp: Path, md: Path, radius: float, max_box: int, enc: str, lowpass: float = 0.0) -> Path:
         from cryoplug.modelio import atom_arrays, read_structure
@@ -150,8 +170,8 @@ class MapViews:
                 raise HTTPException(400, "The model has no atoms")
             return zone_map(view_lowpass(bin_map(self.read(mp), factor), lowpass), xyz, radius)
 
-        key = (f"zone:{mp.resolve()}:{mp.stat().st_mtime_ns}:{md.resolve()}:{md.stat().st_mtime_ns}:{radius:.2f}:"
-               f"{factor}:{lowpass}:{enc}")
+        key = (f"v{CACHE_VERSION}:zone:{mp.resolve()}:{mp.stat().st_mtime_ns}:{md.resolve()}:{md.stat().st_mtime_ns}:"
+               f"{radius:.2f}:{factor}:{lowpass}:{enc}")
         return self.cached(puid, key, build, enc)
 
 

@@ -521,6 +521,7 @@ export function createSlices(root, ctx) {
       root.hidden = true;
       ctx.onHover?.(null);
       if (st.split) setSplit(false);
+      item = null; // a closed map is not kept in memory by the slices
     },
     refresh(target) {
       if (!item || (target && target !== item)) return;

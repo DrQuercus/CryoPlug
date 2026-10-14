@@ -163,8 +163,17 @@ export function colorRange(volume) {
   return [lo, hi > lo ? hi : lo + 0.1];
 }
 
-// Create or update the isosurface of a map item ({ volume, level, style, opacity, color, refs }).
-export async function showMap(item) {
+// Create or update the isosurface of a map item ({ volume, level, style, opacity, color, refs }). Calls for the same
+// map run one after the other: two at once would both see no isosurface yet and create two.
+const showing = new WeakMap(); // refs of a map (or of a frame of a series) -> its last update
+export function showMap(item) {
+  const refs = item.refs;
+  const next = (showing.get(refs) || Promise.resolve()).catch(() => {}).then(() => showMapNow(item));
+  showing.set(refs, next);
+  return next;
+}
+
+async function showMapNow(item) {
   const params = isosurfaceParams(item.volume, item);
   if (hasCell(item.refs.repr)) {
     await plugin.build().to(item.refs.repr).update(params).commit();
