@@ -246,15 +246,10 @@ function cardMenu(e, job) {
 }
 
 function jobCard(job, rel) {
-  const puid = state.project.uid;
-  const thumbOut = (job.outputs || []).find((o) => o.thumbnail);
-  const builderOpen = !!state.builder?.type;
   const parent = rel?.parents.has(job.uid);
   const child = rel?.children.has(job.uid);
   const picked = state.selection.has(job.uid);
-  const view3d = job.status === 'completed' ? jobViewItems(job) : [];
-  const ph = thumbOut ? null : categoryThumb(job.type);
-  const card = h('div', {
+  return h('div', {
     class: `card ${job.status} ${detailUid() === job.uid ? 'selected' : ''} ${picked ? 'picked' : ''} ${parent ? 'lineage-parent' : ''} ${child ? 'lineage-child' : ''}`,
     tabindex: 0, role: 'button', dataset: { uid: job.uid }, 'aria-pressed': picked ? 'true' : 'false',
     'aria-label': `${job.uid} ${job.title} ${job.status}${parent ? `, input of ${rel.uid}` : ''}${child ? `, uses ${rel.uid}` : ''}`,
@@ -267,26 +262,43 @@ function jobCard(job, rel) {
       else if (e.key === ' ') { e.preventDefault(); pickJob({ ctrlKey: true }, job.uid); }
       else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) cardMenu(e, job);
     },
-  },
-  h('div', { class: 'card-head' }, h('span', { class: 'uid' }, job.uid), statusChip(job.status),
-    h('button', { class: 'card-more icon-btn', type: 'button', title: 'Actions', 'aria-label': `Actions for ${job.uid}`, 'aria-haspopup': 'menu',
-      onclick: (e) => cardMenu(e, job) }, icon('more'))),
-  h('div', { class: `card-thumb ${ph ? 'ph' : ''}`, style: ph?.style }, thumbOut ? h('img', { src: api.fileUrl(puid, thumbOut.thumbnail), alt: '', loading: 'lazy' }) : ph.el,
-    parent ? h('span', { class: 'lineage-tag up' }, `input of ${rel.uid}`) : null,
-    child ? h('span', { class: 'lineage-tag down' }, `uses ${rel.uid}`) : null,
-    view3d.length ? h('a', {
-      class: 'card-3d', href: viewerUrl(view3d), target: '_blank', rel: 'noopener', title: 'Open in the 3D viewer', 'aria-label': `Open ${job.uid} in the 3D viewer`,
-      onclick: (e) => e.stopPropagation(),
-    }, icon('eye'), '3D') : null),
-  h('div', { class: 'card-title' }, job.title),
-  job.title !== typeTitle(job.type) ? h('div', { class: 'card-type' }, typeTitle(job.type)) : null,
-  (job.highlights || []).length ? h('div', { class: 'card-hl' }, job.highlights.slice(0, 3).map((hl) => h('span', {}, `${hl.label} `, h('b', {}, String(hl.value))))) : null,
-  ['queued', 'launched', 'running'].includes(job.status) && job.message ? h('div', { class: 'card-msg', title: job.message }, job.message) : null,
-  job.status === 'running' ? h('div', { class: 'progress' }, h('i', { style: { width: `${Math.max(3, Math.round((job.progress || 0) * 100))}%` } })) : null,
-  job.status === 'failed' && job.error ? h('div', { class: 'card-msg', title: job.error }, job.error) : null,
-  builderOpen && job.status === 'completed' && job.outputs.length ? outputChips(job) : null,
-  cardFoot(job));
-  return card;
+  }, cardInside(job, rel));
+}
+
+// The inside of a job card, shared by the cards and the tree view: head, picture, title, results or state, foot.
+// In the tree every card has the same height: a single line under the title, the progress drawn on the picture.
+function cardInside(job, rel, tree = false) {
+  const puid = state.project.uid;
+  const thumbOut = (job.outputs || []).find((o) => o.thumbnail);
+  const parent = rel?.parents.has(job.uid);
+  const child = rel?.children.has(job.uid);
+  const view3d = job.status === 'completed' ? jobViewItems(job) : [];
+  const ph = thumbOut ? null : categoryThumb(job.type);
+  const progress = job.status === 'running'
+    ? h('div', { class: 'progress' }, h('i', { style: { width: `${Math.max(3, Math.round((job.progress || 0) * 100))}%` } })) : null;
+  const type = job.title !== typeTitle(job.type) ? h('div', { class: 'card-type' }, typeTitle(job.type)) : null;
+  const hl = (job.highlights || []).length
+    ? h('div', { class: 'card-hl' }, job.highlights.slice(0, 3).map((x) => h('span', {}, `${x.label} `, h('b', {}, String(x.value))))) : null;
+  const msg = ['queued', 'launched', 'running'].includes(job.status) && job.message ? h('div', { class: 'card-msg', title: job.message }, job.message) : null;
+  const err = job.status === 'failed' && job.error ? h('div', { class: 'card-msg err', title: job.error }, job.error) : null;
+  return [
+    h('div', { class: 'card-head' }, h('span', { class: 'uid' }, job.uid), statusChip(job.status),
+      h('button', { class: 'card-more icon-btn', type: 'button', title: 'Actions', 'aria-label': `Actions for ${job.uid}`, 'aria-haspopup': 'menu',
+        onclick: (e) => cardMenu(e, job) }, icon('more'))),
+    h('div', { class: `card-thumb ${ph ? 'ph' : ''}`, style: ph?.style },
+      thumbOut ? h('img', { src: api.fileUrl(puid, thumbOut.thumbnail), alt: '', loading: 'lazy', draggable: 'false' }) : ph.el,
+      parent ? h('span', { class: 'lineage-tag up' }, `input of ${rel.uid}`) : null,
+      child ? h('span', { class: 'lineage-tag down' }, `uses ${rel.uid}`) : null,
+      view3d.length ? h('a', {
+        class: 'card-3d', href: viewerUrl(view3d), target: '_blank', rel: 'noopener', title: 'Open in the 3D viewer', 'aria-label': `Open ${job.uid} in the 3D viewer`,
+        onclick: (e) => e.stopPropagation(),
+      }, icon('eye'), '3D') : null,
+      tree ? progress : null),
+    h('div', { class: 'card-title', title: tree ? job.title : null }, job.title),
+    tree ? msg || err || (job.status === 'completed' ? hl : null) || type || hl
+      : [type, hl, msg, progress, err, state.builder?.type && job.status === 'completed' && job.outputs.length ? outputChips(job) : null],
+    cardFoot(job),
+  ];
 }
 
 function outputChips(job) {
@@ -300,10 +312,14 @@ function outputChips(job) {
 }
 
 // --------------------------------------------------------------------- tree
+// The jobs upstream or downstream of one job, when the tree is narrowed to them: { puid, uid, dir, depth }.
+let treeScope = null;
+
 // What the tree view needs from the project page; the filters dim the jobs they leave out (the tree keeps its shape).
 function treeOptions(jobs) {
   const puid = state.project.uid;
   const f = state.filter;
+  if (treeScope && (treeScope.puid !== puid || !state.jobsByUid[treeScope.uid])) treeScope = null;
   return {
     puid,
     jobs: state.jobs,
@@ -311,6 +327,11 @@ function treeOptions(jobs) {
     open: detailUid(),
     picked: state.selection,
     bar: selectionBar(),
+    scope: treeScope,
+    onScope: (scope) => {
+      treeScope = scope ? { ...scope, puid } : null;
+      renderJobs();
+    },
     typeOf: outputType,
     typeLabel: (type) => state.info.data_types?.[type] || type,
     slotLabel: (job, slot) => state.types[job?.type]?.inputs.find((x) => x.name === slot)?.label || slot,
@@ -326,6 +347,7 @@ function treeOptions(jobs) {
       const items = job.status === 'completed' ? jobViewItems(job) : [];
       return items.length ? viewerUrl(items) : null;
     },
+    card: (job) => cardInside(job, null, true),
     toBuilder: () => !!state.builder?.type,
     onOpen: openJob,
     onPick: pickJob,

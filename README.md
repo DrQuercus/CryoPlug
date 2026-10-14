@@ -23,7 +23,7 @@ local :
 | Constructeur de job (pré-rempli, glisser-déposer) | Résolution directionnelle (3D FSC) |
 |---|---|
 | ![](docs/images/builder.png) | ![](docs/images/directional_fsc.png) |
-| **Session ISOLDE prête** (ouvrir sur le serveur ou télécharger le paquet) | **Vue en arbre** (comme CryoSPARC) : lignée du job ouvert, lignes colorées par type de données |
+| **Session ISOLDE prête** (ouvrir sur le serveur ou télécharger le paquet) | **Vue en arbre** (comme CryoSPARC) : cartes des jobs, lignes en couloirs colorées par type de données, lignée du job ouvert |
 | ![](docs/images/isolde.png) | ![](docs/images/tree.png) |
 | **Workflows** | **Checklist avant dépôt** |
 | ![](docs/images/workflows.png) | ![](docs/images/checklist.png) |
@@ -268,18 +268,20 @@ Les fichiers de particules `.cs` des versions récentes de CryoSPARC (format com
 
 ### Vue en arbre
 
-- Les imports en haut, chaque job sous les jobs dont il prend les sorties ; un import utilisé tard (modèle,
-  séquence) se place juste au-dessus de son premier usage. L'ordre de chaque rangée limite les croisements.
-- Cartes compactes : couleur et pastille du statut, numéro, titre, résultat principal ou message en cours,
-  progression, vignette ; au survol, *Queue*/*Stop*, **3D** et **⋯** (toutes les actions, aussi au clic
-  droit).
-- Lignes colorées par ce qu'elles transportent (cartes, modèles et séquences, particules, autres), avec le
-  détail de chaque lien en infobulle ; les liens d'un job vers les rangées du bas partagent un tronc qui se
-  ramifie là où il sert.
+- Comme le *Tree View* de CryoSPARC : les cartes des jobs (vignette, statut, résultat ou progression) de haut
+  en bas, les imports en haut, chaque job sous les jobs dont il prend les sorties ; un import utilisé tard
+  (modèle, séquence) se place juste au-dessus de son premier usage. **Compact** : une ligne par job pour les
+  gros projets.
+- Lignes à angles droits dans des couloirs entre les rangées, un point à chaque raccord, colorées par ce
+  qu'elles transportent (cartes, modèles et séquences, particules, autres) avec le détail de chaque lien en
+  infobulle ; les liens d'un job vers les rangées du bas partagent un tronc qui se ramifie là où il sert.
 - Un clic ouvre le job et allume sa lignée (entrées en violet, jobs qui l'utilisent en vert, ancêtres et
-  descendants) ; le reste s'estompe (bouton **Lineage**). **Échap** ou double-clic sur le fond : désélection.
-- Glisser pour se déplacer, **Ctrl/⌘ + molette** ou pincer pour zoomer ; **F** tout l'arbre, **T** centrer
-  sur la sélection, **+**/**−**/**0** ; mini-carte quand l'arbre dépasse la vue ; cadrage gardé par projet.
+  descendants), le reste s'estompe (bouton **Lineage**) ; **Échap** ou double-clic sur le fond : désélection.
+  *↑ upstream* / *↓ downstream* (en bas) n'affiche que l'amont ou l'aval du job ouvert, **−**/**+** pour le
+  nombre de niveaux.
+- Glisser pour se déplacer, **Ctrl/⌘ + molette** ou pincer pour zoomer ; en bas à gauche **F** (tout l'arbre),
+  **−/+** et **0.25× / 0.5× / 1×** ; **T** centre sur la sélection ; mini-carte quand l'arbre dépasse la vue ;
+  cadrage gardé par projet.
 - Les filtres grisent les jobs écartés sans changer la forme de l'arbre. Pendant la construction d'un job,
   une carte glissée sur une entrée du constructeur branche la sortie qui convient.
 

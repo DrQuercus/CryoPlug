@@ -83,24 +83,28 @@ Comme le *Tree View* de CryoSPARC, le bouton **Tree** (en haut à droite, ou tou
 pipeline de haut en bas : les imports en haut, chaque job sous les jobs dont il prend les sorties. Un job
 importé tard dans le pipeline (un modèle, une séquence) se place juste au-dessus de son premier usage.
 
-- **Cartes compactes** : barre et pastille à la couleur du statut (vert terminé, bleu en cours avec sa
-  progression, jaune en file, violet en attente de vous, rouge échoué avec son erreur, orange arrêté,
-  bordure pointillée pour un job en préparation), numéro, titre, résultat principal (résolution, score…)
-  ou message en cours, vignette. Au survol, une petite palette en bas à droite : *Queue* ou *Stop* selon
-  le statut, **3D**, et **⋯** pour toutes les actions (le clic droit aussi).
-- **Lignes** : leur couleur dit ce qu'elles transportent (bleu cartes de densité, orange modèles et
-  séquences, vert particules, gris pointillé le reste) ; au survol, l'infobulle détaille chaque lien
-  (« J1 half_maps → J3 Half maps »). Les liens d'un job vers des rangées plus bas partagent un **tronc**
-  qui se ramifie là où il sert : la vue reste lisible même quand un import alimente tout le projet.
+- **Les cartes des jobs**, les mêmes que dans la vue en cartes (vignette, statut, résultat principal ou
+  message en cours, progression sur la vignette), toutes de la même taille. Le bouton **Compact** les
+  remplace par une ligne par job (plus de jobs à l'écran pour un gros projet, avec *Queue*/*Stop*, **3D** et
+  **⋯** au survol). Très dézoomé, chaque carte ne garde que son numéro, sa vignette et la bande de couleur de
+  son statut.
+- **Lignes à angles droits**, comme dans CryoSPARC : elles descendent d'une carte, suivent un couloir entre
+  deux rangées (un couloir par source quand des lignes se chevaucheraient) et descendent dans la carte
+  suivante ; un point marque chaque départ et chaque arrivée. Leur couleur dit ce qu'elles transportent (bleu
+  cartes de densité, orange modèles et séquences, vert particules, gris pointillé le reste) ; au survol,
+  l'infobulle détaille chaque lien (« J1 half_maps → J3 Half maps »). Les liens d'un job vers des rangées
+  plus bas partagent un **tronc** qui se ramifie là où il sert.
 - **Cliquer un job** l'ouvre à droite et allume sa **lignée** : ses entrées (violet), les jobs qui
   l'utilisent (vert), et plus loin tous ses ancêtres et descendants ; le reste s'estompe (bouton
   **Lineage** pour garder tout visible). **Échap** ou un **double-clic sur le fond** désélectionne.
+- **Seulement l'amont ou l'aval d'un job** (comme *Upstream Jobs* dans CryoSPARC) : un job ouvert, le bas de
+  la vue propose *↑ upstream* (les jobs dont il dépend) et *↓ downstream* (ceux qui utilisent ses
+  résultats) ; **−** et **+** règlent le nombre de niveaux, **×** revient à tous les jobs.
 - **Se déplacer** : glisser le fond (ou une carte), molette pour défiler, **Ctrl/⌘ + molette** ou pincer
-  pour zoomer sous le pointeur ; boutons **−/+**, **Fit** (touche **F**, tout l'arbre) et **Centre**
-  (touche **T**, sur les jobs sélectionnés, sinon le job ouvert, sinon ceux du filtre) ; **0** revient à
-  100 %. Une mini-carte en bas à droite apparaît quand l'arbre dépasse la vue : cliquez ou glissez dedans.
-  Très dézoomé, chaque carte n'affiche plus que son numéro sur la couleur du statut. Le cadrage est gardé
-  pour chaque projet.
+  pour zoomer sous le pointeur. En bas à gauche : tout l'arbre (touche **F**), **−/+**, le zoom (un clic :
+  100 %) et les préréglages **0.25×**, **0.5×**, **1×** ; touche **T** : centrer sur les jobs sélectionnés
+  (sinon le job ouvert, sinon ceux du filtre). Une mini-carte en bas à droite apparaît quand l'arbre dépasse
+  la vue : cliquez ou glissez dedans. Le cadrage est gardé pour chaque projet.
 - **Filtres** (texte, statut, catégorie) : les jobs écartés sont grisés au lieu de disparaître, l'arbre
   garde sa forme.
 - **Construire un job** : pendant que le constructeur (**New job**) est ouvert, glissez une carte de
