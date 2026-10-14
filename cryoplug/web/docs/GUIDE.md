@@ -100,8 +100,8 @@ importé tard dans le pipeline (un modèle, une séquence) se place juste au-des
 - **Seulement l'amont ou l'aval d'un job** (comme *Upstream Jobs* dans CryoSPARC) : un job ouvert, le bas de
   la vue propose *↑ upstream* (les jobs dont il dépend) et *↓ downstream* (ceux qui utilisent ses
   résultats) ; **−** et **+** règlent le nombre de niveaux, **×** revient à tous les jobs.
-- **Se déplacer** : glisser le fond (ou une carte), molette pour défiler, **Ctrl/⌘ + molette** ou pincer
-  pour zoomer sous le pointeur. En bas à gauche : tout l'arbre (touche **F**), **−/+**, le zoom (un clic :
+- **Se déplacer** : la **molette** zoome sous le pointeur, comme dans CryoSPARC (ou pincer sur un pavé
+  tactile) ; glisser le fond (ou une carte), ou **Maj + molette**, déplace l'arbre. En bas à gauche : tout l'arbre (touche **F**), **−/+**, le zoom (un clic :
   100 %) et les préréglages **0.25×**, **0.5×**, **1×** ; touche **T** : centrer sur les jobs sélectionnés
   (sinon le job ouvert, sinon ceux du filtre). Une mini-carte en bas à droite apparaît quand l'arbre dépasse
   la vue : cliquez ou glissez dedans. Le cadrage est gardé pour chaque projet.

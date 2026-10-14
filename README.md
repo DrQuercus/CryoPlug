@@ -279,7 +279,7 @@ Les fichiers de particules `.cs` des versions récentes de CryoSPARC (format com
   descendants), le reste s'estompe (bouton **Lineage**) ; **Échap** ou double-clic sur le fond : désélection.
   *↑ upstream* / *↓ downstream* (en bas) n'affiche que l'amont ou l'aval du job ouvert, **−**/**+** pour le
   nombre de niveaux.
-- Glisser pour se déplacer, **Ctrl/⌘ + molette** ou pincer pour zoomer ; en bas à gauche **F** (tout l'arbre),
+- La **molette** zoome sous le pointeur (comme CryoSPARC), glisser ou **Maj + molette** déplace ; en bas à gauche **F** (tout l'arbre),
   **−/+** et **0.25× / 0.5× / 1×** ; **T** centre sur la sélection ; mini-carte quand l'arbre dépasse la vue ;
   cadrage gardé par projet.
 - Les filtres grisent les jobs écartés sans changer la forme de l'arbre. Pendant la construction d'un job,

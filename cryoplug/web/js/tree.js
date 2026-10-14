@@ -648,12 +648,13 @@ function viewEvents(m) {
     if (!m.v) return;
     cancelAnimationFrame(T.anim);
     const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? m.vh : 1;
-    if (e.ctrlKey || e.metaKey || e.altKey) { // a pinch on a touchpad comes as Ctrl + wheel
+    if (e.shiftKey) { // Shift + wheel moves the tree
+      setView(m, { k: m.v.k, x: m.v.x - e.deltaX * unit, y: m.v.y - e.deltaY * unit });
+    } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY) && !e.ctrlKey) { // a sideways swipe on a touchpad moves it too
+      setView(m, { k: m.v.k, x: m.v.x - e.deltaX * unit, y: m.v.y });
+    } else { // the wheel zooms under the pointer, as in CryoSPARC (a pinch on a touchpad comes as Ctrl + wheel)
       const r = view.getBoundingClientRect();
       setView(m, zoomAround(m, m.v.k * Math.exp(-e.deltaY * unit * 0.0022), e.clientX - r.left, e.clientY - r.top));
-    } else {
-      const sideways = e.shiftKey && !e.deltaX;
-      setView(m, { k: m.v.k, x: m.v.x - (sideways ? e.deltaY : e.deltaX) * unit, y: m.v.y - (sideways ? 0 : e.deltaY) * unit });
     }
     save(m);
   }, { passive: false });
@@ -747,7 +748,7 @@ function drawFoot(m, lin) {
   } else if (o.toBuilder()) {
     clear(m.hint, 'Drag a job onto an input of the job builder · click it to see its details · drag the background to move');
   } else {
-    clear(m.hint, 'Click a job to open it · drag to move · Ctrl + scroll to zoom · T centre · F fit');
+    clear(m.hint, 'Click a job to open it · scroll to zoom · drag (or Shift + scroll) to move · T centre · F fit');
   }
 }
 

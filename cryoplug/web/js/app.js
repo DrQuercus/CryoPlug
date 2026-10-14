@@ -197,7 +197,7 @@ const SHORTCUTS = [
   ['/', 'Filter the jobs'],
   ['G', 'Switch between the cards and the tree view'],
   ['T · F', 'Tree view: centre on the selected jobs · show the whole tree'],
-  ['+ · − · 0', 'Tree view: zoom in · out · actual size (or Ctrl/⌘ + scroll)'],
+  ['+ · − · 0', 'Tree view: zoom in · out · actual size (or the mouse wheel; Shift + wheel moves the tree)'],
   ['Arrows (on a job of the tree)', 'Move to an input, a job using it, or along the row'],
   ['Ctrl/⌘ + A', 'Select all the jobs shown'],
   ['Ctrl/⌘ + click · Shift + click', 'Add a job / a range of jobs to the selection'],
