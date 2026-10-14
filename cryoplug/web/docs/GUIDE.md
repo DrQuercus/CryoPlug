@@ -60,7 +60,7 @@ Statuts d'un job :
    « Use as input »), puis « Jobs » pour revenir aux cartes.
 5. Ou bien **Workflows** : créez toute la chaîne en une fois (par exemple *De novo model → deposition*),
    cochez/décochez les étapes optionnelles, puis « Create & queue all ».
-6. Suivez l'avancement dans les cartes, la vue **Graph** et la page **Resources** (onglet *Queue*).
+6. Suivez l'avancement dans les cartes, la vue **Tree** (l'arbre du pipeline) et la page **Resources** (onglet *Queue*).
 
 Pour essayer sans données : `cryoplug demo-data ~/cryoplug_demo`, puis importez
 `~/cryoplug_demo/CS-demo/J42` (jeu synthétique).
@@ -74,8 +74,39 @@ compte les jobs par statut ; un clic sur un statut (par exemple *failed*) n'affi
 Comme dans CryoSPARC : **Ctrl/⌘ + clic** ajoute un job à la sélection, **Maj + clic** une plage,
 **Ctrl/⌘ + A** tous les jobs affichés ; la barre qui apparaît met en file, arrête, réinitialise ou supprime
 les jobs sélectionnés. Quand un job est ouvert, ses entrées sont entourées en violet et les jobs qui
-l'utilisent en vert. Touches : **N** nouveau job, **/** filtrer, **G** cartes ⇄ graphe, **Échap** fermer,
+l'utilisent en vert. Touches : **N** nouveau job, **/** filtrer, **G** cartes ⇄ arbre, **Échap** fermer,
 **?** liste des raccourcis.
+
+### Vue en arbre (Tree)
+
+Comme le *Tree View* de CryoSPARC, le bouton **Tree** (en haut à droite, ou touche **G**) dessine le
+pipeline de haut en bas : les imports en haut, chaque job sous les jobs dont il prend les sorties. Un job
+importé tard dans le pipeline (un modèle, une séquence) se place juste au-dessus de son premier usage.
+
+- **Cartes compactes** : barre et pastille à la couleur du statut (vert terminé, bleu en cours avec sa
+  progression, jaune en file, violet en attente de vous, rouge échoué avec son erreur, orange arrêté,
+  bordure pointillée pour un job en préparation), numéro, titre, résultat principal (résolution, score…)
+  ou message en cours, vignette. Au survol, une petite palette en bas à droite : *Queue* ou *Stop* selon
+  le statut, **3D**, et **⋯** pour toutes les actions (le clic droit aussi).
+- **Lignes** : leur couleur dit ce qu'elles transportent (bleu cartes de densité, orange modèles et
+  séquences, vert particules, gris pointillé le reste) ; au survol, l'infobulle détaille chaque lien
+  (« J1 half_maps → J3 Half maps »). Les liens d'un job vers des rangées plus bas partagent un **tronc**
+  qui se ramifie là où il sert : la vue reste lisible même quand un import alimente tout le projet.
+- **Cliquer un job** l'ouvre à droite et allume sa **lignée** : ses entrées (violet), les jobs qui
+  l'utilisent (vert), et plus loin tous ses ancêtres et descendants ; le reste s'estompe (bouton
+  **Lineage** pour garder tout visible). **Échap** ou un **double-clic sur le fond** désélectionne.
+- **Se déplacer** : glisser le fond (ou une carte), molette pour défiler, **Ctrl/⌘ + molette** ou pincer
+  pour zoomer sous le pointeur ; boutons **−/+**, **Fit** (touche **F**, tout l'arbre) et **Centre**
+  (touche **T**, sur les jobs sélectionnés, sinon le job ouvert, sinon ceux du filtre) ; **0** revient à
+  100 %. Une mini-carte en bas à droite apparaît quand l'arbre dépasse la vue : cliquez ou glissez dedans.
+  Très dézoomé, chaque carte n'affiche plus que son numéro sur la couleur du statut. Le cadrage est gardé
+  pour chaque projet.
+- **Filtres** (texte, statut, catégorie) : les jobs écartés sont grisés au lieu de disparaître, l'arbre
+  garde sa forme.
+- **Construire un job** : pendant que le constructeur (**New job**) est ouvert, glissez une carte de
+  l'arbre sur une entrée : la sortie qui convient est branchée (la préférée si le job en a plusieurs).
+- Au clavier : **Tab** parcourt les jobs, les **flèches** suivent les liens (haut : une entrée, bas : un
+  job qui l'utilise, gauche/droite : la rangée), **Entrée** ouvre, **Espace** sélectionne.
 
 ### Comptes utilisateurs et réglages
 
@@ -117,6 +148,9 @@ constructeur permet de décider autrement :
 La page **Resources** donne la vue d'ensemble du matériel : **Live usage** (CPU, mémoire, chaque GPU et ses
 processus, disques et espace libre, réseau, processus façon htop, graphes des 5 dernières minutes),
 **Queue** (lanes, GPU occupés, jobs actifs) et **Cluster** (partitions SLURM, nœuds, jobs en attente).
+Les rafraîchissements laissent la page là où vous l'avez fait défiler ; si le serveur ne répond pas un
+instant, les dernières valeurs restent affichées sous un bandeau d'erreur (et un `nvidia-smi` qui ne répond
+plus laisse les cartes GPU, grisées, avec la raison).
 Les administrateurs règlent les lanes dans **Settings › Compute**.
 
 ### Ouvrir CryoPlug depuis votre portable

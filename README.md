@@ -23,8 +23,8 @@ local :
 | Constructeur de job (pré-rempli, glisser-déposer) | Résolution directionnelle (3D FSC) |
 |---|---|
 | ![](docs/images/builder.png) | ![](docs/images/directional_fsc.png) |
-| **Session ISOLDE prête** (ouvrir sur le serveur ou télécharger le paquet) | **Graphe du pipeline** |
-| ![](docs/images/isolde.png) | ![](docs/images/graph.png) |
+| **Session ISOLDE prête** (ouvrir sur le serveur ou télécharger le paquet) | **Vue en arbre** (comme CryoSPARC) : lignée du job ouvert, lignes colorées par type de données |
+| ![](docs/images/isolde.png) | ![](docs/images/tree.png) |
 | **Workflows** | **Checklist avant dépôt** |
 | ![](docs/images/workflows.png) | ![](docs/images/checklist.png) |
 | **Visualiseur 3D** : panneau de modèles, histogramme de seuil, masse enfermée, zone autour du modèle, détail et filtre, ligne de commande | **Coupes 2D en grand** à côté de la vue : zoom, valeur sous la souris, couleurs de la variabilité (thème sombre) |
@@ -245,9 +245,10 @@ Les fichiers de particules `.cs` des versions récentes de CryoSPARC (format com
    import → LocScale → ModelAngelo → real_space_refine → ISOLDE → affinement final → validation →
    checklist → paquet de dépôt. Les étapes optionnelles (ISOLDE, LocScale…) peuvent être retirées, les
    jobs en aval sont recâblés automatiquement.
-5. La vue **Graph** montre le pipeline ; chaque job a ses onglets *Overview* (métriques, graphes FSC /
-   Q-score, sorties, paramètres, notes), *Log* (en direct) et *Files*. Quand un job est ouvert, ses
-   **entrées** sont entourées en violet sur les cartes et les **jobs qui l'utilisent** en vert.
+5. La vue **Tree** dessine le pipeline de haut en bas, comme le *Tree View* de CryoSPARC (voir
+   ci-dessous) ; chaque job a ses onglets *Overview* (métriques, graphes FSC / Q-score, sorties,
+   paramètres, notes), *Log* (en direct) et *Files*. Quand un job est ouvert, ses **entrées** sont
+   entourées en violet et les **jobs qui l'utilisent** en vert.
 6. **View 3D** (dans les sorties d'un job, ou bouton **3D** au survol d'une carte de job) ouvre le
    visualiseur décrit ci-dessous.
 
@@ -262,8 +263,25 @@ Les fichiers de particules `.cs` des versions récentes de CryoSPARC (format com
 - **Ctrl/⌘ + clic** ajoute un job à la sélection, **Maj + clic** une plage, **Ctrl/⌘ + A** tous les jobs
   affichés ; la barre de sélection propose **Queue**, **Stop**, **Clear** et **Delete** (avec le nombre de
   jobs concernés par chaque action et une confirmation).
-- **N** nouveau job, **/** filtrer, **G** cartes ⇄ graphe, **Échap** vide la sélection ou ferme le détail,
+- **N** nouveau job, **/** filtrer, **G** cartes ⇄ arbre, **Échap** vide la sélection ou ferme le détail,
   **?** liste des raccourcis.
+
+### Vue en arbre
+
+- Les imports en haut, chaque job sous les jobs dont il prend les sorties ; un import utilisé tard (modèle,
+  séquence) se place juste au-dessus de son premier usage. L'ordre de chaque rangée limite les croisements.
+- Cartes compactes : couleur et pastille du statut, numéro, titre, résultat principal ou message en cours,
+  progression, vignette ; au survol, *Queue*/*Stop*, **3D** et **⋯** (toutes les actions, aussi au clic
+  droit).
+- Lignes colorées par ce qu'elles transportent (cartes, modèles et séquences, particules, autres), avec le
+  détail de chaque lien en infobulle ; les liens d'un job vers les rangées du bas partagent un tronc qui se
+  ramifie là où il sert.
+- Un clic ouvre le job et allume sa lignée (entrées en violet, jobs qui l'utilisent en vert, ancêtres et
+  descendants) ; le reste s'estompe (bouton **Lineage**). **Échap** ou double-clic sur le fond : désélection.
+- Glisser pour se déplacer, **Ctrl/⌘ + molette** ou pincer pour zoomer ; **F** tout l'arbre, **T** centrer
+  sur la sélection, **+**/**−**/**0** ; mini-carte quand l'arbre dépasse la vue ; cadrage gardé par projet.
+- Les filtres grisent les jobs écartés sans changer la forme de l'arbre. Pendant la construction d'un job,
+  une carte glissée sur une entrée du constructeur branche la sortie qui convient.
 
 ### Visualiseur 3D
 
@@ -430,7 +448,8 @@ défaut ; rien n'est à choisir pour lancer un job, mais tout peut l'être.
   lancés), stockage (espace libre de chaque disque, celui des projets signalé ; un montage réseau qui ne
   répond plus est indiqué sans bloquer la page), débits réseau et disque, processus (tri par CPU, mémoire,
   mémoire GPU ; filtre *CryoPlug jobs only*). Graphes des 5 dernières minutes avec valeurs au survol ;
-  mesures toutes les 2 s, seulement pendant que quelqu'un regarde la page.
+  mesures toutes les 2 s, seulement pendant que quelqu'un regarde la page. Les rafraîchissements gardent la
+  position de la page ; une réponse manquée laisse les dernières valeurs sous un bandeau d'erreur.
 - **Queue** : chaque lane (jobs en cours / en file, GPU occupés et par quel job) et la liste des jobs actifs.
 - **Cluster** (s'il y a une lane SLURM) : partitions (nœuds par état, CPU utilisés, GPU, mémoire par nœud,
   limite de temps), jobs en cours et en attente.

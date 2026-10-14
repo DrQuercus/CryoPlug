@@ -3,10 +3,10 @@
 import { api } from './api.js';
 import { fmtGiB, holderLabel } from './compute.js';
 import { navigate, state } from './state.js';
-import { btn, clear, confirmDialog, fmtDuration, fmtSize, guard, h, icon, jobDuration, meter, s, statusChip } from './ui.js';
+import { btn, clear, confirmDialog, fmtDuration, fmtSize, guard, h, icon, jobDuration, lastInput, meter, s, statusChip } from './ui.js';
 
 const WINDOW = 300; // seconds shown by the graphs (the server keeps 5 minutes)
-const R = { gen: 0, timer: null, history: [], hover: {}, jobsOnly: false, sort: 'cpu', snap: null };
+const R = { gen: 0, timer: null, history: [], hover: {}, jobsOnly: false, sort: 'cpu', snap: null, gpus: null };
 
 const me = () => state.info.user || { builtin: true, role: 'admin' };
 const accounts = () => state.info.auth === 'users';
@@ -24,6 +24,35 @@ export function stopResources() {
 function later(fn, ms) {
   clearTimeout(R.timer);
   R.timer = setTimeout(fn, ms);
+}
+
+// A refresh leaves the reader where they are: the card at the top of the view keeps its place on the screen, whatever
+// the browser does while the cards are rebuilt (a section shorter for a moment, a scroll anchor lost), unless the
+// reader scrolls meanwhile. At the top of the page, nothing to keep.
+function steady(draw) {
+  const page = document.getElementById('content');
+  const mark = page && page.scrollTop > 0 ? topCard(page) : null;
+  const since = performance.now();
+  draw();
+  if (!mark) return;
+  const back = () => {
+    if (lastInput() > since) return;
+    const el = page.querySelector(`[data-anchor="${CSS.escape(mark.key)}"]`);
+    if (!el) return;
+    const shift = el.getBoundingClientRect().top - mark.y;
+    if (Math.abs(shift) >= 1) page.scrollTop += shift;
+  };
+  back();
+  requestAnimationFrame(back);
+}
+
+function topCard(page) {
+  const top = page.getBoundingClientRect().top;
+  for (const el of page.querySelectorAll('[data-anchor]')) {
+    const r = el.getBoundingClientRect();
+    if (r.height && r.bottom > top) return { key: el.dataset.anchor, y: r.top };
+  }
+  return null;
 }
 
 export function renderResources(content, sub) {
@@ -47,19 +76,20 @@ export function renderResources(content, sub) {
 }
 
 // ------------------------------------------------------------------ live usage
-function card(ic, title, cls = '') {
+function card(ic, title, cls = '', anchor = null) {
   const value = h('span', { class: 'res-value' });
   const body = h('div', { class: 'res-card-body' });
-  const el = h('section', { class: `box res-card ${cls}`.trim(), 'aria-label': title },
+  const el = h('section', { class: `box res-card ${cls}`.trim(), 'aria-label': title, dataset: anchor ? { anchor } : null },
     h('div', { class: 'res-card-head' }, icon(ic), h('h3', {}, title), h('span', { class: 'grow' }), value), body);
   return { el, value, body };
 }
 
 function startLive(body, status, gen) {
   R.history = [];
-  const cards = { cpu: card('cpu', 'CPU'), mem: card('memory', 'Memory'), gpus: h('div', { class: 'res-gpus' }),
-    net: card('network', 'Network'), disk: card('disk', 'Disk activity'), storage: card('folder', 'Storage', 'full'),
-    procs: processCard() };
+  R.gpus = null;
+  const cards = { cpu: card('cpu', 'CPU', '', 'cpu'), mem: card('memory', 'Memory', '', 'mem'), gpus: h('div', { class: 'res-gpus' }),
+    net: card('network', 'Network', '', 'net'), disk: card('disk', 'Disk activity', '', 'disk'),
+    storage: card('folder', 'Storage', 'full', 'storage'), procs: processCard() };
   const banner = h('div', {});
   clear(body, banner, h('div', { class: 'res-grid', onpointerleave: () => { R.hover = {}; } },
     cards.cpu.el, cards.mem.el, cards.gpus, cards.net.el, cards.disk.el, cards.storage.el, cards.procs.el));
@@ -72,24 +102,27 @@ function startLive(body, status, gen) {
       snap = await api.monitor(first);
     } catch (e) {
       if (gen !== R.gen) return;
-      clear(banner, h('div', { class: 'alert error' }, `Live usage unavailable: ${e.message}`));
+      // the last values stay on the page: only a line above them says they are no longer refreshed
+      steady(() => clear(banner, h('div', { class: 'alert error' }, `Live usage unavailable: ${e.message}`)));
       later(tick, 5000);
       return;
     }
     if (gen !== R.gen) return;
     first = false;
-    clear(banner);
     remember(snap);
     R.snap = snap;
-    clear(status, snap.hostname || '', snap.uptime ? ` · up ${fmtDuration(snap.uptime)}` : '',
-      h('span', { class: 'live-dot', title: 'Refreshed every 2 seconds while this page is open' }, 'live'));
-    drawCpu(cards.cpu, snap);
-    drawMemory(cards.mem, snap);
-    drawGpus(cards.gpus, snap);
-    drawRates(cards.net, snap, 'net');
-    drawRates(cards.disk, snap, 'disk');
-    drawStorage(cards.storage, snap);
-    drawProcesses(cards.procs, snap);
+    steady(() => {
+      clear(banner);
+      clear(status, snap.hostname || '', snap.uptime ? ` · up ${fmtDuration(snap.uptime)}` : '',
+        h('span', { class: 'live-dot', title: 'Refreshed every 2 seconds while this page is open' }, 'live'));
+      drawCpu(cards.cpu, snap);
+      drawMemory(cards.mem, snap);
+      drawGpus(cards.gpus, snap);
+      drawRates(cards.net, snap, 'net');
+      drawRates(cards.disk, snap, 'disk');
+      drawStorage(cards.storage, snap);
+      drawProcesses(cards.procs, snap);
+    });
     later(tick, 2000);
   };
   tick();
@@ -245,9 +278,14 @@ function fact(label, value) {
 }
 
 function drawGpus(wrap, snap) {
-  const gpus = snap.gpus || [];
+  let gpus = snap.gpus || [];
+  // nvidia-smi failing for a while (a busy or stuck driver) leaves the last GPU cards, dimmed, rather than one short
+  // card in their place: the page keeps its length and the reader their place
+  const stale = !gpus.length && !!snap.gpu_error && !!R.gpus?.length;
+  if (stale) gpus = R.gpus;
+  else R.gpus = gpus;
   if (!gpus.length) {
-    const c = card('gpu', 'GPUs');
+    const c = card('gpu', 'GPUs', '', 'gpus');
     c.body.append(snap.gpu_error ? h('div', { class: 'alert error' }, snap.gpu_error)
       : h('div', { class: 'muted' }, 'No NVIDIA GPU found: nvidia-smi is not available on this server ',
         h('span', { class: 'mono' }, '([monitor] nvidia_smi'), ' in the configuration gives its path).'));
@@ -255,8 +293,9 @@ function drawGpus(wrap, snap) {
     return;
   }
   clear(wrap, gpus.map((g, pos) => {
-    const c = card('gpu', `GPU ${g.index}`);
+    const c = card('gpu', `GPU ${g.index}`, stale ? 'stale' : '', `gpu-${g.index}`);
     c.value.textContent = pct(g.utilization);
+    if (stale) c.body.append(h('div', { class: 'alert warn stale-note' }, `${snap.gpu_error}. Last values shown.`));
     const hist = (k) => history((e) => (e.gpus?.[pos] || [])[k] ?? null);
     const procs = g.processes || [];
     const power = present(g.power) ? `${Math.round(g.power)}${g.power_limit ? ` / ${Math.round(g.power_limit)}` : ''} W` : '–';
@@ -301,7 +340,7 @@ function drawStorage(c, snap) {
 }
 
 function processCard() {
-  const c = card('list', 'Processes', 'full');
+  const c = card('list', 'Processes', 'full', 'procs');
   const only = h('input', { type: 'checkbox', id: 'res-jobs-only', checked: R.jobsOnly, onchange: (e) => {
     R.jobsOnly = e.target.checked;
     if (R.snap) drawProcesses(c, R.snap);
@@ -344,15 +383,18 @@ function drawProcesses(c, snap) {
 
 // ------------------------------------------------------------------ queue
 function startQueue(body, gen) {
+  const banner = h('div', {});
+  const area = h('div', {});
+  clear(body, banner, area);
   const tick = async () => {
     if (gen !== R.gen) return;
     if (!document.hidden) {
       try {
         const q = await api.queue();
         if (gen !== R.gen) return;
-        drawQueue(body, q, tick);
+        steady(() => { clear(banner); drawQueue(area, q, tick); });
       } catch (e) {
-        if (gen === R.gen) clear(body, h('div', { class: 'alert error' }, e.message));
+        if (gen === R.gen) steady(() => clear(banner, h('div', { class: 'alert error' }, `Queue unavailable: ${e.message}`)));
       }
     }
     if (gen === R.gen) later(tick, 4000);
@@ -363,7 +405,7 @@ function startQueue(body, gen) {
 function laneCard(l, isDefault, holders) {
   const gpus = l.type === 'local' ? l.gpus || [] : [];
   const busy = gpus.filter((g) => holders[String(g)]);
-  return h('div', { class: 'box lane-card' },
+  return h('div', { class: 'box lane-card', dataset: { anchor: `lane-${l.name}` } },
     h('div', { class: 'row' }, icon(l.type === 'cluster' ? 'server' : 'monitor'), h('b', {}, l.name),
       h('span', { class: 'tag' }, l.type === 'cluster' ? 'cluster' : 'this machine'), isDefault ? h('span', { class: 'tag here' }, 'default') : null),
     l.description ? h('div', { class: 'muted small' }, l.description) : null,
@@ -397,7 +439,7 @@ function drawQueue(body, q, refresh) {
     }, { cls: 'small danger' }))));
   clear(body,
     h('div', { class: 'lane-cards' }, q.lanes.map((l, i) => laneCard(l, i === 0, holders))),
-    h('div', { class: 'section' }, h('h4', {}, 'Active and queued jobs'),
+    h('div', { class: 'section', dataset: { anchor: 'jobs' } }, h('h4', {}, 'Active and queued jobs'),
       q.jobs.length ? h('div', { class: 'box table-box' }, h('table', { class: 'data' },
         h('thead', {}, h('tr', {}, ['Job', 'Title', 'Status', 'Message', 'Lane', 'GPU', 'Time', ''].map((c) => h('th', {}, c)))), h('tbody', {}, rows)))
         : h('div', { class: 'empty' }, 'Nothing is running or queued.')));
@@ -405,16 +447,18 @@ function drawQueue(body, q, refresh) {
 
 // ------------------------------------------------------------------ cluster
 function startCluster(body, gen) {
-  clear(body, h('div', { class: 'muted' }, 'Asking SLURM (sinfo, squeue)…'));
+  const banner = h('div', {});
+  const area = h('div', {}, h('div', { class: 'muted' }, 'Asking SLURM (sinfo, squeue)…'));
+  clear(body, banner, area);
   const tick = async () => {
     if (gen !== R.gen) return;
     if (!document.hidden) {
       try {
         const lanes = await api.cluster();
         if (gen !== R.gen) return;
-        drawCluster(body, lanes);
+        steady(() => { clear(banner); drawCluster(area, lanes); });
       } catch (e) {
-        if (gen === R.gen) clear(body, h('div', { class: 'alert error' }, e.message));
+        if (gen === R.gen) steady(() => clear(banner, h('div', { class: 'alert error' }, `Cluster unavailable: ${e.message}`)));
       }
     }
     if (gen === R.gen) later(tick, 20000);
@@ -431,7 +475,7 @@ function memPerNode(v) {
 
 function drawCluster(body, lanes) {
   if (!lanes.length) { clear(body, h('div', { class: 'empty' }, 'No cluster lane.')); return; }
-  clear(body, lanes.map((c) => h('section', { class: 'box res-card cluster-card' },
+  clear(body, lanes.map((c) => h('section', { class: 'box res-card cluster-card', dataset: { anchor: `cluster-${c.lane}` } },
     h('div', { class: 'res-card-head' }, icon('server'), h('h3', {}, c.lane), c.description ? h('span', { class: 'muted small' }, c.description) : null,
       h('span', { class: 'grow' }), c.available && c.jobs ? h('span', { class: 'res-sub' }, `${c.jobs.running} running · ${c.jobs.pending} pending in these partitions`) : null),
     !c.available ? h('div', { class: 'alert warn' }, c.message || 'SLURM did not answer.')

@@ -43,6 +43,9 @@ export function closeBuilder() {
   state.builder = null;
 }
 
+// The project page shows what can be dragged into the builder (output chips, tree cards) once it has a job type.
+const typeChanged = () => document.dispatchEvent(new Event('cryoplug-builder-type'));
+
 function applyType(name) {
   const b = state.builder;
   const t = state.types[name];
@@ -50,6 +53,7 @@ function applyType(name) {
   b.params = Object.fromEntries(t.params.map((p) => [p.name, p.default]));
   b.inputs = {};
   if (b.prefillFrom) prefill(b, t, b.prefillFrom);
+  typeChanged();
 }
 
 function prefill(b, t, job) {
@@ -88,6 +92,27 @@ export function builderDrop(slotName, ref) {
   }
   b.inputs[slotName] = { job: ref.job, output: ref.output };
   renderInputs(slotName);
+}
+
+// A whole job dropped on an input (from the tree view): its output that fits the input, the preferred one first
+// (declared outputs while the job has not run yet).
+export function builderDropJob(slotName, uid) {
+  const b = state.builder;
+  const job = state.jobsByUid[uid];
+  if (!b || !b.type || !job) return;
+  const slot = state.types[b.type].inputs.find((s) => s.name === slotName);
+  if (['failed', 'killed'].includes(job.status)) {
+    toast(`${uid} ${job.status}: it has no output to use`, 'error');
+    return;
+  }
+  const outs = job.status === 'completed' ? job.outputs : (state.types[job.type]?.outputs || []);
+  const fits = outs.filter((o) => slot.types.includes(o.type));
+  if (!fits.length) {
+    toast(`${uid} has no output for '${slot.label}' (${slot.types.map((ty) => state.info.data_types[ty] || ty).join(' / ')})`, 'error');
+    return;
+  }
+  const best = (slot.prefer || []).map((name) => fits.find((o) => o.name === name)).find(Boolean) || fits[0];
+  builderDrop(slotName, { job: uid, output: best.name, type: best.type });
 }
 
 // "Continue with" a job when the builder already has that job type: connect the job's outputs
@@ -139,7 +164,7 @@ export function renderBuilder() {
   const head = h('div', { class: 'panel-head' },
     h('div', { class: 'panel-title' }, b.editing ? h('span', { class: 'uid' }, b.editing.uid) : icon('plus'),
       b.editing ? `Edit ${t.title}` : t.title, h('span', { class: 'grow' }),
-      !b.editing ? h('button', { class: 'btn small', onclick: () => { b.type = null; renderBuilder(); } }, 'Change type') : null,
+      !b.editing ? h('button', { class: 'btn small', onclick: () => { b.type = null; renderBuilder(); typeChanged(); } }, 'Change type') : null,
       h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => navigate(`#/p/${state.project.uid}`) }, icon('close'))),
     h('div', { class: 'help-purpose small', style: { marginTop: '4px' }, title: t.description }, t.help?.purpose || t.description));
   const body = h('div', { class: 'panel-body' });
@@ -155,7 +180,7 @@ export function renderBuilder() {
     inputsBox = h('div', {});
     body.append(h('div', { class: 'section' }, h('h4', {}, 'Inputs'),
       h('div', { class: 'muted small', style: { marginBottom: '6px' } },
-        'Choose an output, or drag one from a job card or from a job opened on the left.'), inputsBox));
+        'Choose an output, or drag one from a job card or a job opened on the left; in the tree view, drag the whole job.'), inputsBox));
     renderInputs();
   } else {
     inputsBox = null;
@@ -226,7 +251,12 @@ function renderInputs(flash = []) {
       ondragleave: () => box.classList.remove('dragover'),
       ondrop: (e) => {
         e.preventDefault(); box.classList.remove('dragover');
-        try { builderDrop(slot.name, JSON.parse(e.dataTransfer.getData('application/x-cryoplug-output'))); } catch { /* not ours */ }
+        const output = e.dataTransfer.getData('application/x-cryoplug-output');
+        const job = e.dataTransfer.getData('application/x-cryoplug-job');
+        try {
+          if (output) builderDrop(slot.name, JSON.parse(output));
+          else if (job) builderDropJob(slot.name, job);
+        } catch { /* not ours */ }
       },
     }, h('div', { class: 'slot-head' }, slot.label, slot.required ? h('span', { class: 'req' }, '*') : h('span', { class: 'muted small' }, 'optional'),
       h('span', { class: 'grow' }), slot.types.map((ty) => h('span', { class: `tag type-${ty}` }, state.info.data_types[ty] || ty))),

@@ -1,10 +1,11 @@
-// Project page: job cards (CryoSPARC-like), pipeline graph, filters and workflow templates.
+// Project page: job cards and tree view (CryoSPARC-like), filters and workflow templates.
 import { api } from './api.js';
 import { openBuilder, paramField } from './builder.js';
 import { detailMode, detailUid, jobMenuItems, jobViewItems, viewerUrl } from './detail.js';
 import { builderHref, jobHref, navigate, refreshJobs, state, typeTitle } from './state.js';
+import { renderTree } from './tree.js';
 import {
-  ACTIVE, ago, btn, clear, confirmDialog, fmtTime, guard, h, icon, jobDuration, modal, popupMenu, s, statusChip, toast,
+  ACTIVE, ago, btn, clear, confirmDialog, fmtTime, guard, h, icon, jobDuration, modal, popupMenu, runAction, statusChip, toast,
 } from './ui.js';
 
 const STATUSES = ['building', 'queued', 'launched', 'running', 'waiting', 'completed', 'failed', 'killed'];
@@ -18,17 +19,17 @@ export function renderProject(content) {
     h('option', { value: '' }, 'Any status'), STATUSES.map((st) => h('option', { value: st, selected: state.filter.status === st }, st)));
   const catSel = h('select', { 'aria-label': 'Category filter', onchange: (e) => { state.filter.category = e.target.value; renderJobs(); } },
     h('option', { value: '' }, 'All categories'), state.info.categories.map((c) => h('option', { value: c, selected: state.filter.category === c }, c)));
-  // in the top bar, as in CryoSPARC: how many jobs in each state, and cards / graph
+  // in the top bar, as in CryoSPARC: how many jobs in each state, and cards / tree
   const seg = h('div', { class: 'seg view-seg', role: 'group', 'aria-label': 'View' },
     ['cards', 'graph'].map((v) => h('button', { class: state.view === v ? 'on' : '', type: 'button', 'aria-pressed': state.view === v ? 'true' : 'false',
-      title: v === 'cards' ? 'Job cards' : 'Pipeline graph (G)',
+      title: v === 'cards' ? 'Job cards (G)' : 'Tree view: the pipeline from the imports down (G)',
       onclick: () => {
         state.view = v;
         localStorage.setItem('cryoplug.view', v);
         if (detailMode() === 'page') navigate(builderHref()); // back from the job shown next to the builder
         else renderProject(content);
       } },
-    icon(v === 'cards' ? 'grid' : 'graph'), h('span', { class: 'lbl' }, v === 'cards' ? 'Cards' : 'Graph'))));
+    icon(v === 'cards' ? 'grid' : 'tree'), h('span', { class: 'lbl' }, v === 'cards' ? 'Cards' : 'Tree'))));
   clear(document.getElementById('topbar-right'), h('div', { class: 'job-summary', id: 'job-summary' }), seg);
   clear(content,
     h('div', { class: 'toolbar' },
@@ -82,11 +83,16 @@ export function renderJobs() {
   const sorted = [...jobs].sort((a, b) => b.num - a.num);
   state.cardOrder = sorted.map((j) => j.uid);
   for (const uid of [...state.selection]) if (!state.jobsByUid[uid]) state.selection.delete(uid);
+  if (state.view === 'graph') {
+    renderTree(area, treeOptions(jobs));
+    return;
+  }
+  const focused = document.activeElement?.closest?.('.card')?.dataset.uid; // the keyboard stays on its card
   const rel = lineage();
-  if (state.view === 'graph') renderGraph(area, jobs, rel);
-  else clear(area, h('div', { class: 'cards' }, sorted.map((j) => jobCard(j, rel))));
+  clear(area, h('div', { class: 'cards' }, sorted.map((j) => jobCard(j, rel))));
   const bar = selectionBar();
   if (bar) area.prepend(bar);
+  if (focused) area.querySelector(`.card[data-uid="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
 
 // ------------------------------------------------------------- selection
@@ -293,71 +299,57 @@ function outputChips(job) {
   }, o.name)));
 }
 
-// -------------------------------------------------------------------- graph
-function renderGraph(area, jobs, rel) {
-  const visible = new Set(jobs.map((j) => j.uid));
-  const depth = {};
-  const byUid = state.jobsByUid;
-  const depthOf = (uid, seen = new Set()) => {
-    if (depth[uid] !== undefined) return depth[uid];
-    if (seen.has(uid)) return 0;
-    seen.add(uid);
-    const j = byUid[uid];
-    const parents = j ? Object.values(j.inputs || {}).map((r) => r.job).filter((u) => byUid[u]) : [];
-    depth[uid] = parents.length ? 1 + Math.max(...parents.map((u) => depthOf(u, seen))) : 0;
-    return depth[uid];
+// --------------------------------------------------------------------- tree
+// What the tree view needs from the project page; the filters dim the jobs they leave out (the tree keeps its shape).
+function treeOptions(jobs) {
+  const puid = state.project.uid;
+  const f = state.filter;
+  return {
+    puid,
+    jobs: state.jobs,
+    shown: f.text.trim() || f.status || f.category ? new Set(jobs.map((j) => j.uid)) : null,
+    open: detailUid(),
+    picked: state.selection,
+    bar: selectionBar(),
+    typeOf: outputType,
+    typeLabel: (type) => state.info.data_types?.[type] || type,
+    slotLabel: (job, slot) => state.types[job?.type]?.inputs.find((x) => x.name === slot)?.label || slot,
+    typeTitle,
+    ago: (job) => ago(job.ended_at || job.started_at || job.created_at),
+    thumb: (job) => {
+      const out = (job.outputs || []).find((o) => o.thumbnail);
+      if (out) return { img: true, el: h('img', { src: api.fileUrl(puid, out.thumbnail), alt: '', loading: 'lazy', draggable: 'false' }) };
+      const ph = categoryThumb(job.type);
+      return { el: ph.el, style: ph.style };
+    },
+    view3d: (job) => {
+      const items = job.status === 'completed' ? jobViewItems(job) : [];
+      return items.length ? viewerUrl(items) : null;
+    },
+    toBuilder: () => !!state.builder?.type,
+    onOpen: openJob,
+    onPick: pickJob,
+    onMenu: (e, job, anchor) => popupMenu(anchor, jobMenuItems(job, anchor, { withOpen: true }),
+      e.type === 'contextmenu' ? { x: e.clientX, y: e.clientY } : null),
+    onQuick: (job, key, anchor) => {
+      const item = jobMenuItems(job, anchor).find((it) => it.key === key);
+      if (item) runAction(item.action);
+    },
+    onDeselect: () => { // Esc does the same
+      const had = clearSelection();
+      if (state.route.panel === 'detail') navigate(`#/p/${puid}`);
+      return had;
+    },
+    rerender: renderJobs,
   };
-  jobs.forEach((j) => depthOf(j.uid));
-  const cols = {};
-  [...jobs].sort((a, b) => a.num - b.num).forEach((j) => { (cols[depth[j.uid]] ||= []).push(j); });
-  const NW = 166, NH = 50, GX = 46, GY = 16, PAD = 18;
-  const pos = {};
-  let maxRows = 0;
-  Object.entries(cols).forEach(([d, list]) => {
-    list.forEach((j, i) => { pos[j.uid] = { x: PAD + d * (NW + GX), y: PAD + i * (NH + GY) }; });
-    maxRows = Math.max(maxRows, list.length);
-  });
-  const ncols = Object.keys(cols).length;
-  const W = PAD * 2 + ncols * NW + (ncols - 1) * GX;
-  const H = PAD * 2 + maxRows * NH + (maxRows - 1) * GY;
-  const svg = s('svg', { width: W, height: Math.max(H, 120), viewBox: `0 0 ${W} ${Math.max(H, 120)}`, role: 'img', 'aria-label': 'Job dependency graph' });
-  for (const j of jobs) {
-    for (const [slot, ref] of Object.entries(j.inputs || {})) {
-      if (!visible.has(ref.job) || !pos[ref.job]) continue;
-      const a = pos[ref.job], b = pos[j.uid];
-      const x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2, mx = (x1 + x2) / 2;
-      svg.appendChild(s('path', { class: 'gedge', d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` }, s('title', {}, `${ref.job}.${ref.output} → ${j.uid}.${slot}`)));
-    }
-  }
-  const colorVar = { completed: '--st-good', running: '--st-running', launched: '--st-running', queued: '--st-warn', waiting: '--st-waiting',
-    failed: '--st-critical', killed: '--st-serious', building: '--st-idle' };
-  for (const j of jobs) {
-    const p = pos[j.uid];
-    const title = clip(j.title, 22);
-    const cls = [detailUid() === j.uid ? 'selected' : '', state.selection.has(j.uid) ? 'picked' : '',
-      rel?.parents.has(j.uid) ? 'lineage-parent' : '', rel?.children.has(j.uid) ? 'lineage-child' : ''].join(' ');
-    const g = s('g', { class: `gnode ${cls}`, transform: `translate(${p.x},${p.y})`, tabindex: 0, role: 'button',
-      style: 'cursor:pointer', onclick: (e) => { if (!pickJob(e, j.uid)) openJob(j.uid); }, onkeydown: (e) => { if (e.key === 'Enter') openJob(j.uid); } },
-    s('rect', { class: 'body', width: NW, height: NH, rx: 7 }),
-    s('rect', { width: 5, height: NH, rx: 2, fill: `var(${colorVar[j.status] || '--st-idle'})` }),
-    s('text', { x: 14, y: 20, 'font-weight': 600 }, `${j.uid}  `, s('tspan', { 'font-weight': 400 }, title)),
-    s('text', { x: 14, y: 38, class: 'sub' }, clip(`${j.status}${j.highlights?.[0] ? ` · ${j.highlights[0].label} ${j.highlights[0].value}` : ''}`, 30)),
-    s('title', {}, `${j.uid} ${j.title} (${typeTitle(j.type)}) — ${j.status}`));
-    svg.appendChild(g);
-  }
-  const fit = localStorage.getItem('cryoplug.graphFit') !== '0';
-  // "Fit" shrinks the graph to the width of the page, but not below 72 % (the labels stay readable; it scrolls)
-  if (fit) Object.assign(svg.style, { width: '100%', height: 'auto', maxWidth: `${W}px`, minWidth: `${Math.round(W * 0.72)}px` });
-  const zoom = h('div', { class: 'seg', role: 'group', 'aria-label': 'Graph zoom' },
-    [['Fit', true], ['100%', false]].map(([label, val]) => h('button', { type: 'button', class: fit === val ? 'on' : '', 'aria-pressed': fit === val ? 'true' : 'false',
-      onclick: () => { localStorage.setItem('cryoplug.graphFit', val ? '1' : '0'); renderGraph(area, jobs); } }, label)));
-  clear(area, h('div', { class: 'row', style: { marginBottom: '8px' } }, zoom,
-    h('span', { class: 'muted small' }, 'Each column is one step further from the imported data. Lines follow outputs into inputs; the left bar shows the job status.')),
-  h('div', { class: 'graph-wrap' }, svg));
 }
 
-function clip(text, n) {
-  return text.length > n ? `${text.slice(0, n - 1)}…` : text;
+// Type of the data an input receives: the output of the job it comes from (declared, while that job has not run).
+function outputType(ref) {
+  const parent = state.jobsByUid[ref.job];
+  const out = (parent?.outputs || []).find((o) => o.name === ref.output)
+    || (state.types[parent?.type]?.outputs || []).find((o) => o.name === ref.output);
+  return out?.type || '';
 }
 
 // ---------------------------------------------------------------- workflows

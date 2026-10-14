@@ -6,8 +6,9 @@ import { renderHelp, renderProjects, renderTools } from './pages.js';
 import { clearSelection, renderJobs, renderProject, selectAllShown } from './project.js';
 import { renderResources, stopResources } from './resources.js';
 import { renderPasswordChange, renderSettings } from './settings.js';
+import { treeKey } from './tree.js';
 import { builderHref, loadStatic, navigate, onJobsChanged, refreshJobs, state } from './state.js';
-import { avatar, clear, guard, h, modal, showError, toast } from './ui.js';
+import { avatar, clear, guard, h, lastInput, modal, showError, toast } from './ui.js';
 
 const content = document.getElementById('content');
 const panel = document.getElementById('panel');
@@ -37,6 +38,37 @@ window.addEventListener('unhandledrejection', (e) => showError(e.reason));
 
 document.addEventListener('dragstart', () => { dragging = true; });
 document.addEventListener('dragend', () => { dragging = false; });
+document.addEventListener('cryoplug-builder-type', () => renderJobs()); // output chips, cards dragged to the builder
+
+// ------------------------------------------------------------------ scroll after a reload
+// The pages scroll inside .content, whose position browsers do not restore on a reload (F5): it is kept for the tab
+// and given back once the page is long enough again (live data and job cards arrive after the first paint).
+const SCROLL_KEY = 'cryoplug.scroll';
+let scrollSaving = false;
+content.addEventListener('scroll', () => {
+  if (scrollSaving) return;
+  scrollSaving = true;
+  requestAnimationFrame(() => {
+    scrollSaving = false;
+    try {
+      sessionStorage.setItem(SCROLL_KEY, JSON.stringify({ hash: location.hash, top: Math.round(content.scrollTop) }));
+    } catch { /* storage unavailable */ }
+  });
+}, { passive: true });
+
+function restoreScroll() {
+  let saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem(SCROLL_KEY) || 'null'); } catch { /* storage unavailable */ }
+  const reload = performance.getEntriesByType?.('navigation')?.[0]?.type === 'reload';
+  if (!reload || !saved || !(saved.top > 0) || saved.hash !== location.hash) return;
+  const since = performance.now();
+  const step = () => {
+    if (lastInput() > since || location.hash !== saved.hash) return; // the reader is already elsewhere
+    if (content.scrollHeight - content.clientHeight >= saved.top - 1) { content.scrollTop = saved.top; return; }
+    if (performance.now() - since < 8000) setTimeout(step, 150);
+  };
+  step();
+}
 
 // ------------------------------------------------------------------ routing
 function parseRoute() {
@@ -163,11 +195,14 @@ async function route() {
 const SHORTCUTS = [
   ['N', 'New job (opens the job builder)'],
   ['/', 'Filter the jobs'],
-  ['G', 'Switch between cards and graph'],
+  ['G', 'Switch between the cards and the tree view'],
+  ['T · F', 'Tree view: centre on the selected jobs · show the whole tree'],
+  ['+ · − · 0', 'Tree view: zoom in · out · actual size (or Ctrl/⌘ + scroll)'],
+  ['Arrows (on a job of the tree)', 'Move to an input, a job using it, or along the row'],
   ['Ctrl/⌘ + A', 'Select all the jobs shown'],
   ['Ctrl/⌘ + click · Shift + click', 'Add a job / a range of jobs to the selection'],
   ['Space (on a card)', 'Add the card to the selection'],
-  ['Esc', 'Clear the selection, or close the job details'],
+  ['Esc', 'Clear the selection, or close the job details (double-click the tree background: the same)'],
   ['?', 'This list'],
 ];
 
@@ -209,6 +244,8 @@ document.addEventListener('keydown', (e) => {
     state.view = state.view === 'graph' ? 'cards' : 'graph';
     localStorage.setItem('cryoplug.view', state.view);
     renderProject(content);
+  } else if (state.view === 'graph' && !r.inspect && treeKey(e)) {
+    e.preventDefault();
   }
 });
 
@@ -279,6 +316,7 @@ async function start() {
   }
   window.addEventListener('hashchange', () => { route().catch((e) => guard(Promise.reject(e))); });
   await route();
+  restoreScroll();
   setInterval(poll, 2500);
 }
 

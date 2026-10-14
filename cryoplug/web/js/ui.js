@@ -33,6 +33,13 @@ export function clear(el, ...children) {
   return el;
 }
 
+// When the reader last scrolled, clicked or typed: an automatic scroll (keeping or restoring a place) gives way to them.
+let inputAt = 0;
+for (const type of ['wheel', 'keydown', 'pointerdown', 'touchstart']) {
+  document.addEventListener(type, () => { inputAt = performance.now(); }, { capture: true, passive: true });
+}
+export const lastInput = () => inputAt;
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 export function s(tag, attrs = {}, ...children) {
   const el = document.createElementNS(SVG_NS, tag);
@@ -113,6 +120,8 @@ const ICONS = {
   record: 'M12 17.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11z',
   link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
   ruler: 'M3 17L17 3l4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2',
+  minus: 'M5 12h14',
+  tree: 'M9.5 3h5v4h-5zM3.5 17h5v4h-5zM15.5 17h5v4h-5zM12 7v6M6 17v-3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v3',
 };
 
 export function icon(name, cls = '') {

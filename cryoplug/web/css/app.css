@@ -194,10 +194,11 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); out
 @keyframes pulse { 50% { opacity: .35; } }
 .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2);
   border: 1px solid var(--border); white-space: nowrap; }
+/* data types: the families of the tree view's lines (maps blue, models and sequences orange, particles green) */
 .tag.type-map, .tag.type-half_maps, .tag.type-mask, .tag.type-locres, .tag.type-variability, .tag.type-volume_series { background: rgba(42, 120, 214, .1); }
-.tag.type-particles, .tag.type-latent { background: rgba(216, 160, 20, .14); }
+.tag.type-particles, .tag.type-latent { background: rgba(27, 175, 122, .13); }
 .tag.type-model { background: rgba(235, 104, 52, .12); }
-.tag.type-sequence { background: rgba(27, 175, 122, .12); }
+.tag.type-sequence { background: rgba(235, 104, 52, .12); }
 .tag.type-report, .tag.type-fsc { background: rgba(74, 58, 167, .1); }
 .st { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; font-size: 12px; white-space: nowrap; }
 .st svg { width: 13px; height: 13px; }
@@ -372,7 +373,7 @@ pre.log .cmd { color: #8ec5ff; }
 .heat-legend { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; }
 .heat-legend .ramp { display: inline-flex; gap: 2px; }
 .heat-legend .ramp i { width: 22px; height: 10px; border-radius: 2px; display: inline-block; }
-.tag.type-restraints { background: rgba(237, 161, 0, .14); }
+.tag.type-restraints { background: rgba(235, 104, 52, .12); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); margin: 2px 0 6px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 14px; height: 2px; border-radius: 1px; display: inline-block; }
@@ -421,18 +422,104 @@ pre.log .cmd { color: #8ec5ff; }
 .lx-sheet { max-width: 100%; height: auto; border-radius: 6px; align-self: flex-start; }
 .sec-note { margin-top: 6px; }
 
-/* graph ------------------------------------------------------------------- */
-.graph-wrap { overflow: auto; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); }
-.graph-wrap svg text { font-family: var(--font); }
-.gnode rect.body { fill: var(--surface-1); stroke: var(--border); }
-.gnode:hover rect.body { stroke: var(--accent); }
-.gnode.selected rect.body { stroke: var(--accent); stroke-width: 2; }
-.gnode.picked rect.body { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 5 3; }
-.gnode.lineage-parent rect.body { stroke: var(--series-7); stroke-width: 2.5; }
-.gnode.lineage-child rect.body { stroke: var(--good-ink); stroke-width: 2.5; }
-.gnode text { fill: var(--ink-1); font-size: 12px; }
-.gnode text.sub { fill: var(--ink-3); font-size: 11px; }
-.gedge { fill: none; stroke: var(--axis); stroke-width: 1.5; }
+/* tree view (jobs from the imports down, as in CryoSPARC) ----------------- */
+.tree { display: flex; flex-direction: column; gap: 8px; }
+.tree-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tree-bar .btn.small svg.ic { width: 14px; height: 14px; }
+.tree-bar .btn.on { background: var(--accent-wash); border-color: var(--accent); color: var(--accent-strong); }
+.tree-zoombox button { padding: 3px 8px; font-size: 12.5px; }
+.tree-zoombox svg.ic { width: 14px; height: 14px; }
+.tree-zoom { min-width: 52px; justify-content: center; font-variant-numeric: tabular-nums; }
+.tree-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 12px; color: var(--ink-2); }
+.tree-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw line { stroke: var(--fam); stroke-width: 2.5; stroke-linecap: round; }
+.fam-map { --fam: var(--series-1); }
+.fam-model { --fam: var(--series-2); }
+.fam-particles { --fam: var(--series-3); }
+.fam-other { --fam: var(--ink-3); }
+.sw.fam-other line, .tlink.fam-other .line { stroke-dasharray: 4 4; }
+.tree-view { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); cursor: grab;
+  background-color: var(--surface-1); background-image: radial-gradient(circle, var(--hairline) 1.2px, transparent 1.3px);
+  touch-action: none; user-select: none; -webkit-user-select: none; }
+.tree-view.panning { cursor: grabbing; }
+.tree-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.tree-links { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.tlink .hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; }
+.tlink .line { fill: none; stroke: var(--fam); stroke-width: 2; stroke-linecap: round; opacity: .75; }
+.tlink .head { fill: var(--fam); opacity: .75; }
+.tlink:hover .line, .tlink.hot .line { stroke-width: 3.25; opacity: 1; }
+.tlink.lit .line { stroke-width: 3; opacity: 1; }
+.tlink:hover .head, .tlink.hot .head, .tlink.lit .head { opacity: 1; }
+.tlink.faded { opacity: .15; }
+.tlink.dim { opacity: .25; }
+.tnode { position: absolute; width: 220px; height: 66px; box-sizing: border-box; display: flex; align-items: center; gap: 9px;
+  padding: 0 10px 0 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow);
+  cursor: pointer; transition: opacity .15s; }
+.tnode::before { content: ""; position: absolute; left: -1px; top: -1px; bottom: -1px; width: 5px; border-radius: 9px 0 0 9px; background: var(--node-st); }
+.tnode:hover { border-color: var(--accent); z-index: 3; }
+.tnode:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; z-index: 3; }
+.tnode, .mn { --node-st: var(--st-idle); }
+.tnode.queued, .mn.queued { --node-st: var(--st-warn); }
+.tnode.launched, .tnode.running, .mn.launched, .mn.running { --node-st: var(--st-running); }
+.tnode.waiting, .mn.waiting { --node-st: var(--st-waiting); }
+.tnode.completed, .mn.completed { --node-st: var(--st-good); }
+.tnode.failed, .mn.failed { --node-st: var(--st-critical); }
+.tnode.killed, .mn.killed { --node-st: var(--st-serious); }
+.tnode.building { border-style: dashed; }
+.tnode.failed { background: color-mix(in srgb, var(--st-critical) 7%, var(--surface-1)); }
+.tnode.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 6px 18px rgba(0, 0, 0, .12); z-index: 2; }
+.tnode.picked { outline: 2px dashed var(--accent); outline-offset: 3px; background-image: linear-gradient(var(--accent-wash), var(--accent-wash)); }
+.tnode.lineage-parent { box-shadow: 0 0 0 2px var(--series-7), var(--shadow); }
+.tnode.lineage-child { box-shadow: 0 0 0 2px var(--good-ink), var(--shadow); }
+.tnode.faded { opacity: .3; }
+.tnode.dim { opacity: .25; filter: grayscale(.7); }
+.tnode.faded:hover, .tnode.dim:hover, .tnode.faded:focus-visible, .tnode.dim:focus-visible { opacity: .95; }
+.t-thumb { width: 42px; height: 42px; flex-shrink: 0; border-radius: 6px; background: var(--surface-2); display: flex; align-items: center;
+  justify-content: center; overflow: hidden; }
+.t-thumb img { width: 100%; height: 100%; object-fit: cover; -webkit-user-drag: none; }
+.t-thumb.ph { background: color-mix(in srgb, var(--cat, var(--ink-3)) 12%, var(--surface-2)); }
+.t-thumb.ph > svg { width: 22px; height: 22px; stroke: var(--cat, var(--ink-3)); fill: none; stroke-width: 1.6; }
+.t-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.t-head { display: flex; align-items: center; gap: 7px; }
+.t-uid { font-family: var(--mono); font-weight: 700; font-size: 12.5px; }
+.t-status { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--ink-2); white-space: nowrap; }
+.t-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--node-st); }
+.tnode.running .t-status::before { animation: pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .tnode.running .t-status::before { animation: none; } }
+.t-title { font-weight: 600; font-size: 12.5px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t-sub { font-size: 11px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tnode.failed .t-sub { color: var(--bad-ink); }
+.t-progress { position: absolute; left: 14px; right: 10px; bottom: 5px; height: 3px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.t-progress > i { display: block; height: 100%; background: var(--st-running); border-radius: 2px; }
+/* quick actions, on hover (bottom right, over the edge of the card) */
+.t-actions { position: absolute; right: -6px; bottom: -15px; display: flex; gap: 1px; padding: 2px; background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: opacity .12s; }
+.tnode:hover .t-actions, .tnode:focus-within .t-actions { opacity: 1; pointer-events: auto; }
+.t-act { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px;
+  background: transparent; color: var(--ink-2); cursor: pointer; }
+.t-act:hover, .t-act:focus-visible { background: var(--surface-2); color: var(--accent-strong); }
+.t-act svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; }
+@media (hover: none) { .tnode.selected .t-actions { opacity: 1; pointer-events: auto; } }
+/* zoomed far out: each card shows its number on the colour of its status */
+.tree-view.far .tnode { justify-content: center; background: color-mix(in srgb, var(--node-st) 18%, var(--surface-1)); }
+.tree-view.far .t-thumb, .tree-view.far .t-status, .tree-view.far .t-title, .tree-view.far .t-sub, .tree-view.far .t-progress,
+.tree-view.far .t-actions { display: none; }
+.tree-view.far .t-main { align-items: center; }
+.tree-view.far .t-uid { font-size: 30px; }
+.tree-hint { margin-top: -2px; min-height: 18px; font-size: 12px; line-height: 18px; color: var(--ink-3); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.tree-hint b { font-family: var(--mono); color: var(--ink-1); }
+.key-box { display: inline-block; width: 13px; height: 10px; border: 2px solid; border-radius: 3px; vertical-align: -1px; }
+.key-box.parent { border-color: var(--series-7); }
+.key-box.child { border-color: var(--good-ink); }
+.tree-mini { position: absolute; right: 10px; bottom: 10px; background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+  border: 1px solid var(--border); border-radius: 7px; box-shadow: var(--shadow); cursor: pointer; touch-action: none; opacity: .8; transition: opacity .12s; }
+.tree-mini:hover { opacity: 1; }
+.tree-mini[hidden] { display: none; }
+.tree-mini .mn { fill: var(--node-st); opacity: .8; }
+.tree-mini .mn.faded, .tree-mini .mn.dim { opacity: .25; }
+.tree-mini .mn.on { stroke: var(--accent); stroke-width: 14; opacity: 1; }
+.mini-view { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 
 /* modal / toasts ------------------------------------------------------------ */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(10, 14, 22, .45); display: flex; align-items: flex-start; justify-content: center;
@@ -667,6 +754,9 @@ tr.other td { color: var(--ink-3); }
 .res-gpus { display: contents; }
 .res-card { padding: 12px 14px; min-width: 0; }
 .res-card.full { grid-column: 1 / -1; }
+/* nvidia-smi not answering: the last GPU values, dimmed, under the reason */
+.res-card.stale .res-value, .res-card.stale .res-card-body > :not(.stale-note) { opacity: .5; }
+.stale-note { margin: 4px 0 6px; font-size: 12px; }
 .res-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; min-width: 0; }
 .res-card-head h3 { margin: 0; font-size: 14px; font-weight: 600; white-space: nowrap; }
 .res-card-head > svg.ic { color: var(--ink-3); width: 18px; height: 18px; }
