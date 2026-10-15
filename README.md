@@ -10,7 +10,8 @@ local :
 | Étape | Logiciels pilotés | Jobs CryoPlug |
 |---|---|---|
 | Import | CryoSPARC, RELION, fichiers MRC, PDB, AlphaFold DB, UniProt | `Import from CryoSPARC`, `Import maps`, `Import atomic model`, `Import sequence` |
-| Amélioration de carte | **LocScale 2** (model-free / pseudo-modèle / model-based / hybride), **EMmerNet**, **DeepEMhancer**, **EMReady**, **spIsoNet** (correction de l'anisotropie due à l'orientation préférentielle), Phenix `resolve_cryo_em`, `auto_sharpen`, `local_aniso_sharpen`, **résolution locale** (`local_resolution`), **cartes composites** de raffinements locaux (`combine_focused_maps`) | + FSC demi-cartes (masquée, corrigée par randomisation de phase), **résolution directionnelle / 3D FSC**, **création de masques** (densité, chaînes du modèle, densité proche du modèle ; dilatation et bord doux en Å) et opérations de carte (main, B-factor, filtre, masque, boîte) intégrées |
+| Raffinement local (RELION) | **RELION 5** : raffinement local gold-standard (recherches locales depuis les poses CryoSPARC, Blush), **soustraction de signal** recentrée et recadrée (avec expansion de symétrie), **classification 3D focalisée** sans alignement, post-traitement, reconstruction | conversion CryoSPARC → RELION automatique (conventions de pyem), cartes toujours rendues sur la grille de la carte consensus, workflows *Focused refinement* et *Focused classification* |
+| Amélioration de carte | **LocScale 2** (model-free / pseudo-modèle / model-based / hybride), **EMmerNet** (avec la carte de confiance pVDDT), **DeepEMhancer**, **EMReady2**, **spIsoNet** (correction de l'anisotropie due à l'orientation préférentielle), Phenix `resolve_cryo_em`, `map_sharpening` (Phenix 2), `auto_sharpen`, `local_aniso_sharpen`, **résolution locale** (`local_resolution`), **cartes composites** de raffinements locaux (`combine_focused_maps`) | + FSC demi-cartes (masquée, corrigée par randomisation de phase), **résolution directionnelle / 3D FSC**, **création de masques** (densité, chaînes du modèle, densité proche du modèle ; dilatation et bord doux en Å), **masques dessinés à la main dans le visualiseur 3D** (comme Chimera : sphères, boîtes, cylindres, région de densité cliquée, zone autour de chaînes) et opérations de carte (main, B-factor, filtre, masque, boîte) intégrées |
 | Hétérogénéité (variabilité 3D) | **cryoDRGN** (contrôle des entrées, entraînement en deux tours, convergence, analyse, paysage, trajectoires), **cryoDRGN-AI** (ab initio, sans consensus : poses apprises, main et repère, validation), **CryoSPARC 3D Variability** et *3D Variability Display* / 3D Flex (import des coordonnées des particules et des séries de volumes) | **Explorateur de l'espace latent** interactif (UMAP / PCA, coloration par densité, défocus ou orientation, galerie des volumes avec alertes junk, lasso, images des particules, clusters → volumes en 3D, sélection de particules, trajectoire), **lecture des séries** dans le visualiseur 3D, **analyse de série** (carte de variabilité, corrélation entre états, chaînes qui bougent ou disparaissent), sélection de particules vers CryoSPARC ou un nouvel entraînement |
 | Construction de modèle | **ModelAngelo** (avec ou sans séquence) et **identification de chaînes inconnues** (`hmm_search`), **CryoAtom2** (protéines, ARN/ADN, complexes, identification par base de séquences), ColabFold/AlphaFold2, **Boltz-2** (complexes protéines/acides nucléiques/ligands), Phenix `process_predicted_model`, `dock_in_map`, ChimeraX `fitmap` | + restreintes de ligands (Phenix eLBOW), fusion et édition de modèles (gemmi) |
 | Reconstruction interactive | **ISOLDE** (ChimeraX), **Coot** | sessions ouvertes en un clic sur l'écran du serveur, ou paquet téléchargeable pour votre poste |
@@ -33,6 +34,8 @@ local :
 | ![](docs/images/viewer_section.png) | ![](docs/images/viewer_surface.png) |
 | **Lignée du job ouvert** : ses entrées en violet, les jobs qui l'utilisent en vert | **Mode sombre** |
 | ![](docs/images/lineage.png) | ![](docs/images/dark.png) |
+| **Éditeur de masque** dans le visualiseur 3D : sphère, région de densité cliquée… l'aperçu orange est calculé en direct | **Masque dessiné** : rapport du job (centre de masse, boîte pour recentrer les particules, coupes) |
+| ![](docs/images/mask_editor.png) | ![](docs/images/mask_job.png) |
 
 | Validation carte-modèle (Q-score, FSC) | Paquet de dépôt (méthodes, Table 1) | Boltz-2 (complexe + ligands) |
 |---|---|---|
@@ -157,6 +160,10 @@ même environnement Python que CryoPlug.
 [tools.phenix]             # Phenix 2.x (ou 1.21) : le script phenix_env.sh du dossier d'installation
 setup = "source /opt/phenix-2.2.1/phenix_env.sh"
 
+[tools.relion]             # RELION 4/5 (relion_refine_mpi, relion_particle_subtract_mpi, relion_postprocess…)
+bin_dir = "/opt/relion-5.0/bin"
+env = { MPIRUN = "mpirun" }  # lanceur MPI : "mpirun --oversubscribe" (Open MPI), "srun --mpi=pmix" (SLURM)…
+
 [tools.modelangelo]
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate model_angelo"
 
@@ -169,7 +176,7 @@ setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate locscale"
 [tools.spisonet]
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate spisonet"
 
-[tools.boltz]               # pip install boltz
+[tools.boltz]               # Python 3.10-3.12 : pip install "boltz[cuda]" -U  (noyaux cuEquivariance des GPU récents)
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate boltz"
 
 [tools.deepemhancer]
@@ -187,8 +194,8 @@ executable = "/usr/bin/chimerax"
 [tools.coot]
 executable = "/opt/coot/bin/coot"
 
-[tools.colabfold]
-bin_dir = "/opt/localcolabfold/colabfold-conda/bin"
+[tools.colabfold]           # localcolabfold actuel (pixi) ; ancienne installation : .../colabfold-conda/bin
+bin_dir = "/opt/localcolabfold/.pixi/envs/default/bin"
 
 [tools.checkmysequence]     # conda env avec hmmer + checkMySequence (gitlab.com/gchojnowski/checkmysequence)
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate checkmysequence"
@@ -214,8 +221,8 @@ Les fichiers de particules `.cs` des versions récentes de CryoSPARC (format com
 `cryosparc-tools` : `~/cryoplug-venv/bin/pip install cryosparc-tools` (inutile pour le format NumPy classique).
 
 > Les lignes de commande suivent la documentation et le code source actuels de chaque logiciel
-> (ModelAngelo 1.x, CryoAtom2 v2.1, LocScale 2, spIsoNet 1.0, Boltz-2, DeepEMhancer, EMReady, Servalcat
-> `refine_spa_norefmac`, Phenix 2.x et 1.21, cryoDRGN 4.x). Si votre version
+> (RELION 5.1, ModelAngelo 1.0.18, CryoAtom2 2.1, LocScale 2.4, spIsoNet 1.0, Boltz 2.2, ColabFold 1.6,
+> DeepEMhancer 0.18, EMReady2, Servalcat 0.4, Phenix 2.x et 1.21, cryoDRGN 4.3, checkMySequence 1.5). Si votre version
 > diffère, utilisez *Extra arguments* ou adaptez le job correspondant (§7) ; la commande exacte exécutée
 > est toujours enregistrée dans `commands.sh` et dans le log du job.
 
@@ -337,6 +344,43 @@ Une interface entre CryoSPARC et ChimeraX, dessinée par Mol\* (qui fonctionne h
   jusqu'au fichier d'origine.
 - **L'adresse de la page garde la vue** : cartes et modèles ouverts, réglages et caméra — recharger la page ou
   envoyer le lien (bouton *Link*) redonne la même vue.
+- **Éditeur de masque** (bouton **Mask**, comme dans Chimera) : on choisit un outil — **sphère**, **boîte**,
+  **cylindre** (deux clics), **région** (toute la densité connexe au niveau de contour, là où l'on clique),
+  **zone** autour de chaînes d'un modèle ouvert, **densité** au-dessus du niveau — et un mode **ajouter**, **effacer** ou
+  **garder seulement** ; un clic sur la carte place la forme (ou *At the centre of the view*, après avoir cliqué un atome).
+  La liste des opérations s'annule (Ctrl + Z / Ctrl + Y), les curseurs modifient l'opération sélectionnée, et la
+  dilatation et le bord doux se règlent en Å. Le serveur calcule le masque en direct sur une copie réduite de la carte
+  (surface orange) ; **Save as job** lance le job *Mask drawn in the 3D viewer* qui le calcule sur la grille complète,
+  avec son centre de masse et la boîte pour recentrer des particules. Le dessin reste dans l'adresse de la page et se
+  rouvre depuis le job (*Mask editor*).
+
+### Raffinement local et classification focalisée (RELION)
+
+Pourquoi RELION en plus du *Local Refinement* de CryoSPARC : la **soustraction de signal** recentrée et recadrée,
+la **classification 3D sans alignement** focalisée sur une région (l'outil de référence pour séparer les états d'un
+domaine), l'**expansion de symétrie** (une copie d'un complexe symétrique devient une particule) et la régularisation
+**Blush** de RELION 5, qui améliore nettement les petites régions flexibles. CryoPlug enchaîne tout à partir du
+raffinement consensus de CryoSPARC, sans export manuel :
+
+1. **Particules** : celles d'un import CryoSPARC (ou d'une sélection cryoDRGN) sont converties à la volée en fichier
+   STAR RELION 5 avec les conventions de pyem (angles d'Euler de la rotation transposée, origines en Å, angles de CTF en
+   degrés, groupes optiques = groupes d'exposition) — vérifiées numériquement contre pyem. Les **demi-jeux de CryoSPARC
+   sont conservés** : la FSC reste gold-standard. Les piles d'images sont liées dans le dossier du job sous l'extension
+   `.mrcs` que RELION exige ; RELION tourne depuis le dossier du projet, comme dans un projet RELION.
+2. **RELION local refinement** sur tout le complexe (recherches locales dès le départ, 1,8°) : quelques itérations
+   suffisent, et elles donnent le modèle RELION dont la soustraction a besoin.
+3. **Masque de la région** : dessiné dans le visualiseur 3D (*Mask*), ou fait par *Create mask* (chaînes du modèle).
+4. **RELION signal subtraction** : tout ce qui est hors du masque est retiré des images, les particules sont recentrées
+   sur le centre de masse du masque (par voxels entiers) et mises dans une boîte plus petite (1,5 × l'étendue du masque).
+5. **RELION local refinement** focalisé (Blush conseillé) ou **RELION 3D classification** sans alignement (T = 10–40
+   pour une petite région) ; chaque classe donne une carte et ses particules.
+
+Les cartes et les masques restent **toujours sur la grille de la carte consensus** : les jobs découpent la référence et le
+masque pour RELION puis remettent les résultats en place exactement. Une carte focalisée se superpose donc au modèle et
+va directement dans *Composite map*, *LocScale* ou la construction de modèle. Les workflows *Focused refinement with
+signal subtraction (RELION)* et *Focused 3D classification (RELION)* créent toute la chaîne ; le job de masque attend
+son dessin (bouton *Draw in 3D*) et les jobs suivants attendent le masque. Réglages MPI : au moins 3 processus pour un
+raffinement (un maître + un par demi-jeu), 2 pour soustraire un raffinement ; le lanceur se règle par `MPIRUN` (§2).
 
 ### Hétérogénéité et variabilité 3D (cryoDRGN, CryoSPARC 3DVA)
 
@@ -647,12 +691,13 @@ qu'un compte existe), toute requête doit donc être authentifiée :
 
 La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes) est dans
 [docs/JOBS.md](docs/JOBS.md), générée depuis `cryoplug/jobhelp.py` par `cryoplug docs-jobs`.
-`cryoplug jobtypes` liste les 52 types de jobs :
+`cryoplug jobtypes` liste les 65 types de jobs :
 
 | Catégorie | Jobs |
 |---|---|
 | Import | Import from CryoSPARC (cartes et particules, coordonnées de 3D variability) · Import maps · Import atomic model (fichier / PDB / AlphaFold DB) · Import sequence (FASTA / UniProt, séparation protéine/ARN/ADN) · Import particles (`.cs` CryoSPARC, `.star` RELION) · Import volume series (3DVA, 3D Flex, cryoDRGN…) |
-| Map processing | Half-map FSC · Directional resolution (3D FSC) · Local resolution (Phenix) · Create mask · Composite map (focused maps) · Map operations · LocScale 2 · EMmerNet · DeepEMhancer · EMReady · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
+| Reconstruction | RELION local refinement · RELION signal subtraction · RELION 3D classification (focused) · RELION post-processing · RELION reconstruction |
+| Map processing | Half-map FSC · Directional resolution (3D FSC) · Local resolution (Phenix) · Create mask · Mask drawn in the 3D viewer · Composite map (focused maps) · Map operations · LocScale 2 · EMmerNet · DeepEMhancer · EMReady2 · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Map sharpening (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
 | Heterogeneity | cryoDRGN input check (backprojection) · cryoDRGN training · cryoDRGN-AI ab initio reconstruction · cryoDRGN continue training · cryoDRGN convergence check · cryoDRGN analysis · cryoDRGN landscape analysis · cryoDRGN trajectory · cryoDRGN volumes at particles · Select particles (latent space) · Volume series analysis · Extract volume from series |
 | Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
 | Interactive | ISOLDE session · Coot session |

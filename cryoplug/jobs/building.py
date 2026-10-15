@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -64,10 +65,31 @@ def _number(value, default: float | None = None) -> float | None:
         return default
 
 
-def sequence_files(ctx: JobContext, seq) -> dict[str, str]:
-    """FASTA file per molecule kind (protein / rna / dna) of a sequence input."""
+def sequence_files(ctx: JobContext, seq, unique: bool = False) -> dict[str, str]:
+    """FASTA file per molecule kind (protein / rna / dna) of a sequence input. ``unique``: each sequence once (written
+    into the job folder), as CryoAtom2 asks (a repeated chain disturbs its sequence assignment)."""
     files = {kind: str(ctx.abs(seq.meta[f"{kind}_file"])) for kind in ("protein", "rna", "dna") if seq.meta.get(f"{kind}_file")}
-    return files or {"protein": seq.files[0]}
+    files = files or {"protein": seq.files[0]}
+    if not unique:
+        return files
+    from cryoplug.modelio import parse_fasta, write_fasta
+    out = {}
+    for kind, path in files.items():
+        records = parse_fasta(Path(path).read_text())
+        seen: set[str] = set()
+        kept = [(n, sq) for n, sq in records if not (sq.upper() in seen or seen.add(sq.upper()))]
+        if len(kept) < len(records):
+            ctx.log(f"{len(records) - len(kept)} repeated {kind} sequence(s) given once")
+        out[kind] = str(write_fasta(kept, ctx.path(f"input_{kind}.fasta")))
+    return out
+
+
+def map_file_for(ctx: JobContext, path: str, name: str, suffixes: tuple[str, ...] = (".mrc", ".map")) -> str:
+    """The map itself when its name ends as the program wants, otherwise a link to it with that suffix (CryoAtom2
+    refuses .ccp4 files)."""
+    if path.lower().endswith(suffixes):
+        return path
+    return str(ctx.link_input(path, f"{name}{suffixes[0]}"))
 
 
 def quick_cc(ctx: JobContext, map_path: str, model_path: Path, resolution: float | None) -> float | None:
@@ -99,7 +121,8 @@ class ModelAngeloBuild(JobType):
     description = ("Automated model building (Jamali et al. 2024). With a sequence: 'build' (protein, RNA and DNA "
                    "FASTA are passed separately). Without: 'build_no_seq', which also writes HMM profiles to search "
                    "sequence databases for unknown proteins. Use the best sharpened / post-processed map.")
-    inputs = [Slot("map", ("map",), "Map"), Slot("sequence", ("sequence",), "Sequence", required=False)]
+    inputs = [Slot("map", ("map",), "Map"), Slot("sequence", ("sequence",), "Sequence", required=False),
+              Slot("mask", ("mask",), "Mask", required=False, help="Build only inside this region (-m), e.g. one subcomplex.")]
     params = [
         Param("device", "str", "", label="CUDA device(s)", advanced=True,
               help="Value for --device (index inside the GPUs given to the job). Empty = automatic."),
@@ -107,7 +130,7 @@ class ModelAngeloBuild(JobType):
               help="ModelAngelo < 1.0 used -f instead of -pf for the protein FASTA."),
         extra_args_param(),
     ]
-    outputs = [OutputDef("model", "model", "ModelAngelo model")]
+    outputs = [OutputDef("model", "model", "ModelAngelo model"), OutputDef("model_raw", "model", "Raw model (no pruning)")]
 
     def run(self, ctx: JobContext) -> None:
         m = ctx.require("map")
@@ -116,19 +139,27 @@ class ModelAngeloBuild(JobType):
         exe = ctx.executable("modelangelo")
         out_dir = str(ctx.path(out_name))  # absolute: never resolved against another folder
         if seq:
+            files = sequence_files(ctx, seq)
+            if "protein" not in files:  # build requires -pf
+                raise JobError("ModelAngelo 'build' needs a protein sequence (-pf). For RNA or DNA only, use CryoAtom2 "
+                               "(it takes -rs / -ds alone), or run ModelAngelo without a sequence.")
             args = [exe, "build", "-v", m.path, "-o", out_dir]
             flags = {"protein": "-f" if ctx.params["legacy_fasta_flag"] else "-pf", "rna": "-rf", "dna": "-df"}
-            for kind, path in sequence_files(ctx, seq).items():
+            for kind, path in files.items():
                 args += [flags[kind], path]
         else:
             args = [exe, "build_no_seq", "-v", m.path, "-o", out_dir]
+        mask = ctx.input("mask")
+        if mask:
+            args += ["-m", mask.path]
         args += ["--device", ",".join(ctx.relative_gpus(ctx.params.get("device", "")))]
         args += ctx.split_extra()
         start = time.time()
         ctx.run(args, tool="modelangelo")
         out = first_existing([ctx.path(out_name, f"{out_name}.cif"), ctx.path(f"{out_name}.cif")])
         if out is None:
-            out = pick_new_model(ctx, start, [f"{out_name}.cif", "*.cif"], exclude=("raw", "entropy_scores", "gnn_output"))
+            out = pick_new_model(ctx, start, [f"{out_name}.cif", "*.cif"],
+                                 exclude=("raw", "entropy_score", "gnn_output", "see_alpha_output"))
         report_model(ctx, out)
         ctx.add_output("model", "model", out, "ModelAngelo model", inherit=["map"])
         raw = first_existing([ctx.path(out_name, f"{out_name}_raw.cif")])
@@ -189,16 +220,33 @@ class CryoAtomBuild(JobType):
     def run(self, ctx: JobContext) -> None:
         m = ctx.require("map")
         out_name = "cryoatom"
-        args = [ctx.executable("cryoatom"), "build", "-v", m.path, "-o", str(ctx.path(out_name))]  # absolute
+        # CryoAtom2 reads maps and masks named .mrc / .map only
+        args = [ctx.executable("cryoatom"), "build", "-v", map_file_for(ctx, m.path, "input_map"), "-o", str(ctx.path(out_name))]
         seq = ctx.input("sequence")
+        given: list[tuple[str, str]] = []
         if seq:
             flags = {"protein": "-ps", "rna": "-rs", "dna": "-ds"}
-            for kind, path in sequence_files(ctx, seq).items():
+            for kind, path in sequence_files(ctx, seq, unique=True).items():
                 args += [flags[kind], path]
-        for slot, flag in (("mask", "-m"), ("backbone", "-r")):
-            inp = ctx.input(slot)
-            if inp:
-                args += [flag, inp.path]
+                given += _sequences_from([Path(path)])
+        mask, backbone = ctx.input("mask"), ctx.input("backbone")
+        if mask and backbone:
+            ctx.warn("With a backbone to identify (-r), CryoAtom2 skips the density step: the mask is not used")
+        if mask:
+            from cryoplug.mrc import MapVolume
+            mvol, mmask = MapVolume.read(m.path, header_only=True), MapVolume.read(mask.path, header_only=True)
+            if tuple(mvol.shape_xyz) != tuple(mmask.shape_xyz):
+                raise JobError(f"The mask ({mmask.shape_xyz}) must have the box of the map ({mvol.shape_xyz}): CryoAtom2 "
+                               "multiplies them voxel by voxel")
+            args += ["-m", map_file_for(ctx, mask.path, "input_mask")]
+        if backbone:
+            bb = backbone.path
+            if not bb.lower().endswith((".pdb", ".cif")):  # CryoAtom2 reads the type from the last 3 letters
+                import gemmi
+                st = gemmi.read_structure(bb)
+                bb = str(ctx.path("input_backbone.cif"))
+                st.make_mmcif_document().write_file(bb)
+            args += ["-r", bb]
         for key, flag in (("protein_db", "-pf"), ("na_db", "-nf"), ("config", "-c")):
             if ctx.params.get(key):
                 if not Path(ctx.params[key]).is_file():
@@ -212,13 +260,17 @@ class CryoAtomBuild(JobType):
         ctx.run(args, tool="cryoatom")
         out = first_existing([ctx.path(out_name, f"{out_name}.cif"), ctx.path(f"{out_name}.cif")])
         if out is None:
-            out = pick_new_model(ctx, start, [f"{out_name}.cif", "*.cif"], exclude=("raw", "model_net", "entropy_scores"))
+            out = pick_new_model(ctx, start, [f"{out_name}.cif", "*.cif"],
+                                 exclude=("raw", "model_net", "entropy_score", "see_alpha_output", "CryoNet_round_"))
         report_model(ctx, out)
         ctx.add_output("model", "model", out, "CryoAtom2 model", inherit=["map"])
         raw = first_existing([ctx.path(out_name, f"{out_name}_raw.cif")])
         if raw:
             ctx.add_output("model_raw", "model", raw, "CryoAtom2 raw model (all built residues)", inherit=["map"])
-        identified = _sequences_from([ctx.path(out_name, f"{out_name}_prot.fasta"), ctx.path(out_name, f"{out_name}_na.fasta")])
+        found_prot = _sequences_from([ctx.path(out_name, f"{out_name}_prot.fasta")])
+        # CryoAtom2 searches nucleic acids as RNA (T read as U) but writes the database text as it is
+        found_na = [(n, sq.upper().replace("T", "U")) for n, sq in _sequences_from([ctx.path(out_name, f"{out_name}_na.fasta")])]
+        identified = _unique_records(given + found_prot + found_na) if (found_prot or found_na) else []
         if identified:
             from cryoplug.jobs.imports import write_sequence_outputs
             write_sequence_outputs(ctx, identified, "sequence", "Identified sequences")
@@ -228,6 +280,12 @@ class CryoAtomBuild(JobType):
         for xlsx in sorted(ctx.path(out_name).glob("new_hits_*.xlsx")):
             ctx.log(f"Search results: {xlsx}")
         quick_cc(ctx, m.path, out, m.meta.get("resolution"))
+
+
+def _unique_records(records: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Records with each sequence once (the first name kept): the input chains and the new hits together."""
+    seen: set[str] = set()
+    return [(n, sq) for n, sq in records if not (sq.upper() in seen or seen.add(sq.upper()))]
 
 
 # ------------------------------------------------- ModelAngelo HMM search
@@ -316,12 +374,29 @@ class ModelAngeloHMMSearch(JobType):
             ctx.warn(f"No hit below E-value {ctx.params['seq_evalue']:g}: no sequence output.")
             return
         records = fetch_fasta_records(db, selected)
+        if ctx.params["alphabet"] == "RNA":  # the database may be written with T: the hits are RNA
+            records = [(n, sq.replace("T", "U")) for n, sq in records]
+        elif ctx.params["alphabet"] == "DNA":
+            records = [(n, sq.replace("U", "T")) for n, sq in records]
         from cryoplug.jobs.imports import write_sequence_outputs
         write_sequence_outputs(ctx, records, "sequence", "Identified sequences")
         ctx.add_highlight("Identified", len(records), "good")
 
 
 # ------------------------------------------------------------------ ColabFold
+def colabfold_name(text: str) -> str:
+    """ColabFold's safe_filename: letters, digits, '_', '.', '-' kept, anything else becomes '_'."""
+    return "".join(c if c.isalnum() or c in "_.-" else "_" for c in text)
+
+
+def copies_list(text: str) -> list[int]:
+    """'1,1,2' -> [1, 1, 2] (copies of each record, in order)."""
+    try:
+        return [int(c) for c in str(text or "").replace(" ", "").split(",") if c]
+    except ValueError:
+        raise JobError("'Copies per record' must be comma-separated integers") from None
+
+
 @register
 class ColabFoldPredict(JobType):
     name = "colabfold_predict"
@@ -330,15 +405,22 @@ class ColabFoldPredict(JobType):
     tool = "colabfold"
     software = ["ColabFold", "AlphaFold2"]
     gpu = 1
-    description = ("Predict starting models with a local ColabFold installation. Records can be predicted separately "
-                   "or as one complex (sequences joined with ':').")
+    description = ("Predict starting models with a local ColabFold installation (AlphaFold2). Records can be predicted "
+                   "separately or as one complex (with copies for homo-oligomers). The MSAs come from the ColabFold "
+                   "server unless single-sequence mode is chosen (confidential sequences).")
     inputs = [Slot("sequence", ("sequence",), "Sequence")]
     params = [
         Param("as_complex", "bool", True, label="Predict as a complex"),
+        Param("copies", "str", "", label="Copies per record", placeholder="1,1,2",
+              help="Number of copies of each FASTA record in the complex, in order (e.g. 2 for a homodimer). Empty = 1 each."),
+        Param("msa_mode", "choice", "server", choices=["server", "single_sequence"], label="MSA",
+              help="server: MSAs built by the ColabFold server (sends the sequences to api.colabfold.com). "
+                   "single_sequence: nothing leaves the server, much lower accuracy."),
         Param("num_models", "int", 5, label="Models", min=1, max=5),
-        Param("num_recycle", "int", 3, label="Recycles", min=0),
+        Param("num_recycle", "int", 0, label="Recycles", min=0, max=48,
+              help="0 = ColabFold's choice: 3 for a single chain, up to 20 (stopping when converged) for a complex."),
         Param("templates", "bool", False, label="Use templates"),
-        Param("amber", "bool", False, label="Amber relaxation"),
+        Param("amber", "bool", False, label="Amber relaxation", help="Relaxes the top-ranked model only (--num-relax 1)."),
         extra_args_param(),
     ]
     outputs = [OutputDef("model", "model", "Top-ranked model")]
@@ -349,32 +431,67 @@ class ColabFoldPredict(JobType):
         records = [(n, s) for n, s in parse_fasta(Path(seq.files[0]).read_text()) if classify_sequence(s) == "protein"]
         if not records:
             raise JobError("No protein sequence to predict")
-        if ctx.params["as_complex"] and len(records) > 1:
-            records = [("complex", ":".join(s for _, s in records))]
-        fasta = write_fasta([(n.split()[0].replace("|", "_"), s) for n, s in records], ctx.path("colabfold_input.fasta"))
-        args = [ctx.executable("colabfold"), str(fasta), str(ctx.path("colabfold_out")), "--num-models", str(ctx.params["num_models"]),
-                "--num-recycle", str(ctx.params["num_recycle"])]
+        copies = copies_list(ctx.params.get("copies"))
+        if ctx.params["as_complex"] and (len(records) > 1 or (copies and copies[0] > 1)):
+            chains = [s for i, (_, s) in enumerate(records) for _ in range(max(1, copies[i] if i < len(copies) else 1))]
+            records = [("complex", ":".join(chains))]
+        # one unique, already safe job name per record: ColabFold names its files after it
+        jobs = [(f"r{i + 1}_{colabfold_name(n.split()[0] if n.split() else 'seq')[:40]}", n, s) for i, (n, s) in enumerate(records)]
+        fasta = write_fasta([(job, s) for job, _, s in jobs], ctx.path("colabfold_input.fasta"))
+        out_dir = ctx.path("colabfold_out")
+        args = [ctx.executable("colabfold"), str(fasta), str(out_dir), "--num-models", str(ctx.params["num_models"])]
+        if ctx.params["num_recycle"] > 0:
+            args += ["--num-recycle", str(ctx.params["num_recycle"])]
+        if ctx.params["msa_mode"] == "single_sequence":
+            args += ["--msa-mode", "single_sequence"]
+        else:
+            ctx.log("The sequences are sent to the ColabFold MSA server (api.colabfold.com)")
         if ctx.params["templates"]:
             args.append("--templates")
         if ctx.params["amber"]:
-            args += ["--amber", "--use-gpu-relax"]
+            args += ["--amber", "--num-relax", "1", "--use-gpu-relax"]
         args += ctx.split_extra()
         ctx.run(args, tool="colabfold")
-        out_dir = ctx.path("colabfold_out")
-        n = 0
-        for name, _ in records:
-            safe = name.split()[0].replace("|", "_")
-            hits = sorted(out_dir.glob(f"{safe}*rank_001*.pdb"))
-            if ctx.params["amber"]:
-                hits = [p for p in hits if "_relaxed_" in p.name] or hits
+        missing, rows = [], []
+        for n, (job, name, _s) in enumerate(jobs, 1):
+            hits = sorted(out_dir.glob(f"{job}_relaxed_rank_001_*.pdb")) or sorted(out_dir.glob(f"{job}_unrelaxed_rank_001_*.pdb"))
             if not hits:
+                missing.append(name.split()[0] if name.split() else job)
                 continue
-            n += 1
-            out_name = "model" if n == 1 else f"model_{n}"
-            ctx.add_output(out_name, "model", hits[0], f"ColabFold {safe} (rank 1)", meta={"predicted": True})
-        if n == 0:
-            raise JobError("No ranked model found in colabfold_out")
-        ctx.add_highlight("Models", n)
+            scores = self._scores(out_dir, job)
+            meta = {"predicted": True, **{k: round(v, 3) for k, v in scores.items()}}
+            ctx.add_output("model" if n == 1 else f"model_{n}", "model", hits[0], f"ColabFold {name.split()[0] if name.split() else job} (rank 1)",
+                           meta=meta)
+            rows.append([name[:50], *(f"{scores[k]:.2f}" if k in scores else "–" for k in ("plddt", "ptm", "iptm", "max_pae"))])
+            if n == 1 and scores:
+                ctx.add_highlight("pLDDT", f"{scores['plddt']:.0f}", "good" if scores["plddt"] >= 70 else "warn")
+                key = "iptm" if "iptm" in scores else "ptm" if "ptm" in scores else None
+                if key:
+                    ctx.add_highlight("ipTM" if key == "iptm" else "pTM", f"{scores[key]:.2f}")
+        if rows:
+            ctx.add_table("Prediction confidence (rank 1)", ["Record", "Mean pLDDT", "pTM", "ipTM", "Max PAE (Å)"], rows)
+        if missing:
+            raise JobError(f"ColabFold wrote no ranked model for {', '.join(missing)} (see the log: out of GPU memory?)")
+
+    @staticmethod
+    def _scores(out_dir: Path, job: str) -> dict[str, float]:
+        """Mean pLDDT, pTM, ipTM and largest PAE of the top-ranked model ({job}_scores_rank_001_*.json)."""
+        f = next(iter(sorted(out_dir.glob(f"{job}_scores_rank_001_*.json"))), None)
+        if f is None:
+            return {}
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, ValueError):
+            return {}
+        out: dict[str, float] = {}
+        plddt = data.get("plddt")
+        if isinstance(plddt, list) and plddt:
+            out["plddt"] = float(sum(plddt) / len(plddt))
+        for k in ("ptm", "iptm", "max_pae"):
+            v = _number(data.get(k))
+            if v is not None:
+                out[k] = v
+        return out
 
 
 # ---------------------------------------------------------------- Boltz-2
@@ -403,10 +520,14 @@ def parse_ligand_lines(text: str) -> list[tuple[int, str, str]]:
         if sep and head.isdigit() and ":" in rest:
             copies, line = int(head), rest
         kind, sep, value = line.partition(":")
-        kind = kind.strip().lower()
-        if not sep or kind not in ("ccd", "smiles") or not value.strip():
+        kind, value = kind.strip().lower(), value.strip()
+        if not sep or kind not in ("ccd", "smiles") or not value:
             raise ValueError(f"Ligand line '{raw}' must look like CCD:ATP, SMILES:CCO or 2xCCD:MG")
-        out.append((copies, kind, value.strip()))
+        if kind == "ccd":  # Boltz finds components by their upper-case code only
+            value = value.upper()
+            if not re.fullmatch(r"[A-Z0-9]{1,5}", value):
+                raise ValueError(f"Ligand line '{raw}': a CCD code has 1 to 5 letters or digits (e.g. ATP, MG, NAG)")
+        out.append((copies, kind, value))
     return out
 
 
@@ -430,6 +551,11 @@ class BoltzPredict(JobType):
               help="Sends the sequences to api.colabfold.com. Disable for confidential sequences (single-sequence "
                    "mode, lower accuracy)."),
         Param("use_potentials", "bool", True, label="Inference-time potentials (physical plausibility)"),
+        Param("method", "choice", "electron microscopy", choices=["electron microscopy", "x-ray diffraction", "none"],
+              label="Condition on the experimental method",
+              help="Boltz-2 can predict structures as determined by a method (--method): cryo-EM structures by default; "
+                   "none = no conditioning."),
+        Param("seed", "int", 0, label="Random seed", min=0, advanced=True, help="0 = random; a fixed seed reproduces a run."),
         Param("diffusion_samples", "int", 1, label="Samples", min=1),
         Param("recycling_steps", "int", 3, label="Recycling steps", min=0),
         extra_args_param(),
@@ -470,6 +596,7 @@ class BoltzPredict(JobType):
             ctx.log(f"Ligand {', '.join(chain)}: {kind.upper()} {value}")
         path = ctx.path("boltz_input.yaml")
         path.write_text("\n".join(lines) + "\n")
+        self.n_chains = sum(ln.count(",") + 1 for ln in lines if ln.strip().startswith("id: ["))
         return path
 
     def run(self, ctx: JobContext) -> None:
@@ -481,12 +608,24 @@ class BoltzPredict(JobType):
             args.append("--use_msa_server")
         if ctx.params["use_potentials"]:
             args.append("--use_potentials")
+        if ctx.params["method"] != "none":
+            args += ["--method", ctx.params["method"]]
+        if ctx.params["seed"] > 0:
+            args += ["--seed", str(ctx.params["seed"])]
         args += ctx.split_extra()
-        ctx.run(args, tool="boltz")
+        problems: list[str] = []
+
+        def watch(line: str) -> None:  # Boltz reports these and still exits with 0
+            if "Failed to process" in line or "ran out of memory" in line:
+                problems.append(line.strip())
+
+        ctx.run(args, tool="boltz", on_line=watch)
         models = sorted(ctx.path("boltz_out").rglob("*_model_*.cif"),
                         key=lambda p: int(p.stem.rsplit("_", 1)[-1]) if p.stem.rsplit("_", 1)[-1].isdigit() else 99)
         if not models:
-            raise JobError("No predicted model found in boltz_out")
+            raise JobError(("Boltz: " + problems[-1]) if problems else "No predicted model found in boltz_out")
+        for line in problems:
+            ctx.warn(f"Boltz: {line}")
         for i, mpath in enumerate(models):
             ctx.add_output("model" if i == 0 else f"model_{i + 1}", "model", mpath, f"Boltz-2 rank {i + 1}",
                            meta={"predicted": True})
@@ -502,10 +641,14 @@ class BoltzPredict(JobType):
             values = {k: _number(data.get(k)) for k in labels}
             rows = [{"label": lab, "value": f"{values[k]:.3f}"} for k, lab in labels.items() if values[k] is not None]
             ctx.add_metrics("Prediction confidence (rank 1)", rows)
-            if values["iptm"] is not None:
+            chains = len(data.get("chains_ptm") or {}) or self.n_chains
+            if chains > 1 and values["iptm"] is not None:  # ipTM only means something between chains
                 ctx.add_highlight("ipTM", f"{values['iptm']:.2f}")
-            if values["complex_plddt"] is not None:
-                ctx.add_highlight("pLDDT", f"{values['complex_plddt']:.2f}")
+            elif values["ptm"] is not None:
+                ctx.add_highlight("pTM", f"{values['ptm']:.2f}")
+            if values["complex_plddt"] is not None:  # 0-1 in the JSON, 0-100 in the model's B-factors
+                plddt = 100 * values["complex_plddt"] if values["complex_plddt"] <= 1 else values["complex_plddt"]
+                ctx.add_highlight("pLDDT", f"{plddt:.0f}", "good" if plddt >= 70 else "warn")
 
 
 # ------------------------------------------------------------ Phenix helpers
@@ -636,7 +779,8 @@ class ChimeraXFit(JobType):
         script = fitmap_script(m.path, model.path, str(out), res, int(ctx.params["search"]),
                                ctx.params["placement"], radius)
         ctx.path("fitmap.py").write_text(script)
-        ctx.run([ctx.executable("chimerax"), "--nogui", "--exit", "--script", str(ctx.path("fitmap.py"))], tool="chimerax")
+        # the script by name (it runs in the job folder): ChimeraX reads text after a space in --script as its arguments
+        ctx.run([ctx.executable("chimerax"), "--nogui", "--exit", "--script", "fitmap.py"], tool="chimerax")
         if not out.exists():
             raise JobError("ChimeraX did not write the fitted model (see log)")
         ctx.add_output("model", "model", out, "Fitted model", inherit=["map"])

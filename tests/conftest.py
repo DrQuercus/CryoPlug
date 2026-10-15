@@ -182,15 +182,43 @@ cp "$out/$name.cif" "$out/${{name}}_raw.cif"
 exit 0
 """)
     _script(d / "boltz", f"""
-# boltz predict input.yaml --out_dir out ...
+# boltz predict input.yaml --out_dir out ... (Boltz 2.2: unknown options are refused; a CCD code it does not know is
+# reported and skipped, with exit code 0)
 echo "fake boltz $@"
-cat "$2"
+yaml="$2"
+cat "$yaml"
 out=""
-while [ $# -gt 0 ]; do case "$1" in --out_dir) out="$2"; shift;; esac; shift; done
+shift 2
+while [ $# -gt 0 ]; do case "$1" in
+  --out_dir) out="$2"; shift;;
+  --output_format|--diffusion_samples|--recycling_steps|--method|--seed) shift;;
+  --use_msa_server|--use_potentials) ;;
+  *) echo "Error: No such option: $1" >&2; exit 2;;
+esac; shift; done
+if grep -q "ccd: '[a-z]\\|FAIL" "$yaml"; then echo "Failed to process $yaml. Skipping. Error: CCD component not found!."; exit 0; fi
 p="$out/boltz_results_boltz_input/predictions/boltz_input"
 mkdir -p "$p"
 {write_cif} "$p/boltz_input_model_0.cif"
-echo '{{"confidence_score": 0.83, "ptm": 0.81, "iptm": 0.77, "complex_plddt": 0.86}}' > "$p/confidence_boltz_input_model_0.json"
+echo '{{"confidence_score": 0.83, "ptm": 0.81, "iptm": 0.77, "complex_plddt": 0.86, "chains_ptm": {{"0": 0.8, "1": 0.8}}}}' > "$p/confidence_boltz_input_model_0.json"
+""")
+    # ColabFold 1.6: files named after the FASTA record (its safe_filename); a job name seen before is skipped
+    _script(d / "colabfold_batch", f"""
+echo "fake colabfold_batch $@"
+in="$1"; out="$2"; shift 2; amber=0
+while [ $# -gt 0 ]; do case "$1" in
+  --num-models|--num-recycle|--msa-mode|--num-relax) shift;;
+  --templates|--use-gpu-relax) ;;
+  --amber) amber=1;;
+  *) echo "colabfold_batch: error: unrecognized arguments: $1" >&2; exit 2;;
+esac; shift; done
+mkdir -p "$out"
+grep '^>' "$in" | cut -c2- | while read -r name; do
+  safe=$(printf '%s' "$name" | tr -c 'A-Za-z0-9_.-' '_')
+  tag=rank_001_alphafold2_ptm_model_1_seed_000
+  {write_cif.replace("make_mmcif_document().write_file(sys.argv[1])", "write_pdb(sys.argv[1])")} "$out/${{safe}}_unrelaxed_$tag.pdb"
+  [ $amber = 1 ] && cp "$out/${{safe}}_unrelaxed_$tag.pdb" "$out/${{safe}}_relaxed_$tag.pdb"
+  echo '{{"plddt": [80.0, 90.0], "ptm": 0.74, "iptm": 0.66, "max_pae": 12.5}}' > "$out/${{safe}}_scores_$tag.json"
+done
 """)
     _script(d / "spisonet.py", """
 echo "fake spisonet $@"
@@ -271,6 +299,39 @@ if [ "$force" = 0 ]; then
   exit 1
 fi
 cp "$(readlink -f "$map")" {out}
+""")
+    # map_sharpening (Phenix 2): positional maps / model, PHIL keywords checked
+    _script(d / "phenix.map_sharpening", """
+echo "fake phenix.map_sharpening $@"
+first=""
+for a in "$@"; do case "$a" in
+  resolution=*|seq_file=*|sharpening_method=*|anisotropic_sharpen=*|local_sharpen=*) ;;
+  *=*) echo "Sorry: Some PHIL parameters are not recognized by phenix.map_sharpening."; exit 1;;
+  *) [ -z "$first" ] && first="$a";;
+esac; done
+cp "$(readlink -f "$first")" sharpened_map.ccp4
+""")
+    # servalcat 0.4 refine_spa_norefmac: unknown options refused (argparse), outputs and Final Summary as upstream
+    _script(d / "servalcat", f"""
+echo "fake servalcat $@"
+[ "$1" = "refine_spa_norefmac" ] || {{ echo "Servalcat 0.4.99"; exit 0; }}
+shift
+pg=""; prefix=refined; half=""
+while [ $# -gt 0 ]; do case "$1" in
+  --model|--resolution|--ncycle|--hydrogen|--mask_for_fofc|--weight|--map) shift;;
+  -o) prefix="$2"; shift;;
+  --pg) pg="$2"; shift;;
+  --halfmaps) half="$2"; shift 2;;
+  --ligand) shift; while [ $# -gt 0 ] && [ "${{1#--}}" = "$1" ]; do shift; done; continue;;
+  --jellybody) ;;
+  *) echo "servalcat refine_spa_norefmac: error: unrecognized arguments: $1" >&2; exit 2;;
+esac; shift; done
+{write_cif} "$prefix.mmcif"
+cp "{model}" "$prefix.pdb"
+[ -n "$pg" ] && cp "$prefix.mmcif" "${{prefix}}_expanded.mmcif"
+[ -n "$half" ] && cp "$(readlink -f "$half")" "${{prefix}}_normalized_fofc.mrc" && cp "$(readlink -f "$half")" "${{prefix}}_normalized_fo.mrc"
+printf '%s\n' "* Final Summary *" "" "Rmsd from ideal" "  bond lengths: 0.0062 A" "  bond  angles: 1.153 deg" "" \
+  "Map-model FSCaverages (at 3.20 A):" " FSCaverage(full) =  0.7811"
 """)
     # process_predicted_model: keeps the model, named like Phenix does
     _script(d / "phenix.process_predicted_model", """
@@ -396,7 +457,13 @@ cp "$src" "$op/$(basename "$src")"
 case "$out" in /*) var="${out%.mrc}_variance.mrc";; *) var="$op/${out%.mrc}_variance.mrc"; out="$indir/$out";; esac
 echo "Saving as MRC file: $out"
 cp "$src" "$out"
-if [ "$mode" = emmernet ]; then cp "$src" "$var"; fi
+if [ "$mode" = emmernet ]; then
+  cp "$src" "$var"
+  # LocScale 2.4.1 feature_enhance: the final LocScale map and the pVDDT map go next to the input maps
+  stem="$(basename "${out%.mrc}")"
+  cp "$src" "$indir/${stem}_baseline.mrc"
+  cp "$src" "$indir/${stem}_pVDDT.mrc"
+fi
 """)
     return d
 
@@ -410,7 +477,7 @@ def manager(tmp_path, fakebin) -> Manager:
         lanes=[LaneConfig(name="local", type="local", max_jobs=4, gpus=[0, 1])],
         tools={k: ToolConfig(name=k, bin_dir=str(fakebin))
                for k in ("modelangelo", "phenix", "locscale", "cryoatom", "boltz", "spisonet", "checkmysequence", "onedep",
-                         "cryodrgn", "relion")},
+                         "cryodrgn", "relion", "colabfold", "servalcat")},
     )
     m = Manager(cfg)
     m.check_tools()

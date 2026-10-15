@@ -90,8 +90,9 @@ class ServalcatRefine(JobType):
     tool = "servalcat"
     software = ["Servalcat"]
     cpus = 4
-    description = ("servalcat refine_spa_norefmac: likelihood-free refinement against unsharpened half maps with "
-                   "atomic B-factors, sharpened Fo and Fo-Fc difference maps (Yamashita et al. 2021).")
+    description = ("servalcat refine_spa_norefmac: reciprocal-space refinement against unsharpened half maps with a "
+                   "Gaussian likelihood target and Servalcat's own engine (no REFMAC needed), atomic B-factors, sharpened "
+                   "Fo and Fo-Fc difference maps (Yamashita et al. 2021).")
     inputs = [Slot("model", ("model",), "Model"), Slot("half_maps", ("half_maps",), "Half maps", required=False),
               Slot("map", ("map",), "Map", required=False, help="Only if half maps are not available."),
               Slot("mask", ("mask",), "Mask for Fo-Fc", required=False),
@@ -107,7 +108,8 @@ class ServalcatRefine(JobType):
         Param("ligand", "str", "", label="Ligand restraint CIFs", help="Paths separated by ';'.", path_kind="files"),
         extra_args_param(),
     ]
-    outputs = [OutputDef("model", "model", "Refined model"), OutputDef("fofc", "map", "Fo-Fc map")]
+    outputs = [OutputDef("model", "model", "Refined model"), OutputDef("fofc", "map", "Fo-Fc map"),
+               OutputDef("model_expanded", "model", "Refined model (symmetry expanded)")]
 
     @classmethod
     def validate(cls, params, connected):
@@ -128,6 +130,13 @@ class ServalcatRefine(JobType):
             args += ["--map", ctx.require("map").path]
         mask = ctx.input("mask")
         if mask:
+            from cryoplug.mrc import map_info
+            ref_map = hm.files[0] if hm else ctx.require("map").path
+            if map_info(mask.path)["box"] != map_info(ref_map)["box"]:  # Servalcat stops on it
+                ctx.warn(f"The mask box {map_info(mask.path)['box']} differs from the map's {map_info(ref_map)['box']}: "
+                         "the Fo-Fc map is computed without it")
+                mask = None
+        if mask:
             args += ["--mask_for_fofc", mask.path]
         if ctx.params.get("pg"):
             args += ["--pg", ctx.params["pg"]]
@@ -147,6 +156,10 @@ class ServalcatRefine(JobType):
         report_model(ctx, out)
         values = parse_metrics(ctx.path("servalcat.out").read_text(errors="replace"))
         ctx.add_output("model", "model", out, "Servalcat refined model", inherit=["half_maps", "map"], meta={"metrics": values})
+        expanded = next(iter(ctx.find_new_files(["refined_expanded.mmcif", "refined_expanded.pdb"], start)), None)
+        if expanded is not None:  # with a point group: the whole complex, for validation and deposition checks
+            ctx.add_output("model_expanded", "model", expanded, "Servalcat refined model (symmetry expanded)",
+                           inherit=["half_maps", "map"])
         fofc = ctx.find_new_files(["*normalized_fofc.mrc"], start)
         if fofc:
             ctx.add_output("fofc", "map", fofc[0], "Normalised Fo-Fc map", inherit=["half_maps", "map"])

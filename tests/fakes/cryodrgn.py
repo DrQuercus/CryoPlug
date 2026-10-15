@@ -261,6 +261,7 @@ def landscape(rest):
     p.add_argument("--linkage", default="average")
     p.add_argument("--pc-dim", type=int, default=20)
     p.add_argument("--mask")
+    p.add_argument("--device", type=int)
     for flag in ("--skip-umap", "--flip", "--multigpu"):
         p.add_argument(flag, action="store_true")
     a = p.parse_args(rest)
@@ -424,6 +425,29 @@ def main():
                 obj[:, i + 2] = data[f] * (180 / np.pi if f.endswith("_rad") else 1)
         with open(a.o, "wb") as fh:
             pickle.dump(obj, fh)
+    elif cmd in ("parse_pose_star", "parse_ctf_star"):
+        from cryoplug import poses as ps
+        from cryoplug import relion as rl
+        p.add_argument("star")
+        p.add_argument("-o")
+        p.add_argument("-D", type=int)
+        p.add_argument("--Apix", type=float)
+        a = p.parse_args(rest)
+        tables = rl.read_star(a.star)
+        parts = rl.particle_table(tables)
+        box, apix = rl.grid_from_star(tables)
+        if cmd == "parse_pose_star":
+            if parts.has("rlnOriginXAngst") and not parts.has("rlnImagePixelSize") and a.Apix is None:
+                sys.exit("ValueError: Must provide --Apix argument to convert _rlnOriginXAngst and _rlnOriginYAngst")
+            euler = np.column_stack([parts.floats(c) for c in ("rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi")])
+            shift = np.column_stack([parts.floats(c) for c in ("rlnOriginXAngst", "rlnOriginYAngst")]) / (a.Apix or apix)
+            obj = (ps.relion_to_matrix(euler).astype(np.float32), (shift / float(a.D or box)).astype(np.float32))
+        else:
+            obj = np.zeros((len(parts), 9), np.float32)
+            obj[:, 0], obj[:, 1] = a.D or box, a.Apix or apix
+            obj[:, 2] = parts.floats("rlnDefocusU")
+        with open(a.o, "wb") as fh:
+            pickle.dump(obj, fh)
     elif cmd == "downsample":
         p.add_argument("input")
         p.add_argument("-D", type=int)
@@ -431,16 +455,26 @@ def main():
         p.add_argument("--datadir")
         p.add_argument("--chunk", type=int)
         a = p.parse_args(rest)
-        data = np.load(a.input)
-        for path in set(data["blob/path"].astype(str)):
-            path = path.lstrip(">")
-            full = os.path.join(a.datadir or os.path.dirname(a.input), path)
-            if not os.path.exists(full):
-                sys.exit(f"Cannot find file `{path}` under datadir={a.datadir}")
+        if a.input.endswith(".star"):
+            from cryoplug import relion as rl
+            names = rl.particle_table(rl.read_star(a.input)).column("rlnImageName")
+            for path in {n.split("@", 1)[-1] for n in names}:
+                full = os.path.join(a.datadir or os.path.dirname(a.input), path)
+                if not os.path.exists(full):
+                    sys.exit(f"Cannot find file `{path}` under datadir={a.datadir}")
+            data = {"n": len(names)}
+        else:
+            data = np.load(a.input)
+            for path in set(data["blob/path"].astype(str)):
+                path = path.lstrip(">")
+                full = os.path.join(a.datadir or os.path.dirname(a.input), path)
+                if not os.path.exists(full):
+                    sys.exit(f"Cannot find file `{path}` under datadir={a.datadir}")
         yy, xx = np.indices((a.D, a.D)) - a.D / 2
         blob = np.exp(-(xx ** 2 + yy ** 2) / (2 * (a.D / 6) ** 2))
         sign = 1.0 if os.environ.get("FAKE_CRYODRGN_INVERTED") else -1.0  # raw particles are darker than the solvent
-        imgs = np.random.default_rng(0).normal(0, 1, (len(data), a.D, a.D)) + sign * 0.8 * blob
+        count = data["n"] if isinstance(data, dict) else len(data)
+        imgs = np.random.default_rng(0).normal(0, 1, (count, a.D, a.D)) + sign * 0.8 * blob
         MapVolume(data=imgs.astype(np.float32), voxel=np.ones(3)).write(a.o)
     elif cmd == "train_vae":
         train(rest)

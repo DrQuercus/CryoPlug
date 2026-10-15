@@ -76,7 +76,7 @@ def test_new_files_are_recognised_despite_clock_skew(ctx):
     assert skewed in found and before not in found
 
 
-def test_emmernet_keeps_its_outputs_and_registers_the_variance_map(manager, synthetic):
+def test_emmernet_keeps_its_outputs_and_registers_the_confidence_map(manager, synthetic):
     p = manager.create_project("EMmerNet paths")
     puid = p["uid"]
     imp = manager.create_job(puid, "import_cryosparc", {"job_dir": str(synthetic["cryosparc_job"])})
@@ -89,7 +89,9 @@ def test_emmernet_keeps_its_outputs_and_registers_the_variance_map(manager, synt
     assert job["status"] == "completed", f"{job['error']}\n{log_of(manager, puid, emn['uid'])}"
     outs = {o["name"]: o for o in job["outputs"]}
     assert outs["map"]["path"] == f"{emn['uid']}/feature_enhanced.mrc"
-    assert outs["confidence"]["path"] == f"{emn['uid']}/feature_enhanced_variance.mrc"
+    assert outs["confidence"]["path"] == f"{emn['uid']}/feature_enhanced_pVDDT.mrc"
+    assert outs["confidence"]["meta"]["display_range"] == [-100, 100]
+    assert outs["map_locscale"]["path"] == f"{emn['uid']}/feature_enhanced_baseline.mrc"
     proj = manager.project_dir(puid)
     assert not list((proj / imp["uid"]).glob("feature_enhanced*")) and not (proj / imp["uid"] / "processing_files").exists()
 
@@ -112,3 +114,35 @@ def test_coot_default_save_name_is_a_candidate(tmp_path):
     (job / "coot-backup" / "input_model_backup.pdb").write_text("ATOM\n")
     (job / "input_model-coot-0.pdb").write_text("ATOM\n")  # what Coot suggests when saving input_model.pdb
     assert [c["path"] for c in list_candidate_models(job)] == ["input_model-coot-0.pdb"]
+
+
+def test_locscale_symmetry_and_input_copies(manager, synthetic):
+    """Model-free LocScale cannot symmetrise (LocScale 2.4 bug): -sym is left out; model-based LocScale rewrites its
+    first input map in place: it gets a copy, never a link to the original; unknown point groups are refused."""
+    from cryoplug.jobs import get_job_type
+    p = manager.create_project("LocScale checks")
+    puid = p["uid"]
+    imp = manager.create_job(puid, "import_cryosparc", {"job_dir": str(synthetic["cryosparc_job"]), "symmetry": "C3"})
+    mdl = manager.create_job(puid, "import_model", {"source": "file", "path": str(synthetic["model"])})
+    for j in (imp, mdl):
+        manager.queue_job(puid, j["uid"])
+    run_until_done(manager, puid, [imp["uid"], mdl["uid"]])
+    hm = {"half_maps": {"job": imp["uid"], "output": "half_maps"}}
+    free = manager.create_job(puid, "locscale", {"mode": "model_free"}, hm)
+    based = manager.create_job(puid, "locscale", {"mode": "model_based"}, {**hm, "model": {"job": mdl["uid"], "output": "model"}})
+    bad = manager.create_job(puid, "locscale", {"mode": "model_free", "symmetry": "I2"}, hm)
+    uids = [free["uid"], based["uid"], bad["uid"]]
+    for u in uids:
+        manager.queue_job(puid, u)
+    run_until_done(manager, puid, uids)
+    flog = log_of(manager, puid, free["uid"])
+    assert manager.job(puid, free["uid"])["status"] == "completed" and "-sym" not in flog.split("$ ", 1)[1].split("\n")[0]
+    assert "Symmetry C3 not applied" in flog
+    blog = log_of(manager, puid, based["uid"])
+    assert manager.job(puid, based["uid"])["status"] == "completed" and "-sym C3" in blog
+    half1 = manager.job_dir(puid, based["uid"]) / "half_map_1.mrc"
+    assert half1.exists() and not half1.is_symlink() and (manager.job_dir(puid, based["uid"]) / "half_map_2.mrc").is_symlink()
+    assert manager.job(puid, bad["uid"])["status"] == "failed" and "point group I2" in manager.job(puid, bad["uid"])["error"]
+    jt = get_job_type("locscale")
+    assert jt.resources({"mode": "model_based", "nproc": 4})["num_gpus"] == 0
+    assert jt.resources({"mode": "model_free", "nproc": 4})["num_gpus"] == 1

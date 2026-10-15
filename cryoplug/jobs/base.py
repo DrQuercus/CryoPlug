@@ -145,8 +145,8 @@ class OutputDef:
 
 
 def resolution_param(**kw: Any) -> Param:
-    return Param("resolution", "float", 0.0, label="Resolution", unit="Å", min=0.0,
-                 help="Map resolution. 0 = take it from the inputs (CryoSPARC import / FSC).", **kw)
+    kw.setdefault("help", "Map resolution. 0 = take it from the inputs (CryoSPARC import / FSC).")
+    return Param("resolution", "float", 0.0, label="Resolution", unit="Å", min=0.0, **kw)
 
 
 def extra_args_param() -> Param:

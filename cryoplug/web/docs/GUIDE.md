@@ -175,8 +175,8 @@ C'est la source d'erreurs la plus fréquente : chaque logiciel attend un type de
 
 | Carte | Utiliser pour | Ne pas utiliser pour |
 |---|---|---|
-| **Demi-cartes non filtrées** (`half_maps`) | FSC, résolution directionnelle, LocScale, spIsoNet, Servalcat, modification de densité Phenix, dépôt EMDB (exigées) | Visualiser, construire |
-| **Carte non affûtée** (`map`) | Auto-sharpen Phenix, LocScale/EMmerNet sans demi-cartes | Construction automatique |
+| **Demi-cartes non filtrées** (`half_maps`) | FSC, résolution directionnelle, LocScale, spIsoNet, Servalcat, modification de densité et Map sharpening Phenix, dépôt EMDB (exigées) | Visualiser, construire |
+| **Carte non affûtée** (`map`) | Map sharpening (facteur B) ou Auto-sharpen Phenix, LocScale/EMmerNet sans demi-cartes | Construction automatique |
 | **Carte affûtée** (`map_sharp`) | Construction, ajustement, ISOLDE/Coot, affinement, validation ; **carte primaire déposée** | — |
 | **Carte LocScale / modification de densité** | Interprétation, construction, ISOLDE | Carte primaire du dépôt (possible en carte additionnelle) |
 | **Cartes « réseau »** (DeepEMhancer, EMmerNet, EMReady) | Visualisation, aide à l'interprétation, figures | Validation, construction automatique (DeepEMhancer), carte primaire |
@@ -206,7 +206,7 @@ C'est la source d'erreurs la plus fréquente : chaque logiciel attend un type de
 
 | Situation | Recommandé | Alternatives / remarques |
 |---|---|---|
-| Résolution homogène, affûtage CryoSPARC satisfaisant | Garder `map_sharp` | Auto-sharpen Phenix pour comparer |
+| Résolution homogène, affûtage CryoSPARC satisfaisant | Garder `map_sharp` | **Map sharpening (Phenix)** depuis les demi-cartes pour comparer (Auto-sharpen avec Phenix 1.x) |
 | Cœur net, périphérie / domaines / micelle flous | **LocScale 2** model-free | Puis model-based ou hybride avec le premier modèle |
 | 3–5 Å, interprétation difficile | **Modification de densité Phenix** (avec séquence) | LocScale |
 | Orientation préférentielle forte | **spIsoNet** | Déposer aussi les cartes d'origine |
@@ -257,6 +257,23 @@ Corrigez avec **Map operations → Flip handedness** sur la carte utilisée pour
 - Le rapport donne le chemin du fichier pour l'importer dans CryoSPARC (*Import 3D Volumes*, type *mask*) : même
   boîte et même taille de pixel que la carte d'origine.
 
+**Dessiner un masque à la main** (comme dans Chimera) : ouvrez la carte dans le visualiseur 3D et cliquez **Mask**.
+
+| Outil | Ce qu'il fait |
+|---|---|
+| Sphere / Box | une sphère (rayon) ou un cube (côté) centré là où l'on clique sur la carte |
+| Cylinder | deux clics : les deux extrémités, puis le rayon |
+| Region | toute la densité connexe au-dessus du niveau (celui du contour, ou un autre ; passe-bas optionnel) autour du point cliqué |
+| Zone | la densité à moins de *d* Å des atomes de chaînes choisies d'un modèle ouvert |
+| Density | toute la densité au-dessus du niveau (puis on efface le superflu) |
+
+Chaque forme **ajoute**, **efface** ou **garde seulement** (intersection) ; les curseurs modifient l'opération
+sélectionnée dans la liste, Ctrl + Z annule. La surface orange est calculée en direct par le serveur sur une copie réduite
+de la carte (dilatation comprise). **Save as job** lance *Mask drawn in the 3D viewer*, qui calcule le masque sur la
+grille complète avec la dilatation et le bord doux, et donne son **centre de masse** et la **boîte** pour recentrer des
+particules (soustraction de signal). Astuce : cliquez d'abord un atome (la vue se centre dessus), puis *At the centre of
+the view* place la forme exactement sur ce résidu.
+
 ### 3.6 Gros complexes : cartes composites
 
 Un gros complexe est souvent résolu par une carte consensus et plusieurs **raffinements locaux** dans CryoSPARC.
@@ -269,6 +286,26 @@ lancez **Composite map** (`composite_map`, phenix.combine_focused_maps) :
    **demi-cartes composites**, pour la FSC et la résolution locale de la carte composite.
 3. Construisez et affinez dans la carte composite ; déposez-la avec la carte consensus et les cartes locales (et
    leurs demi-cartes). Ne présentez pas la FSC de la carte composite comme une FSC gold-standard.
+
+### 3.6b Raffinement local et classification focalisée avec RELION
+
+Quand une région reste floue dans la carte consensus, CryoPlug peut la raffiner localement dans **RELION**, à partir des
+particules et des poses du raffinement CryoSPARC (conversion automatique, demi-jeux conservés) :
+
+| Job | Rôle | Réglages de départ |
+|---|---|---|
+| RELION local refinement (tout le complexe) | modèle RELION des particules, nécessaire à la soustraction | 1,8°, recherches locales dès le départ, masque FSC |
+| Mask drawn in the 3D viewer / Create mask | masque doux de la région | dilatation 2–3 Å, bord 6–8 Å |
+| RELION signal subtraction | retire le reste du complexe, recentre, recadre | boîte automatique ; expansion de symétrie pour un complexe symétrique |
+| RELION local refinement (focalisé) | carte de la région | Blush activé, C1 |
+| RELION 3D classification (focused) | états de la région sans réaligner | 4 classes, T = 10–40, 25 itérations |
+
+Les workflows *Focused refinement with signal subtraction (RELION)* et *Focused 3D classification (RELION)* créent la
+chaîne entière ; le job de masque attend que vous le dessiniez (*Draw in 3D* sur le job), les suivants attendent le
+masque. Toutes les cartes reviennent sur la grille de la carte consensus : elles vont directement dans **Composite map**,
+LocScale ou la construction de modèle. **RELION post-processing** donne la FSC corrigée et l'affûtage par facteur B de
+n'importe quelles demi-cartes ; **RELION reconstruction** reconstruit un sous-ensemble (sélection cryoDRGN) à pleine
+résolution.
 
 ### 3.7 Hétérogénéité : variabilité 3D et cryoDRGN
 
@@ -910,8 +947,9 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 ### G. Gros complexe résolu par raffinements locaux
 
 1. Import CryoSPARC de la carte consensus et de chaque raffinement local
-2. Local resolution sur la carte consensus : repérer les régions faibles ; si besoin, Create mask (densité proche
-   des chaînes de la région) pour de nouveaux raffinements locaux dans CryoSPARC
+2. Local resolution sur la carte consensus : repérer les régions faibles ; si besoin, un masque (Create mask : densité
+   proche des chaînes de la région, ou dessiné dans le visualiseur) pour de nouveaux raffinements locaux, dans CryoSPARC
+   ou directement dans RELION (workflow *Focused refinement with signal subtraction*)
 3. Modèle ajusté dans la consensus (prédictions, Rigid-body fit ou Dock in map, Merge models)
 4. Composite map (consensus + cartes locales, demi-cartes combinées)
 5. Real-space refinement dans la carte composite → ISOLDE → affinement final
@@ -951,7 +989,7 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | Le job échoue immédiatement | Programme introuvable | Page **Tools** : configurez `setup` / `bin_dir` / `executable`, redémarrez, *Re-check* |
 | Job en échec : « phenix.… exited with code 1: Sorry: … » | Le programme a refusé une entrée ou un paramètre : la fin du message est son explication (le « Sorry » de Phenix, la dernière ligne d'une erreur Python…) | Corrigez ce qu'il indique ; un paramètre refusé (« not recognized ») se retire ou se renomme dans *Extra arguments* |
 | Phenix : « Map and model are not aligned » ou « Model is not similar to … » | Symétrie / boîte (CRYST1) du modèle différente de celle de la carte, ou modèle hors de la carte | CryoPlug relance une fois avec `skip_map_model_overlap_check=True` ou `ignore_symmetry_conflicts=True`, comme Phenix le propose (avertissement dans le log). Si le modèle est vraiment hors de la carte : **Dock in map** ou **Rigid-body fit** d'abord |
-| Phenix 2 : « phenix.auto_sharpen is replaced by phenix.map_sharpening » | Phenix 2 a remplacé auto_sharpen et local_aniso_sharpen par map_sharpening | Rien à faire : CryoPlug les lance avec `--force` (ils fonctionnent toujours) |
+| Phenix 2 : « phenix.auto_sharpen is replaced by phenix.map_sharpening » | Phenix 2 a remplacé auto_sharpen et local_aniso_sharpen par map_sharpening | Rien à faire : CryoPlug les lance avec `--force` (ils fonctionnent toujours) ; le job **Map sharpening (Phenix)** lance directement le nouvel outil |
 | Page **Tools** : avertissement orange sous Phenix (« phenix.version exited with code … ») | Phenix ne démarre pas dans l'environnement du service CryoPlug (la raison suit) | Vérifiez la ligne `setup` (`source /chemin/phenix-2.x/phenix_env.sh`) ; essayez la même commande dans un terminal ouvert comme l'utilisateur du service |
 | « Resolution is unknown » | Pas de FSC à l'import | Renseignez le paramètre *Resolution* |
 | Job bloqué en `queued` | Parent pas fini, slot ou GPU occupé, parent en échec | Lisez le message de la carte (« Waiting for J3 », « Blocked: J3 failed ») et **Resources › Queue** |

@@ -35,9 +35,15 @@ def test_model_building_additions(manager, synthetic, tmp_path):
     ident = manager.create_job(puid, "cryoatom_build", {"protein_db": str(db)}, {"map": {"job": imp, "output": "map_sharp"}})
     noseq = manager.create_job(puid, "modelangelo_build", {}, {"map": {"job": imp, "output": "map_sharp"}})
     hmm = manager.create_job(puid, "modelangelo_hmm_search", {"database": str(db)}, {"model": {"job": noseq["uid"], "output": "model"}})
-    boltz = manager.create_job(puid, "boltz_predict", {"copies": "2", "ligands": "CCD:ATP\n2xCCD:MG\nSMILES:CC(=O)O",
+    boltz = manager.create_job(puid, "boltz_predict", {"copies": "2", "ligands": "CCD:atp\n2xCCD:MG\nSMILES:CC(=O)O",
                                                        "use_msa_server": False}, {"sequence": {"job": seq, "output": "sequence"}})
-    uids = [ca["uid"], ident["uid"], noseq["uid"], hmm["uid"], boltz["uid"]]
+    names = manager.create_job(puid, "import_sequence", {"fasta": f">Nsp1\n{SEQUENCE}\n>Nsp10\nMKVLAAGIV\n>Spike(S) chain_A/B\nMKKLLPT\n"})
+    manager.queue_job(puid, names["uid"])
+    run_until_done(manager, puid, [names["uid"]])
+    cf = manager.create_job(puid, "colabfold_predict", {"as_complex": False, "amber": True, "msa_mode": "single_sequence"},
+                            {"sequence": {"job": names["uid"], "output": "sequence"}})
+    cfx = manager.create_job(puid, "colabfold_predict", {"copies": "2,1,1"}, {"sequence": {"job": names["uid"], "output": "sequence"}})
+    uids = [ca["uid"], ident["uid"], noseq["uid"], hmm["uid"], boltz["uid"], cf["uid"], cfx["uid"]]
     for u in uids:
         manager.queue_job(puid, u)
     run_until_done(manager, puid, uids)
@@ -61,6 +67,21 @@ def test_model_building_additions(manager, synthetic, tmp_path):
     assert "id: [A, B]" in yaml and "rna:" in yaml and "ccd: 'ATP'" in yaml and "id: [E, F]" in yaml
     assert "smiles: 'CC(=O)O'" in yaml and "msa: empty" in yaml
     assert {h["label"] for h in bjob["highlights"]} >= {"ipTM", "pLDDT"}
+    assert {h["label"]: h["value"] for h in bjob["highlights"]}["pLDDT"] == "86"  # 0-1 in the JSON, shown as in the model
+    assert "--method 'electron microscopy'" in log_of(manager, puid, boltz["uid"])
+
+    # ColabFold: every record found under its own name (no Nsp1 / Nsp10 mix-up), the scores read
+    cjob = manager.job(puid, cf["uid"])
+    cout = {o["name"]: o for o in cjob["outputs"]}
+    assert set(cout) == {"model", "model_2", "model_3"}
+    assert "r1_Nsp1_relaxed" in cout["model"]["path"] and "r2_Nsp10_relaxed" in cout["model_2"]["path"]
+    assert cout["model"]["meta"]["plddt"] == 85.0 and cout["model"]["meta"]["ptm"] == 0.74
+    clog = log_of(manager, puid, cf["uid"])
+    assert "--num-relax 1" in clog and "--msa-mode single_sequence" in clog and "--num-recycle" not in clog
+    xjob = manager.job(puid, cfx["uid"])
+    fasta = (manager.job_dir(puid, cfx["uid"]) / "colabfold_input.fasta").read_text()
+    assert fasta.count(":") == 3 and len(xjob["outputs"]) == 1  # 2 copies of Nsp1 + Nsp10 + Spike in one complex
+    assert {h["label"] for h in xjob["highlights"]} >= {"pLDDT", "ipTM"}
 
 
 def test_hmm_search_requires_profiles(manager, synthetic, tmp_path):
@@ -120,9 +141,22 @@ def test_map_and_refinement_additions(manager, synthetic):
 
 
 def test_parse_ligand_lines():
-    assert parse_ligand_lines("CCD:ATP\n2xCCD:MG\n\n# comment\nSMILES:CCO") == [(1, "ccd", "ATP"), (2, "ccd", "MG"), (1, "smiles", "CCO")]
+    assert parse_ligand_lines("CCD:ATP\n2xCCD:mg\n\n# comment\nSMILES:CCO") == [(1, "ccd", "ATP"), (2, "ccd", "MG"), (1, "smiles", "CCO")]
     with pytest.raises(ValueError):
         parse_ligand_lines("ATP")
+    with pytest.raises(ValueError, match="CCD code"):
+        parse_ligand_lines("CCD:ADENOSINE")
+
+
+def test_boltz_failure_is_reported(manager, synthetic):
+    """Boltz exits with 0 when it skips an input (bad ligand, MSA server down): the job fails with Boltz's message."""
+    puid, imp, seq = _setup(manager, synthetic)
+    job = manager.create_job(puid, "boltz_predict", {"use_msa_server": False, "ligands": "SMILES:FAIL"},
+                             {"sequence": {"job": seq, "output": "sequence"}})
+    manager.queue_job(puid, job["uid"])
+    run_until_done(manager, puid, [job["uid"]])
+    done = manager.job(puid, job["uid"])
+    assert done["status"] == "failed" and "Failed to process" in done["error"]
 
 
 def test_directional_fsc_detects_anisotropy():
@@ -139,3 +173,22 @@ def test_directional_fsc_detects_anisotropy():
     r = directional_fsc(a, b, np.array([1.0, 1.0, 1.0]), az_step=30, el_step=30)
     res = {(d["azimuth"], d["elevation"]): d["resolution"] for d in r["directions"]}
     assert res[(0.0, 0.0)] < 2.5 and res[(0.0, 90.0)] > 5.0
+
+
+def test_servalcat_refinement(manager, synthetic):
+    """Servalcat with half maps, a point group and a mask: statistics read from its summary, expanded model kept."""
+    puid, imp, seq = _setup(manager, synthetic)
+    mdl = manager.create_job(puid, "import_model", {"source": "file", "path": str(synthetic["model"])})
+    manager.queue_job(puid, mdl["uid"])
+    run_until_done(manager, puid, [mdl["uid"]])
+    job = manager.create_job(puid, "servalcat_refine", {"pg": "C2"},
+                             {"model": {"job": mdl["uid"], "output": "model"}, "half_maps": {"job": imp, "output": "half_maps"},
+                              "mask": {"job": imp, "output": "mask"}})
+    manager.queue_job(puid, job["uid"])
+    run_until_done(manager, puid, [job["uid"]])
+    done = _ok(manager, puid, job["uid"])
+    outs = {o["name"]: o for o in done["outputs"]}
+    assert {"model", "model_expanded", "fofc", "fo"} <= set(outs)
+    metrics = outs["model"]["meta"]["metrics"]
+    assert metrics["rms_bonds"] == 0.0062 and metrics["fsc_average"] == 0.7811
+    assert "--pg C2" in log_of(manager, puid, job["uid"]) and "--mask_for_fofc" in log_of(manager, puid, job["uid"])

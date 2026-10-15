@@ -475,6 +475,27 @@ HELP: dict[str, dict[str, Any]] = {
                  "Phenix 2 remplace auto_sharpen par map_sharpening : CryoPlug le lance avec --force, il fonctionne toujours."],
         "next": ["modelangelo_build", "chimerax_fitmap"],
     },
+    "phenix_map_sharpening": {
+        "purpose": "L'outil d'affûtage de Phenix 2 (phenix.map_sharpening, qui remplace auto_sharpen et local_aniso_sharpen) : "
+                   "mise à l'échelle par coquilles à partir des deux demi-cartes (ou d'une carte et d'un modèle ajusté), "
+                   "anisotrope et éventuellement locale ; ou affûtage par facteur B d'une seule carte.",
+        "when": [
+            "Phenix 2.x : la méthode actuelle de Phenix pour affûter une carte avant la construction ou l'affinement.",
+            "Carte anisotrope (orientation préférentielle modérée) : la correction anisotrope est faite d'office.",
+            "Comparer à LocScale, DeepEMhancer ou au post-traitement RELION sur la même carte.",
+        ],
+        "avoid": [
+            "Une seule carte sans modèle en mode « shell » : impossible, choisissez « b-factor ».",
+            "Affûtage local sur une carte pleine taille : très long ; découpez d'abord la région (Map operations).",
+        ],
+        "inputs": "Les demi-cartes non filtrées (recommandé) ; sinon la carte et un modèle ajusté ; la séquence aide Phenix à "
+                  "estimer le volume de la molécule.",
+        "tips": [
+            "La résolution est facultative en mode « shell », obligatoire en « b-factor ».",
+            "Avec Phenix 1.21 ou plus ancien sans map_sharpening : job « Auto-sharpen (Phenix) ».",
+        ],
+        "next": ["modelangelo_build", "cryoatom_build", "phenix_real_space_refine", "local_resolution"],
+    },
     "phenix_local_aniso_sharpen": {
         "purpose": "Affûtage local et anisotrope avec mise à l'échelle dépendant de la résolution, à partir des demi-cartes "
                    "(éventuellement guidé par un modèle).",

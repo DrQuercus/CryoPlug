@@ -483,7 +483,7 @@ Résolution dans chaque direction (FSC coniques, « 3D FSC ») pour mesurer l'an
 
 **Étapes suivantes** : Anisotropy correction (spIsoNet), LocScale 2
 
-### EMReady
+### EMReady2
 
 `emready` — logiciel : `emready` · GPU
 
@@ -658,6 +658,32 @@ Opérations simples sur une carte : taille de pixel, recadrage/agrandissement de
 - B-factor négatif = affûtage, positif = flou.
 
 **Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Rigid-body fit (ChimeraX)
+
+### Map sharpening (Phenix)
+
+`phenix_map_sharpening` — logiciel : `phenix`
+
+L'outil d'affûtage de Phenix 2 (phenix.map_sharpening, qui remplace auto_sharpen et local_aniso_sharpen) : mise à l'échelle par coquilles à partir des deux demi-cartes (ou d'une carte et d'un modèle ajusté), anisotrope et éventuellement locale ; ou affûtage par facteur B d'une seule carte.
+
+**Quand l'utiliser**
+
+- Phenix 2.x : la méthode actuelle de Phenix pour affûter une carte avant la construction ou l'affinement.
+- Carte anisotrope (orientation préférentielle modérée) : la correction anisotrope est faite d'office.
+- Comparer à LocScale, DeepEMhancer ou au post-traitement RELION sur la même carte.
+
+**À éviter / pièges**
+
+- Une seule carte sans modèle en mode « shell » : impossible, choisissez « b-factor ».
+- Affûtage local sur une carte pleine taille : très long ; découpez d'abord la région (Map operations).
+
+**Entrées conseillées** : Les demi-cartes non filtrées (recommandé) ; sinon la carte et un modèle ajusté ; la séquence aide Phenix à estimer le volume de la molécule.
+
+**Conseils**
+
+- La résolution est facultative en mode « shell », obligatoire en « b-factor ».
+- Avec Phenix 1.21 ou plus ancien sans map_sharpening : job « Auto-sharpen (Phenix) ».
+
+**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Real-space refinement (Phenix), Local resolution
 
 ### Mask drawn in the 3D viewer
 

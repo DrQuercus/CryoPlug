@@ -279,3 +279,14 @@ def test_relion_workflow_waits_for_the_drawn_mask(manager, cs_particles, synthet
     run_until_done(manager, puid, [j["uid"] for j in res["jobs"]], timeout=240)
     states = {j["uid"]: manager.job(puid, j["uid"])["status"] for j in res["jobs"]}
     assert all(s == "completed" for s in states.values()), states
+
+
+def test_cryodrgn_reads_relion_particles(manager, relion_project):
+    """The particles of a RELION job feed cryoDRGN: STAR poses (with --Apix), images from the project folder."""
+    puid, parts, maps = relion_project
+    refine = _run(manager, puid, "relion_local_refine", {"postprocess": False},
+                  {"particles": {"job": parts["uid"], "output": "particles"}, "map": {"job": maps["uid"], "output": "map"}})
+    back = _run(manager, puid, "cryodrgn_backproject", {"box": 0},
+                {"particles": {"job": refine["uid"], "output": "particles"}})
+    log = log_of(manager, puid, back["uid"])
+    assert "parse_pose_star" in log and "--Apix 2.0" in log

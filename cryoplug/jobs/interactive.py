@@ -21,6 +21,19 @@ EXCLUDED_DIRS = ("coot-backup", "coot-download", "processing_files", ".cryoplug_
 STAGED_INPUT = re.compile(r"input_model\.\w+")
 
 
+DIFF_SCRIPT = "open_difference_map.py"
+
+
+def coot_diff_script(name: str) -> str:
+    """Coot script opening a difference map (positive and negative contours)."""
+    return ("# CryoPlug: open the Fo-Fc map as a difference map\n"
+            "try:\n"
+            "    import coot\n"
+            f"    coot.read_ccp4_map({name!r}, 1)\n"
+            "except Exception:\n"
+            f"    read_ccp4_map({name!r}, 1)\n")
+
+
 def model_suffix(path: str) -> str:
     name = path.lower()
     for suf in (".mmcif", ".cif", ".pdb", ".ent"):
@@ -54,7 +67,10 @@ class InteractiveBase(JobType):
     inputs = [
         Slot("model", ("model",), "Model"),
         Slot("map", ("map",), "Map", help="Map used for fitting (sharpened)."),
-        Slot("map2", ("map",), "Second map", required=False, help="e.g. unsharpened or density-modified map."),
+        Slot("map2", ("map",), "Second map", required=False,
+             help="Another map to fit into, e.g. unsharpened or density-modified (not a difference map: below)."),
+        Slot("diff_map", ("map",), "Difference map", required=False, prefer=("fofc",),
+             help="Fo-Fc map (Servalcat): shown as a difference map (positive and negative contours), never fitted into."),
     ]
     outputs = [OutputDef("model", "model", "Rebuilt model")]
     session_script = ""
@@ -67,12 +83,14 @@ class InteractiveBase(JobType):
         m2 = ctx.input("map2")
         if m2:
             staged["maps"].append(ctx.link_input(m2.path, "input_map2" + Path(m2.path).suffix).name)
+        diff = ctx.input("diff_map")
+        staged["diff"] = ctx.link_input(diff.path, "input_diffmap" + Path(diff.path).suffix).name if diff else ""
         return staged
 
     def bundle_files(self, ctx: JobContext) -> list[tuple[str, Path]]:
         files = []
         for p in sorted(ctx.job_dir.iterdir()):
-            if p.name.startswith("input_") or p.name in (self.session_script, "README_session.txt"):
+            if p.name.startswith("input_") or p.name in (self.session_script, "README_session.txt", DIFF_SCRIPT):
                 files.append((p.name, p.resolve()))
         return files
 
@@ -129,6 +147,14 @@ class IsoldeSession(InteractiveBase):
         ]
         lines += [f"run(session, 'open \"{m}\"')" for m in maps]
         lines.append(f"run(session, 'clipper associate #{map_ids} toModel #1')")
+        if staged["diff"]:  # a difference map: contoured + and -, and kept out of ISOLDE's fitting (MDFF)
+            lines += [
+                f"diff_map = run(session, 'open \"{staged['diff']}\"')[0]",
+                "from chimerax.atomic import AtomicStructure",
+                "from chimerax.clipper.symmetry import get_map_mgr",
+                "structure = session.models.list(type=AtomicStructure)[0]",
+                "get_map_mgr(structure, create=True).nxmapset.add_nxmap_handler_from_volume(diff_map, is_difference_map=True)",
+            ]
         if ctx.params["start_isolde"]:
             lines.append("run(session, 'isolde start')")
         lines += [f"run(session, {c!r})" for c in extra]
@@ -163,6 +189,9 @@ class CootSession(InteractiveBase):
         args = ["coot", "--pdb", staged["model"]]
         for m in staged["maps"]:
             args += ["--map", m]
+        if staged["diff"]:  # --map opens maps as ordinary maps: a script opens the difference map as one
+            ctx.path(DIFF_SCRIPT).write_text(coot_diff_script(staged["diff"]))
+            args += ["--script", DIFF_SCRIPT]
         script = "#!/bin/bash\n# CryoPlug Coot session\ncd \"$(dirname \"$0\")\"\nexec " + " ".join(f'"{a}"' for a in args) + "\n"
         p = ctx.path(self.session_script)
         p.write_text(script)
@@ -175,9 +204,12 @@ class CootSession(InteractiveBase):
         ctx.log("Coot session prepared. Launch it from the browser or download the session bundle.")
 
     def launch_command(self, ctx: JobContext) -> list[str]:
-        model = next(p.name for p in ctx.job_dir.iterdir() if p.name.startswith("input_model"))
+        # the staged input only: Coot suggests "input_model-coot-0.pdb" when saving, the user's model
+        model = next(p.name for p in sorted(ctx.job_dir.iterdir()) if STAGED_INPUT.fullmatch(p.name))
         args = [ctx.executable("coot"), "--pdb", model]
         for p in sorted(ctx.job_dir.iterdir()):
             if p.name.startswith("input_map"):
                 args += ["--map", p.name]
+        if ctx.path(DIFF_SCRIPT).exists():
+            args += ["--script", DIFF_SCRIPT]
         return args

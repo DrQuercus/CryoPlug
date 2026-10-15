@@ -187,7 +187,8 @@ class ChimeraXRender(JobType):
         script = render_script(m.path if m else None, model.path if model else None, ctx.params["level"],
                                ctx.params["width"], ctx.params["height"], prefix, ctx.params["transparency"])
         ctx.path("render.py").write_text(script)
-        ctx.run([ctx.executable("chimerax"), "--nogui", "--offscreen", "--exit", "--script", str(ctx.path("render.py"))], tool="chimerax")
+        # by name, from the job folder: a folder path with spaces would be split into script arguments by ChimeraX
+        ctx.run([ctx.executable("chimerax"), "--nogui", "--offscreen", "--exit", "--script", "render.py"], tool="chimerax")
         images = [Path(f"{prefix}_{v}.png") for v in ("front", "side", "top")]
         images = [p for p in images if p.exists()]
         if not images:

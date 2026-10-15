@@ -282,9 +282,10 @@ def report_sequence_check(ctx: JobContext, data: dict) -> int:
                 series.append({"name": f"Chain {chain}", "x": [p[0] for p in pts], "y": [round(p[1], 3) for p in pts]})
     if rows:
         ctx.add_table("Fragments tested per chain", ["Chain", "Type", "Fragments", "Sequence confirmed", "Possible errors"], rows)
-    if series:
+    if series:  # checkMySequence's thresholds: 0.85 for proteins, 0.70 for nucleic acids
         ctx.add_plot("Sequence confidence along the chains with possible errors", series, x_label="Residue",
-                     y_label="−log10(p)", hlines=[{"y": 0.55, "label": "threshold"}])
+                     y_label="−log10(p)", hlines=[{"y": 0.85, "label": "protein threshold"},
+                                                  {"y": 0.70, "label": "nucleic-acid threshold"}])
     status = "good" if not n_issues else "bad" if shifts or mismatches else "warn"
     ctx.add_highlight("Sequence check", "clean" if not n_issues else f"{n_issues} issue{'s' if n_issues > 1 else ''}", status)
     return n_issues
@@ -325,10 +326,13 @@ class CheckMySequence(JobType):
         try:
             ctx.run(args, tool="checkmysequence", stdout_path=log)
         except JobError:
-            if log.exists() and "hmmer" in log.read_text(errors="replace").lower():
+            # the banner always mentions HMMER: only its own error line means it is missing
+            if log.exists() and "hmmer package not available" in log.read_text(errors="replace").lower():
                 raise JobError("checkMySequence needs HMMER (hmmsearch) in its environment: "
                                "conda install -c bioconda hmmer") from None
             raise
+        if log.exists() and "nucleic acid sequence validation is not available" in log.read_text(errors="replace").lower():
+            ctx.warn("Nucleic-acid chains were not checked: checkMySequence needs the doubleHelix package for them")
         if not out.exists():
             raise JobError("checkMySequence wrote no result (checkmysequence.json): see the log above.")
         try:
@@ -468,7 +472,8 @@ class WwpdbValidation(JobType):
     tool = "onedep"
     software = ["wwPDB OneDep validation"]
     description = ("Official wwPDB validation report (PDF and XML) from the OneDep validation web service: the report "
-                   "journals and reviewers receive. The model and the primary map are uploaded to the wwPDB server.")
+                   "journals and reviewers receive. The model and the primary map are uploaded to the wwPDB server "
+                   "(note: the onedep_api client does not check the server's certificate).")
     inputs = [Slot("model", ("model",), "Final model"),
               Slot("map", ("map",), "Primary map", help="The map that will be deposited as the primary map.")]
     params = [
@@ -504,8 +509,18 @@ class WwpdbValidation(JobType):
         od.call("--validate", "--exp_method", "EM")
         started, last, status = time.time(), None, "unknown"
         timeout, poll = ctx.params["timeout"], ctx.params["poll"]
+        failures = 0
         while True:
-            found = re.search(r"OneDep status:\s*(\S+)", od.call("--status", quiet=True))
+            try:
+                found = re.search(r"OneDep status:\s*(\S+)", od.call("--status", quiet=True))
+                failures = 0
+            except JobError as exc:  # one lost connection while polling does not lose the validation
+                failures += 1
+                if failures >= 5:
+                    raise
+                ctx.warn(f"Status not read ({exc}): trying again")
+                time.sleep(poll)
+                continue
             status = found.group(1).lower() if found else "unknown"
             if status != last:
                 ctx.log(f"wwPDB server status: {status}")

@@ -111,13 +111,28 @@ def test_interactive_isolde_session(manager, synthetic):
     manager.queue_job(puid, mdl["uid"])
     run_until_done(manager, puid, [mdl["uid"]])
     iso = manager.create_job(puid, "isolde_session", {},
-                             {"model": {"job": mdl["uid"], "output": "model"}, "map": {"job": imp["uid"], "output": "map_sharp"}})
-    manager.queue_job(puid, iso["uid"])
-    run_until_done(manager, puid, [iso["uid"]])
+                             {"model": {"job": mdl["uid"], "output": "model"}, "map": {"job": imp["uid"], "output": "map_sharp"},
+                              "diff_map": {"job": imp["uid"], "output": "map"}})
+    coot = manager.create_job(puid, "coot_session", {},
+                              {"model": {"job": mdl["uid"], "output": "model"}, "map": {"job": imp["uid"], "output": "map_sharp"},
+                               "diff_map": {"job": imp["uid"], "output": "map"}})
+    for j in (iso, coot):
+        manager.queue_job(puid, j["uid"])
+    run_until_done(manager, puid, [iso["uid"], coot["uid"]])
     job = manager.job(puid, iso["uid"])
     assert job["status"] == "waiting", log_of(manager, puid, iso["uid"])
     script = (manager.job_dir(puid, iso["uid"]) / "isolde_session.py").read_text()
     assert "clipper associate #2 toModel #1" in script and "isolde start" in script
+    assert "is_difference_map=True" in script and "input_diffmap" in script  # Fo-Fc: contoured +/-, not fitted
+    cdir = manager.job_dir(puid, coot["uid"])
+    assert '"--script" "open_difference_map.py"' in (cdir / "run_coot.sh").read_text()
+    assert "read_ccp4_map('input_diffmap.mrc', 1)" in (cdir / "open_difference_map.py").read_text()
+    (cdir / "input_model-coot-0.pdb").write_text("ATOM\n")  # a model saved by the user in Coot
+    from cryoplug.jobs import get_job_type
+    from cryoplug.jobs.base import JobContext
+    import json as _json
+    launch = get_job_type("coot_session")().launch_command(JobContext(_json.loads((cdir / "job.json").read_text()), cdir))
+    assert launch[launch.index("--pdb") + 1] == "input_model.pdb" and "--script" in launch
     with pytest.raises(ManagerError):
         manager.finish_interactive(puid, iso["uid"])  # nothing saved yet
     manager.save_upload(puid, iso["uid"], "isolde_model.pdb", io.BytesIO(synthetic["model"].read_bytes()))

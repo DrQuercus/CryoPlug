@@ -154,9 +154,9 @@ def _phenix_dir(fakebin, tmp_path, with_map_sharpening):
     d = tmp_path / ("phenix2" if with_map_sharpening else "phenix_old")
     d.mkdir()
     for f in fakebin.iterdir():
-        if f.name.startswith("phenix."):
+        if f.name.startswith("phenix.") and (with_map_sharpening or f.name != "phenix.map_sharpening"):
             os.symlink(f, d / f.name)
-    if with_map_sharpening:
+    if with_map_sharpening and not (d / "phenix.map_sharpening").exists():
         os.symlink(fakebin / "phenix.version", d / "phenix.map_sharpening")
     return d
 
@@ -216,3 +216,30 @@ exit 1
     assert job["status"] == "failed"
     assert job["error"].startswith("phenix.validation_cryoem exited with code 1: Sorry: Model is not similar to 'map.mrc': "
                                    "Unit cell mismatch (running it again with ignore_symmetry_conflicts=True did not work")
+
+
+def test_map_sharpening_phenix2(manager, synthetic):
+    """phenix.map_sharpening (Phenix 2): shell scaling from half maps, B-factor sharpening of a single map."""
+    from conftest import log_of, run_until_done
+    p = manager.create_project("map_sharpening")
+    puid = p["uid"]
+    imp = manager.create_job(puid, "import_cryosparc", {"job_dir": str(synthetic["cryosparc_job"])})
+    manager.queue_job(puid, imp["uid"])
+    run_until_done(manager, puid, [imp["uid"]])
+    shell = manager.create_job(puid, "phenix_map_sharpening", {"local": True},
+                               {"half_maps": {"job": imp["uid"], "output": "half_maps"}})
+    bfac = manager.create_job(puid, "phenix_map_sharpening", {"method": "b-factor"},
+                              {"map": {"job": imp["uid"], "output": "map"}})
+    for j in (shell, bfac):
+        manager.queue_job(puid, j["uid"])
+    run_until_done(manager, puid, [shell["uid"], bfac["uid"]])
+    for j in (shell, bfac):
+        done = manager.job(puid, j["uid"])
+        assert done["status"] == "completed", log_of(manager, puid, j["uid"])
+        assert done["outputs"][0]["path"].endswith("sharpened_map.ccp4")
+    assert "local_sharpen=True" in log_of(manager, puid, shell["uid"])
+    assert "sharpening_method=b-factor" in log_of(manager, puid, bfac["uid"])
+    bad = manager.create_job(puid, "phenix_map_sharpening", {}, {"map": {"job": imp["uid"], "output": "map"}})
+    import pytest
+    with pytest.raises(Exception, match="half maps, or a map and a fitted model"):
+        manager.queue_job(puid, bad["uid"])

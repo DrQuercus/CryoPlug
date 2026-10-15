@@ -48,6 +48,7 @@ from cryoplug.jobs.cryodrgn import (
     POSE_SOURCES,
     analysis_params,
     backprojection_check,
+    clamp_pcs,
     crop_box,
     cryodrgn_version,
     decide_lazy,
@@ -1092,7 +1093,7 @@ def abinit_analysis(ctx: JobContext, workdir: Path, epoch: int, params: dict[str
                     dst.write_bytes(src.read_bytes())
     apix = float(params.get("apix") or 0) or apix
     args = [ctx.executable("cryodrgn"), "analyze", target, str(epoch), "--ksample", str(params["ksample"]),
-            "--pc", str(params.get("pcs", 2))]
+            "--pc", str(clamp_pcs(ctx, target, epoch, int(params.get("pcs", 2))))]
     n_per_pc = int(params.get("n_per_pc", 10))
     if n_per_pc != 10:
         args += ["--n-per-pc", str(n_per_pc)]

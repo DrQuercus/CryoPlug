@@ -163,6 +163,18 @@ def weights_and_z(workdir: Path, epoch: int) -> tuple[Path, Path]:
     return w, z
 
 
+def clamp_pcs(ctx: JobContext, workdir: Path, epoch: int, pcs: int) -> int:
+    """Principal components to show, at most the latent dimensions (cryodrgn analyze stops on more)."""
+    try:
+        from cryoplug import particles as pt
+        zdim = int(pt.load_array_pkl(weights_and_z(Path(workdir), epoch)[1]).shape[1])
+    except Exception:  # noqa: BLE001 - the latent file is checked elsewhere
+        return pcs
+    if pcs > zdim:
+        ctx.log(f"{pcs} principal components asked for a {zdim}-D latent space: {zdim} shown")
+    return max(1, min(pcs, zdim))
+
+
 def train_chain(ctx: JobContext, lat: InputData) -> list[Path]:
     """Training folders of a latent space, oldest first (a continued training adds a folder)."""
     dirs = lat.meta.get("workdirs") or [lat.meta.get("workdir")]
@@ -371,7 +383,7 @@ def prepare_particles(ctx: JobContext, particles: InputData, box: int, pose_sour
     else:
         size = ["-D", str(orig)] if orig else []
         apix = ["--Apix", str(meta["pixel_size"])] if meta.get("pixel_size") else []
-        pose_cmd = [exe, "parse_pose_star", src, "-o", poses, *size]
+        pose_cmd = [exe, "parse_pose_star", src, "-o", poses, *size, *apix]  # origins in Å need the pixel size
         ctf_cmd = [exe, "parse_ctf_star", src, "-o", ctf, *size, *apix]
     if has_poses:  # optional for cryoDRGN-AI: compared with the learned poses when they can be read
         code = ctx.run(pose_cmd, tool="cryodrgn", check=need_poses)
@@ -689,7 +701,7 @@ def run_analysis(ctx: JobContext, workdir: Path, epoch: int, outdir: Path, param
         from cryoplug.jobs.cryodrgn_ai import abinit_analysis
         return abinit_analysis(ctx, workdir, epoch, params, version, apix, lat_meta or {})
     args = [ctx.executable("cryodrgn"), "analyze", workdir, str(epoch), "-o", outdir,
-            "--ksample", str(params["ksample"]), "--pc", str(params.get("pcs", 2))]
+            "--ksample", str(params["ksample"]), "--pc", str(clamp_pcs(ctx, workdir, epoch, int(params.get("pcs", 2))))]
     n_per_pc = int(params.get("n_per_pc", 10))
     if n_per_pc != 10:
         if version >= (4, 2):
@@ -1143,11 +1155,12 @@ def finish_analysis(ctx: JobContext, workdir: Path, epoch: int, analyze_dir: Pat
     model = (lineage.get("train") or {}).get("model", "")
     ctx.add_text("What to do next", advice(flagged, counts, n, outliers, r2) if advice else
                  next_steps(int(lineage.get("box") or 0), model, flagged, counts, n, outliers, r2))
-    ctx.add_text("Explore further with cryoDRGN",
-                 f"Interactive dashboard of cryoDRGN (particle selection, latent panels), on the server:\n"
-                 f"  cryodrgn dashboard {workdir} --epoch {epoch}\n"
-                 f"(then open http://localhost:5050 through an SSH tunnel: ssh -L 5050:localhost:5050 <server>)\n\n"
-                 f"Jupyter notebooks and cryoDRGN's own figures: {analyze_dir}")
+    dashboard = ""
+    if (Path(workdir) / f"analyze.{epoch}").is_dir():  # the dashboard reads <workdir>/analyze.<epoch> only
+        dashboard = (f"Interactive dashboard of cryoDRGN (particle selection, latent panels), on the server:\n"
+                     f"  cryodrgn dashboard {workdir} --epoch {epoch} --no-browser\n"
+                     f"(then open http://localhost:5050 through an SSH tunnel: ssh -L 5050:localhost:5050 <server>)\n\n")
+    ctx.add_text("Explore further with cryoDRGN", f"{dashboard}Jupyter notebooks and cryoDRGN's own figures: {analyze_dir}")
     w, zf = weights_and_z(workdir, epoch)
     files = [npz, zf, w, workdir / "config.yaml"]
     meta = {**lineage, "method": "cryoDRGN", "workdir": ctx.rel(workdir), "epoch": int(epoch), "zdim": int(zdim),
@@ -1271,9 +1284,9 @@ class CryodrgnTrain(JobType):
         Param("box", "int", 128, label="Image size for training", unit="px", min=0,
               help="Images are Fourier-cropped to this size (even). Protocol: 128 px for the first pass (finding the "
                    "junk), 256 px for the final training; 0 keeps the original size."),
-        Param("zdim", "int", 8, label="Latent dimensions", min=1, max=128,
-              help="Size of the latent space. 8 suits most datasets (the protocol's choice); 1 or 2 only for a single "
-                   "simple motion; more than 10 rarely helps."),
+        Param("zdim", "int", 8, label="Latent dimensions", min=2, max=128,
+              help="Size of the latent space. 8 suits most datasets (the protocol's choice); 2 for a single simple "
+                   "motion (with 1, cryodrgn analyze makes no cluster volumes); more than 10 rarely helps."),
         Param("epochs", "int", 50, label="Epochs", min=1,
               help="Full passes over the particles. The protocol trains 50 epochs, checks convergence (cryoDRGN "
                    "convergence check) and continues to 100 when needed."),
@@ -2138,6 +2151,10 @@ class CryodrgnLandscape(JobType):
                OutputDef("vol_pc1", "volume_series", "Volume PC1 trajectory"),
                OutputDef("vol_pc2", "volume_series", "Volume PC2 trajectory")]
 
+    @classmethod
+    def resources(cls, params):
+        return {**super().resources(params), "num_gpus": 1}  # see run: one GPU
+
     def run(self, ctx: JobContext) -> None:
         from cryoplug import particles as pt
         p = ctx.params
@@ -2182,8 +2199,11 @@ class CryodrgnLandscape(JobType):
             args += ["--mask", mask_path]
         if p["flip"] and not abinit:
             args.append("--flip")
+        # one GPU, named: cryoDRGN 4.3 splits the volumes unevenly with --multigpu (the last ones are never made, the
+        # run stops) and leaves cryoDRGN-AI models on the CPU without --device
+        args += ["--device", "0"]
         if p["gpus"] > 1:
-            args.append("--multigpu")
+            ctx.log("The landscape analysis runs on one GPU (cryoDRGN's --multigpu loses volumes)")
         ctx.progress(0.05, f"Generating {sketch:,} volumes and comparing them")
         ctx.run(args, tool="cryodrgn")
         self._results(ctx, lat, arrays, outdir, sketch, p, n, mask_path=(mask_path or outdir / "mask.mrc") if abinit else None,
