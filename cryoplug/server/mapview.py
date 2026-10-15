@@ -184,6 +184,7 @@ class MapViews:
         import tempfile
 
         from cryoplug import maskdraw
+        from cryoplug.masks import molmap
         factor = self.factor(p, max_box)
         key = (str(p.resolve()), p.stat().st_mtime_ns, factor)
         with self._lock:
@@ -202,6 +203,22 @@ class MapViews:
                 memo[k] = maskdraw.atom_positions(str(f), selection)
             return memo[k]
 
+        def atoms(path: str, selection: str):
+            f = resolve(path)
+            k = ("atoms", str(f), f.stat().st_mtime_ns, selection)
+            if k not in memo:
+                memo[k] = maskdraw.atom_weights(str(f), selection)
+            return memo[k]
+
+        def molmaps(path: str, selection: str, resolution: float):  # moving the contour slider reuses the density
+            f = resolve(path)
+            k = ("molmap", str(f), f.stat().st_mtime_ns, selection, resolution)
+            if k not in memo:
+                for old in [key for key in list(memo) if key[0] == "molmap"][:-2]:  # the last three kept
+                    memo.pop(old, None)
+                memo[k] = molmap(base, *atoms(path, selection), resolution)
+            return memo[k]
+
         def masks(path: str):
             f = resolve(path)
             k = ("mask", str(f), f.stat().st_mtime_ns)
@@ -209,7 +226,7 @@ class MapViews:
                 memo[k] = maskdraw.resample_mask(str(f), base)
             return memo[k]
 
-        core = maskdraw.draw(recipe, base, models=models, masks=masks)
+        core = maskdraw.draw(recipe, base, models=models, masks=masks, atoms=atoms, molmaps=molmaps)
         shown = base.like(maskdraw.preview(core, base.voxel, recipe))
         with tempfile.NamedTemporaryFile(suffix=".mrc") as tmp:
             write_view_map(shown, tmp.name, "i8")

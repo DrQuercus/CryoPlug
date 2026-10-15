@@ -777,6 +777,13 @@ const ctl = {
   },
   goToQuiet: goTo,
   close: (item) => closeItem(item).catch((err) => fail(err)),
+  // molmap command: the mask editor opened (on the map named, or the active one) and a model map added to it
+  molmapMask({ map, ...spec }) {
+    if ((!maskEditor.isOpen() || map) && !maskEditor.open(map ? { base: map.path } : {})) {
+      throw new Error('Open a map first: the mask takes its grid');
+    }
+    return maskEditor.addMolmap(spec);
+  },
   open: () => openDialog(),
   showHelp: () => helpDialog(),
   resetView: () => resetView(),
@@ -882,7 +889,7 @@ function buildToolbar() {
         { label: 'Record until stopped', ic: 'record', action: () => startRecording('free') },
       ]);
     }),
-    mask: tool('Mask', 'edit', 'Draw a mask on the map with the mouse (spheres, boxes, regions, zones), saved as a job', () => {
+    mask: tool('Mask', 'edit', 'Draw a mask on the map with the mouse (spheres, boxes, regions, zones, model maps as molmap), saved as a job', () => {
       maskEditor.toggle();
       toolbar.refresh();
     }),
@@ -1054,7 +1061,7 @@ function helpDialog() {
         ['Shift + click two atoms', 'Measure their distance (distance clear removes the measurements)'],
         ['Histogram', 'Drag the line to set the contour level of a map'],
         ['Slices', 'Click: move the crosshair · wheel: next slice (large slices: zoom; Shift + wheel: next slice) · drag: pan · double-click: enlarge or fit'],
-        ['Mask editor (Mask button)', 'Click on the map: place a sphere, a box, a cylinder (two clicks) or pick a region of density · Ctrl + Z: undo · Delete: remove the selected operation']]),
+        ['Mask editor (Mask button)', 'Click on the map: place a sphere, a box, a cylinder (two clicks) or pick a region of density; zones and model maps (molmap) of an open model are added with their button · Ctrl + Z: undo · Delete: remove the selected operation']]),
       h('h4', {}, 'Keys'),
       table([['+  /  −', 'Raise / lower the level of the active map by 0.1 σ (Shift: 0.5 σ)'], ['M', 'Next map style (surface, mesh, transparent)'],
         ['R', 'Reset the view'], ['S', 'Spin on / off'], ['L', 'Slices on / off'], ['Space', 'Play / pause a volume series'],

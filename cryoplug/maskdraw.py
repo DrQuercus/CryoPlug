@@ -1,6 +1,7 @@
 """Masks drawn by hand in the 3D viewer, the way Chimera users make them: spheres, boxes and cylinders placed on the
-map, a region of connected density picked with the mouse, a zone around atoms, the density above a level or an existing
-mask, each added, erased or intersected in turn; then grown by a dilation and given a soft edge (in Å).
+map, a region of connected density picked with the mouse, a zone around atoms, the density simulated from a model
+(ChimeraX's molmap) cut at a contour, the density above a level or an existing mask, each added, erased or intersected
+in turn; then grown by a dilation and given a soft edge (in Å).
 
 A *recipe* holds the operations in physical coordinates (Å, those of the map, origin included), so that the same
 recipe gives the quick preview of the viewer, on a binned copy of the map, and the mask of the job, on the full grid.
@@ -12,10 +13,10 @@ from typing import Any, Callable
 
 import numpy as np
 
-from cryoplug.masks import ndimage, parse_selection, smooth_map, soft_edge
+from cryoplug.masks import MOLMAP_CONTOUR, level_enclosing, molmap, ndimage, parse_selection, smooth_map, soft_edge
 from cryoplug.mrc import MapVolume, zone_mask
 
-SHAPES = ("sphere", "box", "cylinder", "region", "zone", "map", "mask")
+SHAPES = ("sphere", "box", "cylinder", "region", "zone", "molmap", "map", "mask")
 MODES = ("add", "erase", "keep")
 MAX_OPS = 500
 MAX_SIZE = 5000.0  # Å: any radius or side above this is a mistake
@@ -77,13 +78,18 @@ def validate(recipe: Any) -> dict[str, Any]:
         elif shape == "map":
             clean.update(level=_num(op.get("level"), f"{where} level", -1e30, 1e30),
                          lowpass=_num(op.get("lowpass", 0), f"{where} low-pass", 0, 100))
-        elif shape == "zone":
+        elif shape in ("zone", "molmap"):
             model = str(op.get("model") or "")
             if not model:
                 raise ValueError(f"{where}: no model")
             selection = str(op.get("selection") or "")
             parse_selection(selection)  # readable error now rather than in the job
-            clean.update(model=model, selection=selection, radius=_num(op.get("radius", 3), f"{where} radius", 0.1, 100))
+            clean.update(model=model, selection=selection)
+            if shape == "zone":
+                clean["radius"] = _num(op.get("radius", 3), f"{where} radius", 0.1, 100)
+            else:
+                clean.update(resolution=_num(op.get("resolution", 10), f"{where} resolution", 1, 60),
+                             enclose=_num(op.get("enclose", 100 * MOLMAP_CONTOUR), f"{where} contour (% of the density)", 10, 99.99))
         elif shape == "mask":
             path = str(op.get("path") or "")
             if not path:
@@ -115,6 +121,9 @@ def describe(op: dict[str, Any]) -> str:
         return f"{verb} density above {op['level']:.4g}" + (f" (low-pass {op['lowpass']:g} Å)" if op["lowpass"] else "")
     if s == "zone":
         return f"{verb} {op['radius']:g} Å around {op['selection'] or 'all atoms'} of {op['model'].split('/')[-1]}"
+    if s == "molmap":
+        return (f"{verb} model map of {op['selection'] or 'all atoms'} of {op['model'].split('/')[-1]} at {op['resolution']:g} Å "
+                f"(molmap), contour enclosing {op['enclose']:g} % of its density")
     return f"{verb} mask {op['path'].split('/')[-1]}"
 
 
@@ -206,9 +215,13 @@ def region(smooth: np.ndarray, level: float, grid: Grid, seed: list[float], sear
 
 
 def draw(recipe: dict[str, Any], base: MapVolume, models: Callable[[str, str], np.ndarray] | None = None,
-         masks: Callable[[str], np.ndarray] | None = None) -> np.ndarray:
+         masks: Callable[[str], np.ndarray] | None = None,
+         atoms: Callable[[str, str], tuple[np.ndarray, np.ndarray]] | None = None,
+         molmaps: Callable[[str, str, float], np.ndarray] | None = None) -> np.ndarray:
     """The binary core of a validated recipe on the grid of ``base`` (z, y, x). ``models(path, selection)`` gives atom
-    positions (N, 3), ``masks(path)`` an existing mask resampled on the grid of ``base``."""
+    positions (N, 3), ``atoms(path, selection)`` positions and molmap weights, ``molmaps(path, selection, resolution)``
+    the simulated map of the atoms on the grid of ``base`` (computed from ``atoms`` without it: a cache for the
+    preview), ``masks(path)`` an existing mask resampled on the grid of ``base``."""
     grid = Grid(base)
     core = np.zeros(base.data.shape, dtype=bool)
     smoothed: dict[float, np.ndarray] = {}
@@ -236,6 +249,15 @@ def draw(recipe: dict[str, Any], base: MapVolume, models: Callable[[str, str], n
                 raise ValueError("Zones need the model")
             xyz = models(op["model"], op["selection"])
             part = zone_mask(base, xyz, op["radius"]) if len(xyz) else np.zeros_like(core)
+        elif s == "molmap":
+            if molmaps is not None:
+                density = molmaps(op["model"], op["selection"], op["resolution"])
+            elif atoms is not None:
+                density = molmap(base, *atoms(op["model"], op["selection"]), op["resolution"])
+            else:
+                raise ValueError("Model maps need the model")
+            level = level_enclosing(density, op["enclose"] / 100.0)
+            part = density >= level if level is not None else np.zeros_like(core)
         elif s == "mask":
             if masks is None:
                 raise ValueError("Masks need their file")
@@ -272,12 +294,18 @@ def preview(core: np.ndarray, voxel: np.ndarray, recipe: dict[str, Any]) -> np.n
 
 def atom_positions(path: str, selection: str = "") -> np.ndarray:
     """Heavy-atom positions of the selected chains / residues of a model."""
+    return atom_weights(path, selection)[0]
+
+
+def atom_weights(path: str, selection: str = "") -> tuple[np.ndarray, np.ndarray]:
+    """Heavy-atom positions of the selected chains / residues of a model and their molmap weights (atomic numbers)."""
     import gemmi
 
     from cryoplug.masks import select_atoms
     st = gemmi.read_structure(str(path))
     st.setup_entities()
-    return np.asarray(select_atoms(st, selection)["xyz"], dtype=np.float64).reshape(-1, 3)
+    sel = select_atoms(st, selection)
+    return np.asarray(sel["xyz"], dtype=np.float64).reshape(-1, 3), np.asarray(sel["weights"], dtype=np.float64)
 
 
 def resample_mask(path: str, like: MapVolume) -> np.ndarray:

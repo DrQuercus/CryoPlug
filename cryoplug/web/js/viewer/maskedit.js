@@ -1,8 +1,9 @@
 // Mask editor of the 3D viewer: a mask drawn on a map with the mouse, the way Chimera users make them — spheres,
 // boxes and cylinders placed on the map, a connected region of density picked at the contour level, a zone around
-// chains, the density above the level — each added, erased or intersected in turn. The server computes the mask on
-// a coarse copy of the map while drawing (shown as an orange surface); "Save as job" queues a "Mask drawn in the 3D
-// viewer" job that computes it on the full grid, with its dilation, soft edge, centre and box for re-centred particles.
+// chains, the density simulated from chains of a model (molmap), the density above the level — each added, erased or
+// intersected in turn. The server computes the mask on a coarse copy of the map while drawing (shown as an orange
+// surface); "Save as job" queues a "Mask drawn in the 3D viewer" job that computes it on the full grid, with its
+// dilation, soft edge, centre and box for re-centred particles.
 import { api } from '../api.js';
 import { clear, h, icon, toast } from '../ui.js';
 import * as scene from './scene.js';
@@ -13,6 +14,7 @@ const TOOLS = [
   ['cylinder', 'Cylinder', 'Click one end on the map, then the other'],
   ['region', 'Region', 'Click on a blob of density: the connected density above the level is taken (as Chimera’s region pick)'],
   ['zone', 'Zone', 'Density near the atoms of chains of an open model'],
+  ['molmap', 'Model map', 'Density simulated from chains of an open model at a resolution, cut at the contour enclosing a share of it (Chimera’s molmap)'],
   ['map', 'Density', 'All the density above the level (then erase what is not wanted)'],
 ];
 const MODES = [['add', 'Add'], ['erase', 'Erase'], ['keep', 'Keep only']];
@@ -24,7 +26,7 @@ const fmtLevel = (v) => (Math.abs(v) >= 100 || (Math.abs(v) < 0.01 && v !== 0) ?
 export function createMaskEditor(root, ctl) {
   const M = {
     open: false, base: null, tool: 'sphere', mode: 'add', radius: 10, side: 30, level: null, lowpass: 0,
-    zoneModel: null, zoneSelection: '', zoneRadius: 4, ops: [], undone: [], selected: -1, pending: null,
+    zoneModel: null, zoneSelection: '', zoneRadius: 4, molmapRes: 10, molmapEnclose: 95, ops: [], undone: [], selected: -1, pending: null,
     dilate: 2, soft: 6, show: true, opacity: 0.4, job: null, saving: false, error: '',
   };
   const preview = { item: null, token: 0, timer: 0, busy: false };
@@ -48,6 +50,7 @@ export function createMaskEditor(root, ctl) {
       case 'region': return `${verb} region · level ${fmtLevel(op.level)}${op.lowpass ? ` · ${op.lowpass} Å` : ''}`;
       case 'map': return `${verb} density · level ${fmtLevel(op.level)}${op.lowpass ? ` · ${op.lowpass} Å` : ''}`;
       case 'zone': return `${verb} zone · ${op.radius} Å of ${op.selection || 'all atoms'}`;
+      case 'molmap': return `${verb} model map · ${op.selection || 'all atoms'} · ${op.resolution} Å · ${op.enclose} %`;
       case 'mask': return `${verb} mask ${op.path.split('/').pop()}`;
       default: return op.shape;
     }
@@ -168,12 +171,27 @@ export function createMaskEditor(root, ctl) {
   }
 
   function addWhole() {
-    if (M.tool === 'map') push({ shape: 'map', mode: M.mode, level: levelOf(), lowpass: M.lowpass });
-    else if (M.tool === 'zone') {
-      const model = models().find((m) => m.id === M.zoneModel) || models()[0];
-      if (!model) { setStatus('Open a model fitted in the map first (Open…)', true); return; }
-      push({ shape: 'zone', mode: M.mode, model: model.path, selection: M.zoneSelection.trim(), radius: M.zoneRadius });
+    if (M.tool === 'map') { push({ shape: 'map', mode: M.mode, level: levelOf(), lowpass: M.lowpass }); return; }
+    const model = models().find((m) => m.id === M.zoneModel) || models()[0];
+    if (!model) { setStatus('Open a model fitted in the map first (Open…)', true); return; }
+    if (M.tool === 'zone') push({ shape: 'zone', mode: M.mode, model: model.path, selection: M.zoneSelection.trim(), radius: M.zoneRadius });
+    else if (M.tool === 'molmap') {
+      push({ shape: 'molmap', mode: M.mode, model: model.path, selection: M.zoneSelection.trim(), resolution: M.molmapRes, enclose: M.molmapEnclose });
     }
+  }
+
+  // the molmap command: a model map of a model open in the viewer, with the editor's settings for what is not given
+  function addMolmap({ model, selection = '', resolution, enclose, mode } = {}) {
+    if (!M.open) throw new Error('The mask editor is closed');
+    M.tool = 'molmap';
+    M.zoneModel = model.id;
+    M.zoneSelection = selection;
+    if (Number.isFinite(resolution)) M.molmapRes = resolution;
+    if (Number.isFinite(enclose)) M.molmapEnclose = enclose;
+    if (mode) M.mode = mode;
+    const op = { shape: 'molmap', mode: M.mode, model: model.path, selection, resolution: M.molmapRes, enclose: M.molmapEnclose };
+    push(op);
+    return op;
   }
 
   // ------------------------------------------------------------ editing
@@ -228,9 +246,9 @@ export function createMaskEditor(root, ctl) {
       const mapRef = await outputRef(M.base.path, ['map', 'mask']);
       if (!mapRef) throw new Error(`${M.base.label} is not a map output of this project (a half map?): draw on a full map`);
       const inputs = { map: mapRef };
-      const zone = M.ops.find((o) => o.shape === 'zone');
-      if (zone) {
-        const modelRef = await outputRef(zone.model, ['model']);
+      const withModel = M.ops.find((o) => o.shape === 'zone' || o.shape === 'molmap');
+      if (withModel) {
+        const modelRef = await outputRef(withModel.model, ['model']);
         if (modelRef) inputs.model = modelRef;
       }
       const params = { recipe: JSON.stringify({ version: 1, ops: M.ops }), dilate: M.dilate, soft: M.soft };
@@ -319,26 +337,37 @@ export function createMaskEditor(root, ctl) {
         editSelected((op) => ((op.shape === 'region' || op.shape === 'map') ? ((op.lowpass = v), true) : false));
       }));
     }
-    if (M.tool === 'zone') {
+    if (M.tool === 'zone' || M.tool === 'molmap') {
       const ms = models();
+      const sizes = M.tool === 'zone'
+        ? [slider('Distance', M.zoneRadius, 1, 15, 0.5, 'Å', (v) => {
+          M.zoneRadius = v;
+          editSelected((op) => (op.shape === 'zone' ? ((op.radius = v), true) : false));
+        })]
+        : [slider('Resolution', M.molmapRes, 2, 30, 0.5, 'Å', (v) => {
+          M.molmapRes = v;
+          editSelected((op) => (op.shape === 'molmap' ? ((op.resolution = v), true) : false));
+        }),
+        slider('Contour', M.molmapEnclose, 50, 99.5, 0.5, '%', (v) => {
+          M.molmapEnclose = v;
+          editSelected((op) => (op.shape === 'molmap' ? ((op.enclose = v), true) : false));
+        })];
       controls.push(ms.length
         ? h('div', {},
           h('div', { class: 'vw-row' }, h('span', { class: 'lbl' }, 'Model'),
-            h('select', { onchange: (e) => { M.zoneModel = Number(e.target.value); } },
+            h('select', { 'aria-label': 'Model', onchange: (e) => { M.zoneModel = Number(e.target.value); } },
               ms.map((m) => h('option', { value: m.id, selected: m.id === M.zoneModel }, `#${m.id} ${m.label}`)))),
           h('div', { class: 'vw-row' }, h('span', { class: 'lbl' }, 'Chains'),
             h('input', { type: 'text', value: M.zoneSelection, placeholder: 'A, B, C:10-250 (empty: all)', 'aria-label': 'Chains and residues',
               oninput: (e) => { M.zoneSelection = e.target.value; } })),
-          slider('Distance', M.zoneRadius, 1, 15, 0.5, 'Å', (v) => {
-            M.zoneRadius = v;
-            editSelected((op) => (op.shape === 'zone' ? ((op.radius = v), true) : false));
-          }))
-        : h('div', { class: 'vw-meta' }, 'Open a model fitted in this map (Open…) to draw zones around its chains.'));
+          ...sizes,
+          M.tool === 'molmap' ? h('div', { class: 'vw-meta' }, 'A Gaussian per atom (σ = resolution / (π√2), height its atomic number); the contour encloses this share of the simulated density — 95 % is Chimera’s first contour, more gives a larger mask.') : null)
+        : h('div', { class: 'vw-meta' }, `Open a model fitted in this map (Open…) to ${M.tool === 'zone' ? 'draw zones around its chains' : 'simulate its density'}.`));
     }
     const actions = h('div', { class: 'vw-mk-actions' });
-    if (M.tool === 'map' || M.tool === 'zone') {
+    if (M.tool === 'map' || M.tool === 'zone' || M.tool === 'molmap') {
       actions.append(h('button', { type: 'button', class: 'btn small primary', onclick: () => addWhole() }, icon('plus'),
-        `${MODES.find((m) => m[0] === M.mode)[1]} ${M.tool === 'map' ? 'density' : 'zone'}`));
+        `${MODES.find((m) => m[0] === M.mode)[1]} ${{ map: 'density', zone: 'zone', molmap: 'model map' }[M.tool]}`));
     } else {
       actions.append(h('button', { type: 'button', class: 'btn small', title: 'Place the shape at the centre of rotation (click an atom to centre on it first)',
         onclick: () => placeAtCentre() }, icon('target'), M.pending ? 'Other end at the centre' : 'At the centre of the view'));
@@ -438,6 +467,7 @@ export function createMaskEditor(root, ctl) {
     click,
     onKey,
     itemClosed,
+    addMolmap,
     state: () => (M.open ? { base: M.base?.path, ops: M.ops, dilate: M.dilate, soft: M.soft, ...(M.job ? { job: M.job.uid } : {}) } : null),
   };
 }

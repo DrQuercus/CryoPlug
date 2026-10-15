@@ -282,10 +282,13 @@ HELP: dict[str, dict[str, Any]] = {
     },
     "create_mask": {
         "purpose": "Crée un masque à bord doux : à partir de la densité (passe-bas + seuil), des atomes de chaînes choisies, "
-                   "ou de la densité proche de ces atomes. Dilatation et bord doux en Å, comme dans CryoSPARC ; "
-                   "combinaison avec un autre masque (union, soustraction, intersection).",
+                   "de la carte simulée à partir de ces atomes (comme molmap dans Chimera/ChimeraX), ou de la densité "
+                   "proche de ces atomes. Dilatation et bord doux en Å, comme dans CryoSPARC ; combinaison avec un autre "
+                   "masque (union, soustraction, intersection).",
         "when": [
             "Masque de raffinement local d'une sous-partie d'un gros complexe (chaînes choisies + densité voisine).",
+            "Masque lisse d'un domaine à partir du modèle (« model map ») : la recette molmap + seuil + bord doux de "
+            "Chimera, sans quitter CryoPlug ; la carte simulée est aussi donnée (sortie « model_map »).",
             "Masque FSC, LocScale ou spIsoNet quand celui de CryoSPARC manque ou ne convient pas.",
             "Soustraction de signal : masque du complexe moins la région à garder (« subtract »).",
             "Masque à fournir à l'EMDB avec la carte déposée.",
@@ -298,6 +301,8 @@ HELP: dict[str, dict[str, Any]] = {
                   "second masque pour les combinaisons.",
         "tips": [
             "Raffinement local : densité proche du modèle (6–8 Å), dilatation 3–5 Å, bord 8–12 Å.",
+            "« Model map » : une gaussienne par atome (σ = résolution / (π√2), hauteur = numéro atomique, comme molmap) ; "
+            "10–15 Å et le contour à 95 % (celui de ChimeraX) donnent un masque lisse de domaine, à dilater de 2–3 Å.",
             "FSC / LocScale : densité filtrée à 15 Å, dilatation 3 Å, bord 6 Å.",
             "Donnez la masse attendue (kDa) pour un seuil automatique fiable ; sinon la masse des atomes choisis est utilisée.",
             "Les coupes du rapport montrent le masque (orange) sur la carte : vérifiez qu'il ne coupe pas de densité.",
@@ -308,7 +313,8 @@ HELP: dict[str, dict[str, Any]] = {
     "draw_mask": {
         "purpose": "Masque dessiné à la main sur une carte dans le visualiseur 3D, comme dans Chimera : sphères, boîtes et "
                    "cylindres placés à la souris, région de densité connexe cliquée au niveau de contour, zone autour de "
-                   "chaînes, densité au-dessus d'un niveau, ajoutés, effacés ou intersectés ; puis dilatation et bord doux. "
+                   "chaînes, carte simulée à partir de chaînes d'un modèle (molmap), densité au-dessus d'un niveau, ajoutés, "
+                   "effacés ou intersectés ; puis dilatation et bord doux. "
                    "Le job calcule le masque sur la grille complète de la carte, avec son centre de masse et la boîte "
                    "pour recentrer les particules.",
         "when": [
@@ -321,10 +327,12 @@ HELP: dict[str, dict[str, Any]] = {
             "Bord trop dur pour un raffinement : gardez dilatation + bord doux ≥ 6-8 Å.",
         ],
         "inputs": "La carte sur laquelle dessiner (elle fixe la boîte et le pixel : prenez la carte consensus pour les "
-                  "jobs RELION) ; un modèle ajusté pour les zones autour de chaînes.",
+                  "jobs RELION) ; un modèle ajusté pour les zones autour de chaînes et les cartes simulées (molmap).",
         "tips": [
             "Visualiseur 3D → bouton « Mask » : choisissez un outil, cliquez sur la carte ; la surface orange est le masque.",
             "« Region » prend toute la densité connexe au niveau de contour (réglez le niveau, ou un passe-bas pour lisser).",
+            "« Model map » : la carte simulée de chaînes d'un modèle ouvert, coupée au contour qui englobe 95 % de sa "
+            "densité ; ou la commande ChimeraX « molmap #2/A,B 10 » dans la ligne de commande du visualiseur.",
             "« At the centre of the view » : cliquez d'abord un atome pour centrer la vue dessus, puis placez la forme.",
             "Ctrl + Z annule, Suppr retire l'opération sélectionnée ; les curseurs modifient l'opération sélectionnée.",
             "Un job créé dans un workflow attend le dessin : « Draw in 3D » sur ce job, puis « Save as job » le lance.",

@@ -17,6 +17,7 @@ export const COMMAND_HELP = [
   ['lowpass [#id] <Å> | off', 'Show a map low-pass filtered to a resolution (flexible regions, weak density)'],
   ['volume [#id] level <v> style <s> color <c> transparency <t>', 'Several map settings at once, ChimeraX syntax (also step <n>, sdLevel, rmsLevel, encloseVolume)'],
   ['volume zone #map nearAtoms #model range <r>', 'Same as zone, ChimeraX syntax'],
+  ['molmap [#model[/A,B:10-250]] <Å> [displayThreshold 0.95] [onGrid #map] [erase | keep]', 'Mask from the density simulated from a model (ChimeraX molmap): added to the mask editor, cut at the contour enclosing 95 % of it'],
   ['bg black | white | gray | <colour>', 'Background (also: set bgColor white)'],
   ['slab <1–99> | slab <Å>A | slab off', 'Keep only a slab around the centre, Coot-like: % of the thickness shown, or Å (slab 12A); the cut density is drawn filled'],
   ['spin [off]', 'Rotate continuously'],
@@ -190,6 +191,57 @@ export function createCommands(ctl) {
     if (!(radius >= 0.5 && radius <= 30)) throw new Error('The zone radius must be between 0.5 and 30 Å');
     ctl.setZone(map, { model: model.id, radius }); // reported once the zone is computed
     return null;
+  }
+
+  // ChimeraX atom spec after the model number: /A,B:10-250,300-400 -> "A:10-250, A:300-400, B:10-250, B:300-400"
+  function chainSelection(spec) {
+    const [chains, ranges] = spec.replace(/^\//, '').split(':');
+    const names = chains.split(',').map((c) => c.trim()).filter(Boolean);
+    const spans = (ranges || '').split(',').map((r) => r.trim()).filter(Boolean);
+    if (!names.length || names.some((c) => !/^[A-Za-z0-9]+$/.test(c)) || spans.some((r) => !/^-?\d+(-(-?\d+))?$/.test(r))) {
+      throw new Error(`Cannot read the chains '${spec}': write them as in ChimeraX, e.g. #2/A,B or #2/C:10-250`);
+    }
+    return names.flatMap((c) => (spans.length ? spans.map((r) => `${c}:${r}`) : [c])).join(', ');
+  }
+
+  // molmap #2/A,B 10 [displayThreshold 0.95] [onGrid #1]: ChimeraX's command, turned into a mask operation
+  function molmap(words) {
+    let model = null;
+    let selection = '';
+    let resolution = null;
+    let enclose;
+    let map = null;
+    let mode;
+    for (let k = 0; k < words.length; k++) {
+      const w = words[k];
+      const spec = /^#(\d+)(\/.+)?$/.exec(w);
+      if (spec) {
+        const item = ctl.byId(Number(spec[1]));
+        if (!item) throw new Error(`No item #${spec[1]}`);
+        if (item.kind !== 'model') throw new Error(`#${item.id} is not a model: molmap #2 10 (the model, then the resolution in Å)`);
+        model = item;
+        selection = spec[2] ? chainSelection(spec[2]) : '';
+      } else if (/^\//.test(w)) selection = chainSelection(w);
+      else if (/^displaythreshold$/i.test(w)) {
+        const f = Number(words[++k]);
+        if (!(f >= 0.1 && f < 1)) throw new Error('displayThreshold: the fraction of the simulated density enclosed, e.g. 0.95');
+        enclose = Math.round(f * 1000) / 10;
+      } else if (/^ongrid$/i.test(w)) {
+        const m = /^#(\d+)$/.exec(words[++k] || '');
+        map = m ? ctl.byId(Number(m[1])) : null;
+        if (!map || map.kind !== 'map' || map.series) throw new Error('onGrid #id: the map whose grid the mask gets');
+      } else if (/^(add|erase|keep)$/i.test(w)) mode = w.toLowerCase();
+      else if (/^(gridspacing|edgepadding|cube|cutoffrange|sigmafactor|balls|symmetry|center|axis|coordinatesystem|replace|showdialog|modelid)$/i.test(w)) {
+        throw new Error(`molmap: ${w} is not used here — the model map is computed on the grid of the map, with Gaussians of σ = resolution / (π√2) cut at 5 σ`);
+      } else if (resolution === null && Number.isFinite(Number(w.replace(/(a|å)$/i, '')))) resolution = Number(w.replace(/(a|å)$/i, ''));
+      else throw new Error(`molmap: unexpected '${w}' (molmap #2/A,B 10 displayThreshold 0.95)`);
+    }
+    model ||= ctl.activeModel();
+    if (!model) throw new Error('molmap needs a model: molmap #2 10');
+    if (resolution === null) throw new Error(`Give the resolution in Å: molmap #${model.id} 10`);
+    if (!(resolution >= 1 && resolution <= 60)) throw new Error('The resolution of a model map is between 1 and 60 Å');
+    const added = ctl.molmapMask({ model, selection, resolution, enclose, map, mode });
+    return `Model map of #${model.id}${selection ? ` (${selection})` : ''} at ${resolution} Å ${added.mode === 'add' ? 'added to' : added.mode === 'erase' ? 'erased from' : 'intersected with'} the mask — contour enclosing ${added.enclose} % of its density (orange preview); Save as job computes it on the full grid`;
   }
 
   const handlers = {
@@ -417,6 +469,7 @@ export function createCommands(ctl) {
   handlers.measure = handlers.distance;
   handlers.spheres = ({ items }) => { const ms = models(items); ms.forEach((m) => ctl.setDisplay(m, 'spheres')); return `Spheres for ${ids(ms)}`; };
   handlers.windowsize = () => 'The view follows the window size';
+  handlers.molmap = ({ words }) => molmap(words);
 
   async function run(line) {
     const words = line.trim().split(/\s+/).filter(Boolean);
@@ -424,7 +477,7 @@ export function createCommands(ctl) {
     const verb = words.shift().toLowerCase();
     const handler = handlers[verb];
     if (!handler) throw new Error(`Unknown command '${verb}'. Type help for the list.`);
-    return handler(split(words));
+    return handler(verb === 'molmap' ? { words } : split(words)); // molmap reads #2/A,B and onGrid #1 itself
   }
 
   return { run };

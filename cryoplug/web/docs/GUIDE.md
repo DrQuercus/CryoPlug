@@ -245,6 +245,7 @@ Corrigez avec **Map operations → Flip handedness** sur la carte utilisée pour
 |---|---|---|
 | Densité de la carte (passe-bas + seuil) | Masque FSC, LocScale, spIsoNet, dépôt | Passe-bas 15 Å, dilatation 3 Å, bord 6 Å |
 | Atomes du modèle (chaînes ou résidus choisis) | Masque serré autour d'un modèle | Rayon 3 Å, dilatation 2–3 Å, bord 6 Å |
+| Carte simulée du modèle (*model map*, comme `molmap` de Chimera) | Masque **lisse** d'un domaine ou d'un sous-complexe, sans les creux d'un masque d'atomes | 10–15 Å, contour 95 %, dilatation 2–3 Å, bord 6–8 Å |
 | Densité proche du modèle | **Raffinement local** d'une sous-partie : suit la densité, y compris non modélisée | Distance 6–8 Å, dilatation 3–5 Å, bord 8–12 Å |
 
 - **Seuil automatique** : le niveau qui contient le volume de la masse attendue (champ *Expected mass*, sinon la
@@ -252,6 +253,11 @@ Corrigez avec **Map operations → Flip handedness** sur la carte utilisée pour
   et la masse équivalente, et trois coupes avec le masque en orange.
 - **Sélection** : `A, B, C:10-250` ; *Leave out* retire des chaînes ou des segments ; *Remove blobs lighter than*
   élimine les petits îlots de bruit.
+- **Carte simulée** (*model map*) : la même que `molmap` dans Chimera / ChimeraX — une gaussienne par atome, d'écart-type
+  résolution / (π√2) et de hauteur le numéro atomique, coupée à 5 σ — calculée sur la grille de la carte (`onGrid`). Le
+  cœur du masque est la densité simulée au-dessus du contour qui en englobe 95 % (le premier contour de ChimeraX ;
+  *Model map contour* l'ajuste : plus haut, masque plus large). La carte simulée est aussi une sortie du job
+  (`model_map`), à ouvrir dans le visualiseur ou à comparer à la carte.
 - **Combine with mask** : union, soustraction (masque du complexe moins la région à garder, pour une soustraction
   de signal) ou intersection.
 - Le rapport donne le chemin du fichier pour l'importer dans CryoSPARC (*Import 3D Volumes*, type *mask*) : même
@@ -265,6 +271,7 @@ Corrigez avec **Map operations → Flip handedness** sur la carte utilisée pour
 | Cylinder | deux clics : les deux extrémités, puis le rayon |
 | Region | toute la densité connexe au-dessus du niveau (celui du contour, ou un autre ; passe-bas optionnel) autour du point cliqué |
 | Zone | la densité à moins de *d* Å des atomes de chaînes choisies d'un modèle ouvert |
+| Model map | la carte simulée de chaînes d'un modèle ouvert (molmap) à une résolution, coupée au contour qui englobe une part de sa densité (95 % par défaut) |
 | Density | toute la densité au-dessus du niveau (puis on efface le superflu) |
 
 Chaque forme **ajoute**, **efface** ou **garde seulement** (intersection) ; les curseurs modifient l'opération
@@ -273,6 +280,10 @@ de la carte (dilatation comprise). **Save as job** lance *Mask drawn in the 3D v
 grille complète avec la dilatation et le bord doux, et donne son **centre de masse** et la **boîte** pour recentrer des
 particules (soustraction de signal). Astuce : cliquez d'abord un atome (la vue se centre dessus), puis *At the centre of
 the view* place la forme exactement sur ce résidu.
+
+La commande de ChimeraX marche aussi dans la ligne de commande du visualiseur : `molmap #2/A,B 10` ajoute au masque la
+carte simulée des chaînes A et B du modèle #2 à 10 Å (`molmap #2/C:10-250 15 displayThreshold 0.9` pour un segment et un
+autre contour ; `onGrid #1` choisit la carte ; `erase` ou `keep` changent le mode).
 
 ### 3.6 Gros complexes : cartes composites
 
@@ -745,7 +756,7 @@ slab) et la caméra : recharger la page redonne la même vue, et **Link** copie 
 accès au projet. **Image** enregistre un PNG (avec l'échelle de couleur d'une carte coloriée), **Movie** une vidéo.
 
 `help` dans la ligne de commande liste les commandes (`level`, `style`, `color`, `view`, `zone`, `detail`,
-`lowpass`, `volume`, `bg`, `slab`, `record`, `distance`, `save`…), **?** les gestes souris et les touches.
+`lowpass`, `volume`, `bg`, `slab`, `record`, `distance`, `molmap`, `save`…), **?** les gestes souris et les touches.
 
 ### 5.3 Assembler
 

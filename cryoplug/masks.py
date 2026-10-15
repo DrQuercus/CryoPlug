@@ -53,10 +53,12 @@ def _matches(terms, chain: str, num: int) -> bool:
 
 
 def select_atoms(st: gemmi.Structure, include: str = "", exclude: str = "") -> dict[str, Any]:
-    """Heavy atoms of the first model in the selection: positions, mass (Da, hydrogens included) and the
-    chains found. An empty ``include`` means the whole model."""
+    """Heavy atoms of the first model in the selection: positions, molmap weights, mass (Da, hydrogens included) and
+    the chains found. An empty ``include`` means the whole model. The weight of an atom is its atomic number, as in
+    ChimeraX's molmap, times its occupancy for alternative conformations (ChimeraX shows one of them)."""
     inc, exc = parse_selection(include), parse_selection(exclude)
     xyz: list[tuple[float, float, float]] = []
+    weights: list[float] = []
     mass, has_h = 0.0, False
     chains: list[str] = []
     for chain in st[0]:
@@ -70,11 +72,12 @@ def select_atoms(st: gemmi.Structure, include: str = "", exclude: str = "") -> d
                     has_h = True
                     continue
                 xyz.append((atom.pos.x, atom.pos.y, atom.pos.z))
+                weights.append(atom.element.atomic_number * (min(max(atom.occ, 0.0), 1.0) if atom.has_altloc() else 1.0))
             if chain.name not in chains:
                 chains.append(chain.name)
     missing = sorted({c for c, _a, _b in inc} - {ch.name for ch in st[0]})
-    return {"xyz": np.array(xyz, dtype=np.float64).reshape(-1, 3), "mass_da": mass * (1.0 if has_h else HYDROGEN_FACTOR),
-            "chains": chains, "missing_chains": missing}
+    return {"xyz": np.array(xyz, dtype=np.float64).reshape(-1, 3), "weights": np.array(weights, dtype=np.float64),
+            "mass_da": mass * (1.0 if has_h else HYDROGEN_FACTOR), "chains": chains, "missing_chains": missing}
 
 
 # ---------------------------------------------------------------- map cores
@@ -162,6 +165,94 @@ def remove_islands(core: np.ndarray, voxel: np.ndarray, min_mass_kda: float = 0.
 def atoms_core(vol: MapVolume, xyz: np.ndarray, radius: float) -> np.ndarray:
     """Voxels within ``radius`` Å of an atom."""
     return zone_mask(vol, xyz, radius)
+
+
+# ------------------------------------------------- density simulated from a model
+SIGMA_FACTOR = 1 / (math.pi * math.sqrt(2))  # ChimeraX molmap: the Fourier transform falls to 1/e at 1/resolution
+MOLMAP_CUTOFF = 5.0  # Gaussians cut at 5 standard deviations (ChimeraX's cutoffRange)
+MOLMAP_CONTOUR = 0.95  # ChimeraX's first contour of a molmap: it encloses 95 % of the density (displayThreshold)
+MOLMAP_MAX_SIDE = 320  # computation boxes larger than this are filled on a coarser grid when the Gaussians allow it
+MOLMAP_FINE_VOXELS = 32_000_000  # budget of the finer grid used for Gaussians narrower than 1.5 voxels
+
+
+def molmap(vol: MapVolume, xyz: np.ndarray, weights: np.ndarray, resolution: float,
+           sigma_factor: float = SIGMA_FACTOR, cutoff: float = MOLMAP_CUTOFF) -> np.ndarray:
+    """Density simulated from atoms on the grid of ``vol`` (z, y, x), as ``molmap <atoms> <resolution> onGrid <map>`` in
+    ChimeraX: every atom a normalised 3D Gaussian of standard deviation ``sigma_factor`` × ``resolution``, times its
+    weight (its atomic number), cut at ``cutoff`` standard deviations; values per Å³.
+
+    The atoms are spread on a grid with trilinear weights, then the grid is convolved with the Gaussian narrowed by the
+    width the spreading adds (1/6 voxel² of variance on average): within a few per cent of the exact sum when the
+    Gaussian spans 1.5 voxels or more, so narrower ones are computed on a grid 2 or 3 times finer, sampled back. Only
+    the box around the atoms (plus the cut-off) is computed, on a grid binned so that it stays below
+    ``MOLMAP_MAX_SIDE`` voxels when the Gaussians are wide enough, then interpolated back."""
+    nd = ndimage()
+    out = np.zeros(vol.data.shape, dtype=np.float32)
+    xyz = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
+    w = np.asarray(weights, dtype=np.float64).reshape(-1)
+    if not len(xyz) or resolution <= 0:
+        return out
+    sigma = sigma_factor * resolution
+    voxel = np.asarray(vol.voxel, dtype=np.float64)  # x, y, z
+    n = np.array(vol.data.shape[::-1])  # x, y, z
+    frac = (xyz - np.asarray(vol.origin, dtype=np.float64)) / voxel  # voxel coordinates of the atoms
+    reach = np.ceil(cutoff * sigma / voxel).astype(int) + 1
+    # atoms beyond the cut-off from the box add nothing inside it
+    lo = np.maximum(np.floor(frac.min(axis=0)).astype(int) - reach, -reach)
+    hi = np.minimum(np.ceil(frac.max(axis=0)).astype(int) + reach + 1, n + reach)
+    if np.any(np.minimum(hi, n) <= np.maximum(lo, 0)):
+        return out
+    sub = hi - lo
+    s_vox = sigma / voxel
+    factor, fine = 1, 1
+    if sub.max() > MOLMAP_MAX_SIDE:  # at least two coarse voxels per standard deviation (interpolated back within 5 %)
+        factor = max(1, min(math.ceil(sub.max() / MOLMAP_MAX_SIDE), int(math.floor(float(s_vox.min()) / 2))))
+    if factor == 1 and s_vox.min() < 1.5:
+        fine = min(3, math.ceil(1.5 / float(s_vox.min())))
+        while fine > 1 and float(np.prod((sub - 1) * fine + 1)) > MOLMAP_FINE_VOXELS:
+            fine -= 1
+    if fine > 1:  # fine voxel j * fine is voxel j
+        shape = (sub - 1) * fine + 1
+        pos = (frac - lo) * fine
+    else:  # coarse voxel i is centred on voxel i * factor + (factor - 1) / 2
+        shape = -(-sub // factor)
+        pos = (frac - lo - (factor - 1) / 2.0) / factor
+    grid = np.zeros(tuple(shape[::-1]), dtype=np.float32)
+    i0 = np.floor(pos).astype(np.intp)
+    t = pos - i0
+    for dx in (0, 1):
+        wx = w * (t[:, 0] if dx else 1.0 - t[:, 0])
+        for dy in (0, 1):
+            wxy = wx * (t[:, 1] if dy else 1.0 - t[:, 1])
+            for dz in (0, 1):
+                wxyz = wxy * (t[:, 2] if dz else 1.0 - t[:, 2])
+                ix, iy, iz = i0[:, 0] + dx, i0[:, 1] + dy, i0[:, 2] + dz
+                ok = (ix >= 0) & (ix < shape[0]) & (iy >= 0) & (iy < shape[1]) & (iz >= 0) & (iz < shape[2])
+                np.add.at(grid, (iz[ok], iy[ok], ix[ok]), wxyz[ok].astype(np.float32))
+    scale = fine / factor  # grid voxels per map voxel
+    s_filter = np.sqrt(np.maximum((s_vox * scale) ** 2 - 1.0 / 6.0, 0.0))
+    grid = nd.gaussian_filter(grid, sigma=tuple(s_filter[::-1]), truncate=cutoff, mode="constant")
+    grid *= np.float32(scale ** 3 / float(np.prod(voxel)))  # weight per Å³: each atom integrates to its weight
+    if fine > 1:
+        grid = grid[::fine, ::fine, ::fine]
+    elif factor > 1:
+        grid = _upsample(grid, factor, tuple(sub[::-1]))
+    a, b = np.maximum(lo, 0), np.minimum(hi, n)
+    out[tuple(slice(a[k], b[k]) for k in (2, 1, 0))] = grid[tuple(slice(a[k] - lo[k], b[k] - lo[k]) for k in (2, 1, 0))]
+    return out
+
+
+def level_enclosing(density: np.ndarray, fraction: float, limit: int = 4_000_000) -> float | None:
+    """Level whose contour encloses ``fraction`` of a density: the voxels above it hold that share of the sum of the
+    positive values (ChimeraX's first contour of a molmap, displayThreshold 0.95). None when nothing is positive."""
+    values = density[density > 0]
+    if not values.size:
+        return None
+    step = max(1, values.size // limit)
+    ranked = np.sort(values[::step].astype(np.float64))[::-1]
+    cumulative = np.cumsum(ranked)
+    k = int(np.searchsorted(cumulative, min(max(fraction, 0.0), 1.0) * cumulative[-1]))
+    return float(ranked[min(k, ranked.size - 1)])
 
 
 # ---------------------------------------------------------------- soft edge
