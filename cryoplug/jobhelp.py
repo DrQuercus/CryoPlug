@@ -339,7 +339,8 @@ HELP: dict[str, dict[str, Any]] = {
         "when": ["La carte affûtée de CryoSPARC semble sur- ou sous-affûtée.", "Vous partez d'une carte non affûtée d'un autre logiciel."],
         "avoid": ["Résolution locale très hétérogène : préférez LocScale ou l'affûtage local anisotrope."],
         "inputs": "La carte NON affûtée ; les demi-cartes sont optionnelles.",
-        "tips": ["Comparez visuellement avec la carte CryoSPARC dans le visualiseur 3D avant de choisir."],
+        "tips": ["Comparez visuellement avec la carte CryoSPARC dans le visualiseur 3D avant de choisir.",
+                 "Phenix 2 remplace auto_sharpen par map_sharpening : CryoPlug le lance avec --force, il fonctionne toujours."],
         "next": ["modelangelo_build", "chimerax_fitmap"],
     },
     "phenix_local_aniso_sharpen": {
@@ -348,7 +349,8 @@ HELP: dict[str, dict[str, Any]] = {
         "when": ["Résolution variable avec une légère anisotropie ; alternative Phenix à LocScale."],
         "avoid": ["Anisotropie forte : envisagez spIsoNet."],
         "inputs": "Demi-cartes non filtrées, modèle optionnel.",
-        "tips": ["Avec un modèle, le résultat suit mieux la résolution locale réelle."],
+        "tips": ["Avec un modèle, le résultat suit mieux la résolution locale réelle.",
+                 "Phenix 2 remplace local_aniso_sharpen par map_sharpening : CryoPlug le lance avec --force."],
         "next": ["modelangelo_build", "phenix_real_space_refine"],
     },
     # ----------------------------------------------------------- Model building
@@ -825,6 +827,9 @@ HELP: dict[str, dict[str, Any]] = {
         "inputs": "Modèle + carte (en général la carte affûtée déposée) + restreintes de ligands éventuelles.",
         "tips": [
             "5 macro-cycles par défaut ; morphing/recuit utiles juste après un docking.",
+            "N/Q/H flips s'ajoutent à la stratégie (run=…+nqh_flips) : ce n'est pas un paramètre à part pour Phenix.",
+            "Si Phenix refuse le modèle (« Map and model are not aligned », symétrie différente de la carte), CryoPlug "
+            "relance avec l'option que Phenix propose, avec un avertissement dans le log.",
             "Les statistiques finales (MolProbity, CC_mask) sont lues dans la sortie et affichées.",
         ],
         "next": ["mapmodel_validation", "phenix_validation_cryoem", "isolde_session", "predeposition_check"],

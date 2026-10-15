@@ -1,6 +1,7 @@
 """Job type framework: parameters, input/output slots and the run context."""
 from __future__ import annotations
 
+import collections
 import datetime as _dt
 import fnmatch
 import json
@@ -298,6 +299,89 @@ def _now() -> str:
     return _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+# ------------------------------------------------------- failed programs
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_SORRY_RE = re.compile(r"\s*Sorry\s*[:!]\s*(.*)")  # Phenix / cctbx errors about the inputs or parameters
+_ERROR_RE = re.compile(r"\s*(?:\*+\s*)?(?:fatal|error)\b", re.IGNORECASE)
+# what a Phenix error message offers to get past it: skip a check (model and map symmetry, model outside the map),
+# or run a program Phenix 2 has replaced (auto_sharpen, local_aniso_sharpen: "Add the keyword '--force' to use anyway")
+_PHENIX_FIX_RE = re.compile(r"(?:Try|Use)\s+'?(ignore_symmetry_conflicts|skip_map_model_overlap_check)\s*=\s*True\b"
+                            r"|keyword\s+'?(--force)'?\s+to use")
+
+
+def failure_reason(lines: Iterable[str], limit: int = 400) -> str:
+    """Why a program stopped, in its own words, from the end of its output: Phenix's "Sorry: ..." message, the
+    exception ending a Python traceback, an error line, or else the last line printed ("" if nothing was printed)."""
+    text = [_ANSI_RE.sub("", line).split("\r")[-1].rstrip() for line in lines]
+    reason = ""
+    for i in range(len(text) - 1, -1, -1):  # the last Sorry or traceback is the one that stopped the program
+        if _SORRY_RE.match(text[i]):
+            reason = _sorry(text, i)
+            break
+        if text[i].startswith("Traceback (most recent call last)"):
+            reason = next((line for line in text[i + 1:] if line and not line[0].isspace()), "")
+            break
+    if not reason:
+        reason = next((line for line in reversed(text) if _ERROR_RE.match(line)), "")
+    if not reason:
+        reason = next((line for line in reversed(text) if line.strip()), "")
+    reason = " ".join(reason.split())
+    return reason if len(reason) <= limit else reason[:limit - 1] + "…"
+
+
+def _sorry(text: list[str], i: int) -> str:
+    msg = _SORRY_RE.match(text[i]).group(1).strip()
+    if not msg or msg.endswith(":"):  # the message goes on on the next line
+        msg = f"{msg} {next((line.strip() for line in text[i + 1:] if line.strip()), '')}".strip()
+    if "not recognized" in msg:  # name the parameters, listed just before
+        start = next((j for j in range(i - 1, -1, -1) if "Unrecognized PHIL parameters" in text[j]), None)
+        names = []
+        for line in text[start + 1:i] if start is not None else []:
+            if not line.strip():
+                if names:
+                    break
+            elif not set(line.strip()) <= {"-"}:
+                names.append(line.strip())
+        if names:
+            msg = f"{msg.rstrip('.')}: {', '.join(names[:6])}"
+    return f"Sorry: {msg}"
+
+
+def failure_message(exe: str, code: int, reason: str) -> str:
+    """Error of a job whose program failed: the exit code (or signal) and the program's own explanation."""
+    name = os.path.basename(exe)
+    if code < 0:
+        try:
+            head = f"{name} was stopped by {signal.Signals(-code).name}"
+        except ValueError:
+            head = f"{name} was stopped by signal {-code}"
+        if -code == signal.SIGKILL:
+            head += " (out of memory?)"
+    else:
+        head = f"{name} exited with code {code}"
+        hint = {126: "the program cannot be run: permissions?",
+                127: "program not found: check this tool on the Tools page",
+                137: "killed: out of memory?", 139: "segmentation fault"}.get(code)
+        if hint:
+            head += f" ({hint})"
+    return f"{head}: {reason}" if reason else f"{head}, without any output"
+
+
+def phenix_fix(tail: Iterable[str], args: list[str]) -> str | None:
+    """The argument a Phenix error asks for to go on, unless already given (then ``None``)."""
+    match = None
+    for line in list(tail)[-60:]:
+        match = _PHENIX_FIX_RE.search(line) or match
+    if not match:
+        return None
+    if match.group(2):
+        return None if "--force" in args else "--force"
+    key = match.group(1)
+    if any(a.split("=", 1)[0].strip().split(".")[-1] == key for a in args if "=" in a):
+        return None
+    return f"{key}=True"
+
+
 class JobContext:
     """Everything a job needs while running inside a worker."""
 
@@ -432,6 +516,10 @@ class JobContext:
                 return candidate
         return name
 
+    def has_program(self, key: str, name: str) -> bool:
+        """Whether the suite has this program next to its main executable (e.g. to tell Phenix versions apart)."""
+        return os.path.isabs(self.program(key, name))
+
     def run(self, args: list[str], tool: str | None = None, cwd: str | Path | None = None,
             env: dict[str, str] | None = None, check: bool = True, log_output: bool = True,
             stdout_path: str | Path | None = None, on_line: Callable[[str], None] | None = None) -> int:
@@ -439,25 +527,50 @@ class JobContext:
         ``on_line`` sees every output line (e.g. to report the progress of a long training)."""
         args = [str(a) for a in args]
         tool_spec = self.tools.get(tool, {}) if tool else {}
-        cmd = toolmod.wrap_command(tool_spec, args, tool or "cmd") if tool else args
         run_env = toolmod.tool_env(tool_spec)
         if env:
             run_env.update(env)
         cwd = Path(cwd) if cwd else self.job_dir
+        first = ""  # the error that made CryoPlug run Phenix again
+        while True:
+            code, tail = self._run_once(args, tool, tool_spec, cwd, run_env, log_output, stdout_path, on_line)
+            if not check or code == 0:
+                return code
+            reason = failure_reason(tail)
+            fix = phenix_fix(tail, args) if tool == "phenix" else None
+            if not fix:
+                if first and "not recognized" in reason:  # this program does not take the keyword it suggested
+                    reason = f"{first} (running it again with {args[-1]} did not work: {reason})"
+                raise JobError(failure_message(args[0], code, reason))
+            # Phenix stopped on a check it offers to skip (model/map symmetry or overlap), or on a program it
+            # replaced (--force): do as it says, once each
+            self.warn(f"Phenix stopped: {reason}\nRunning it again with {fix}, as it suggests.")
+            first = first or reason
+            args = [*args, fix]
+
+    def _run_once(self, args: list[str], tool: str | None, tool_spec: dict[str, Any], cwd: Path, run_env: dict[str, str],
+                  log_output: bool, stdout_path: str | Path | None,
+                  on_line: Callable[[str], None] | None) -> tuple[int, list[str]]:
+        """One run of a command; returns its exit code and the end of its output."""
+        cmd = toolmod.wrap_command(tool_spec, args, tool or "cmd") if tool else args
         printable = shlex.join(args)
         self.log(f"$ {printable}")
         with open(self.path("commands.sh"), "a") as fh:
             fh.write(f"# {_now()}\ncd {shlex.quote(str(cwd))}\n{printable}\n")
+        tail: collections.deque[str] = collections.deque(maxlen=400)  # to explain a failure
         out_fh = open(stdout_path, "w") if stdout_path else None
         try:
             proc = subprocess.Popen(cmd, cwd=str(cwd), env=run_env, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1)
         except FileNotFoundError as exc:
+            if out_fh:
+                out_fh.close()
             raise JobError(f"Cannot start {args[0]}: {exc}") from None
         self._current_proc = proc
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
+                tail.append(line)
                 if log_output:
                     self._raw_log(line)
                 if out_fh:
@@ -477,9 +590,7 @@ class JobContext:
             if out_fh:
                 out_fh.close()
         self.write_state(heartbeat=time.time())
-        if check and code != 0:
-            raise JobError(f"{os.path.basename(args[0])} exited with code {code} (see log above)")
-        return code
+        return code, list(tail)
 
     @staticmethod
     def _terminate(proc: subprocess.Popen) -> None:

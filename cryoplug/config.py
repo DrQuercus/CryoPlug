@@ -360,7 +360,7 @@ gpus = [0]
 # Run `cryoplug tools` (or open the Tools page) to check what is detected.
 # ---------------------------------------------------------------------------
 # [tools.phenix]
-# setup = "source /opt/phenix-1.21.2/phenix_env.sh"
+# setup = "source /opt/phenix-2.2.1/phenix_env.sh"
 #
 # [tools.modelangelo]
 # setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate model_angelo"

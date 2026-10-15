@@ -509,6 +509,24 @@ class BoltzPredict(JobType):
 
 
 # ------------------------------------------------------------ Phenix helpers
+def plddt_cutoff_args(model_path: str, minimum: float) -> list[str]:
+    """process_predicted_model arguments trimming residues below ``minimum`` pLDDT (0-100, or 0-1).
+
+    Phenix reads minimum_plddt on the scale of the B-factor column (0-1 or 0-100) and only uses it once its default
+    cutoff, maximum_rmsd = 1.5 Å, is cleared. Unreadable model: Phenix's default (about pLDDT 70) is kept."""
+    try:
+        from cryoplug.modelio import read_structure
+        b = [cra.atom.b_iso for cra in read_structure(model_path)[0].all()]
+    except Exception:
+        return []
+    if not b:
+        return []
+    fractional = min(b) >= 0 and max(b) <= 1
+    cutoff = minimum / 100.0 if minimum > 1 else minimum
+    return ["maximum_rmsd=None", f"input_plddt_is_fractional={fractional}",
+            f"minimum_plddt={cutoff if fractional else cutoff * 100:g}"]
+
+
 @register
 class PhenixProcessPredictedModel(JobType):
     name = "phenix_process_predicted_model"
@@ -530,18 +548,18 @@ class PhenixProcessPredictedModel(JobType):
 
     def run(self, ctx: JobContext) -> None:
         model = ctx.require("model")
-        plddt = float(ctx.params["minimum_plddt"])
         args = [ctx.program("phenix", "phenix.process_predicted_model"), model.path,
-                f"b_value_field_is={ctx.params['b_value_field_is']}",
-                f"minimum_plddt={plddt / 100.0 if plddt > 1 else plddt:.2f}",
-                f"split_model_by_compact_regions={ctx.params['split_by_domains']}",
-                f"maximum_domains={ctx.params['maximum_domains']}", *ctx.split_extra()]
+                f"b_value_field_is={ctx.params['b_value_field_is']}"]
+        if ctx.params["b_value_field_is"] == "plddt":
+            args += plddt_cutoff_args(model.path, float(ctx.params["minimum_plddt"]))
+        args += [f"split_model_by_compact_regions={ctx.params['split_by_domains']}",
+                 f"maximum_domains={ctx.params['maximum_domains']}", *ctx.split_extra()]
         start = time.time()
         ctx.run(args, tool="phenix")
         out = pick_new_model(ctx, start, ["*_processed.pdb", "*_processed.cif", "*processed*"])
         report_model(ctx, out)
         ctx.add_output("model", "model", out, "Processed predicted model", inherit=["model"])
-        for i, extra in enumerate(sorted(ctx.find_new_files(["*_processed_*.pdb"], start)), start=1):
+        for i, extra in enumerate(sorted(ctx.find_new_files(["*_processed_*.pdb", "*_processed_*.cif"], start)), start=1):
             if extra != out:
                 ctx.add_output(f"domain_{i}", "model", extra, f"Domain {i}", inherit=["model"])
 

@@ -1,6 +1,7 @@
 """Real-space refinement jobs (Phenix, Servalcat)."""
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -8,6 +9,18 @@ from cryoplug.jobs import register
 from cryoplug.jobs.base import JobContext, JobType, OutputDef, Param, Slot, extra_args_param, resolution_param, split_paths
 from cryoplug.jobs.building import pick_new_model, quick_cc, report_model
 from cryoplug.parsers import highlights, metrics_table, parse_metrics
+
+
+RSR_DEFAULT_RUN = ["minimization_global", "adp"]  # phenix.real_space_refine without run=
+
+
+def rsr_strategy(run: str, nqh_flips: bool) -> str:
+    """Value of run= for phenix.real_space_refine ("" keeps Phenix's default). N/Q/H flips are a step of the
+    strategy, not a parameter of their own: 'nqh_flips=True' stops Phenix with an unknown-parameter error."""
+    steps = [s for s in re.split(r"[+,\s]+", run.strip()) if s]
+    if nqh_flips and "nqh_flips" not in steps:
+        steps = (steps or RSR_DEFAULT_RUN) + ["nqh_flips"]
+    return "+".join(steps)
 
 
 @register
@@ -28,11 +41,13 @@ class PhenixRealSpaceRefine(JobType):
         resolution_param(),
         Param("macro_cycles", "int", 5, label="Macro cycles", min=1),
         Param("run", "str", "", label="Strategy (run=)", placeholder="minimization_global+local_grid_search+morphing+simulated_annealing+adp",
-              help="Empty = Phenix default strategy."),
+              help="Steps joined by '+'. Empty = Phenix default strategy (global minimisation and ADP refinement)."),
         Param("secondary_structure", "bool", True, label="Secondary-structure restraints"),
         Param("rama_restraints", "bool", False, label="Ramachandran restraints",
               help="Useful at low resolution; avoid if you report Ramachandran statistics as validation."),
-        Param("nqh_flips", "bool", True, label="N/Q/H flips"),
+        Param("nqh_flips", "bool", False, label="N/Q/H flips",
+              help="Adds nqh_flips to the strategy: Asn, Gln and His side chains are flipped where that fits better "
+                   "(with an empty strategy: minimization_global+adp+nqh_flips)."),
         Param("restraints", "str", "", label="Ligand restraint CIFs", path_kind="files",
               help="Restraint dictionaries for ligands (paths separated by ';')."),
         Param("nproc", "int", 4, label="Processors", min=1),
@@ -49,10 +64,10 @@ class PhenixRealSpaceRefine(JobType):
         args = [ctx.program("phenix", "phenix.real_space_refine"), model.path, m.path, *restraints,
                 f"resolution={res}", f"macro_cycles={ctx.params['macro_cycles']}", f"nproc={ctx.params['nproc']}",
                 f"secondary_structure.enabled={ctx.params['secondary_structure']}",
-                f"ramachandran_plot_restraints.enabled={ctx.params['rama_restraints']}",
-                f"nqh_flips={ctx.params['nqh_flips']}"]
-        if ctx.params.get("run"):
-            args.append(f"run={ctx.params['run']}")
+                f"ramachandran_plot_restraints.enabled={ctx.params['rama_restraints']}"]
+        strategy = rsr_strategy(ctx.params.get("run") or "", ctx.params.get("nqh_flips"))
+        if strategy:
+            args.append(f"run={strategy}")
         args += ctx.split_extra()
         start = time.time()
         ctx.run(args, tool="phenix", stdout_path=ctx.path("real_space_refine.out"))

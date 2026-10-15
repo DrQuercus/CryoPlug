@@ -949,6 +949,10 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | Symptôme | Cause probable | Solution |
 |---|---|---|
 | Le job échoue immédiatement | Programme introuvable | Page **Tools** : configurez `setup` / `bin_dir` / `executable`, redémarrez, *Re-check* |
+| Job en échec : « phenix.… exited with code 1: Sorry: … » | Le programme a refusé une entrée ou un paramètre : la fin du message est son explication (le « Sorry » de Phenix, la dernière ligne d'une erreur Python…) | Corrigez ce qu'il indique ; un paramètre refusé (« not recognized ») se retire ou se renomme dans *Extra arguments* |
+| Phenix : « Map and model are not aligned » ou « Model is not similar to … » | Symétrie / boîte (CRYST1) du modèle différente de celle de la carte, ou modèle hors de la carte | CryoPlug relance une fois avec `skip_map_model_overlap_check=True` ou `ignore_symmetry_conflicts=True`, comme Phenix le propose (avertissement dans le log). Si le modèle est vraiment hors de la carte : **Dock in map** ou **Rigid-body fit** d'abord |
+| Phenix 2 : « phenix.auto_sharpen is replaced by phenix.map_sharpening » | Phenix 2 a remplacé auto_sharpen et local_aniso_sharpen par map_sharpening | Rien à faire : CryoPlug les lance avec `--force` (ils fonctionnent toujours) |
+| Page **Tools** : avertissement orange sous Phenix (« phenix.version exited with code … ») | Phenix ne démarre pas dans l'environnement du service CryoPlug (la raison suit) | Vérifiez la ligne `setup` (`source /chemin/phenix-2.x/phenix_env.sh`) ; essayez la même commande dans un terminal ouvert comme l'utilisateur du service |
 | « Resolution is unknown » | Pas de FSC à l'import | Renseignez le paramètre *Resolution* |
 | Job bloqué en `queued` | Parent pas fini, slot ou GPU occupé, parent en échec | Lisez le message de la carte (« Waiting for J3 », « Blocked: J3 failed ») et **Resources › Queue** |
 | « Waiting for GPU 1 (used by P2/J5) » | Le GPU choisi pour ce job est pris par un autre job | Attendre, ou *Dequeue* puis *Edit* : GPU *Automatic* ou un autre GPU |
@@ -980,7 +984,9 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | La série se charge lentement dans le visualiseur | Beaucoup de volumes, carte graphique logicielle | Normal la première fois (chaque volume est chargé une fois, trois à la fois) ; faites glisser le curseur vers un volume pour le charger d'abord ; **Detail** plus bas pour une longue série |
 | Relancer un job à l'identique hors CryoPlug | — | `commands.sh` dans le dossier du job contient les commandes exactes |
 
-Le **log** (onglet *Log*) montre la commande exécutée, la sortie du programme et l'erreur en rouge.
+Le **log** (onglet *Log*) montre la commande exécutée, la sortie du programme et l'erreur en rouge. Quand un
+programme échoue, son explication (message « Sorry: … » de Phenix, dernière ligne d'une erreur Python, ligne
+« error ») est reprise dans l'erreur du job, affichée sur sa carte : inutile de chercher dans le log.
 Après correction : **Clear** remet le job en préparation, **Clone** crée une copie modifiable.
 
 ---

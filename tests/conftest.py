@@ -222,8 +222,27 @@ for a in "$@"; do case "$a" in --output=*) name="${a#--output=}";; esac; done
 printf 'data_comp_list\nloop_\n_chem_comp.id\n%s\n' "$name" > "$name.cif"
 printf 'HETATM    1  C1  %s A   1       0.000   0.000   0.000  1.00 20.00           C\nEND\n' "$name" > "$name.pdb"
 """)
+    # real_space_refine checks its parameters and the model/map overlap like Phenix 2 does (a test model containing
+    # MISALIGNED stands for a model outside the map)
     _script(d / "phenix.real_space_refine", f"""
 echo "fake phenix.real_space_refine $@"
+bad=""; skip=0
+for a in "$@"; do case "$a" in
+  resolution=*|macro_cycles=*|nproc=*|run=*|secondary_structure.enabled=*|ramachandran_plot_restraints.enabled=*) ;;
+  ignore_symmetry_conflicts=*) ;;
+  skip_map_model_overlap_check=True) skip=1;;
+  *=*) bad="$bad    ${{a/=/ = }}\n";;
+esac; done
+if [ -n "$bad" ]; then
+  printf '  Unrecognized PHIL parameters:\n  -----------------------------\n%b\n' "$bad"
+  echo "Sorry: Some PHIL parameters are not recognized by phenix.real_space_refine."
+  echo "Please run this program with the --show-defaults option to see what parameters are available."
+  exit 1
+fi
+if grep -q MISALIGNED "$1" && [ "$skip" = 0 ]; then
+  echo "Sorry: Map and model are not aligned! Use skip_map_model_overlap_check=True to continue."
+  exit 1
+fi
 cp "{model}" ./helix_real_space_refined_000.pdb
 cat <<EOF
 Final:
@@ -241,6 +260,23 @@ Final:
 EOF
 """)
     _script(d / "phenix.version", "echo 'Phenix fake 1.21'\n")
+    # Phenix 2 replaced auto_sharpen and local_aniso_sharpen with map_sharpening: they only run with --force
+    for name, out in (("auto_sharpen", "sharpened_map.ccp4"), ("local_aniso_sharpen", "local_aniso_sharpened_map.ccp4")):
+        _script(d / f"phenix.{name}", f"""
+echo "fake phenix.{name} $@"
+force=0; map=""
+for a in "$@"; do case "$a" in --force) force=1;; *=*) ;; *) [ -z "$map" ] && map="$a";; esac; done
+if [ "$force" = 0 ]; then
+  echo "Sorry: phenix.{name} is replaced by phenix.map_sharpening Add the keyword '--force' to use anyway"
+  exit 1
+fi
+cp "$(readlink -f "$map")" {out}
+""")
+    # process_predicted_model: keeps the model, named like Phenix does
+    _script(d / "phenix.process_predicted_model", """
+echo "fake phenix.process_predicted_model $@"
+cp "$1" "$(basename "${1%.*}")_processed.pdb"
+""")
     # local resolution worsening from 2.5 Å at the centre of the box towards the edges
     _script(d / "phenix.local_resolution", f"""
 echo "fake phenix.local_resolution $@"

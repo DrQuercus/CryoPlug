@@ -213,6 +213,7 @@ Affûtage global optimisé pour maximiser le détail et la connectivité (phenix
 **Conseils**
 
 - Comparez visuellement avec la carte CryoSPARC dans le visualiseur 3D avant de choisir.
+- Phenix 2 remplace auto_sharpen par map_sharpening : CryoPlug le lance avec --force, il fonctionne toujours.
 
 **Étapes suivantes** : ModelAngelo build, Rigid-body fit (ChimeraX)
 
@@ -464,6 +465,7 @@ Affûtage local et anisotrope avec mise à l'échelle dépendant de la résoluti
 **Conseils**
 
 - Avec un modèle, le résultat suit mieux la résolution locale réelle.
+- Phenix 2 remplace local_aniso_sharpen par map_sharpening : CryoPlug le lance avec --force.
 
 **Étapes suivantes** : ModelAngelo build, Real-space refinement (Phenix)
 
@@ -1172,6 +1174,8 @@ Affinement en espace réel avec restreintes géométriques, de structure seconda
 **Conseils**
 
 - 5 macro-cycles par défaut ; morphing/recuit utiles juste après un docking.
+- N/Q/H flips s'ajoutent à la stratégie (run=…+nqh_flips) : ce n'est pas un paramètre à part pour Phenix.
+- Si Phenix refuse le modèle (« Map and model are not aligned », symétrie différente de la carte), CryoPlug relance avec l'option que Phenix propose, avec un avertissement dans le log.
 - Les statistiques finales (MolProbity, CC_mask) sont lues dans la sortie et affichées.
 
 **Étapes suivantes** : Map-model validation (Q-score, FSC), Comprehensive validation (Phenix), ISOLDE session, Pre-deposition checks

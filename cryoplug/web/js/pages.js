@@ -159,7 +159,8 @@ export async function renderTools(content) {
       h('td', { class: 'small' }, st.path ? h('span', { class: 'mono path', title: st.path }, shortPath(st.path, 46),
         h('button', { class: 'icon-btn', title: 'Copy full path', 'aria-label': `Copy the path of ${t.label}`, onclick: () => copyText(st.path) }, icon('copy')))
         : h('span', { class: 'muted' }, st.message || ''),
-      st.version ? h('div', { class: 'muted' }, st.version) : null),
+      st.version ? h('div', { class: 'muted' }, st.version) : null,
+      st.warning ? h('div', { class: 'tool-warn' }, st.warning) : null),
       h('td', { class: 'small mono', style: { whiteSpace: 'pre-wrap' }, title: cfgFull || null }, `[tools.${t.key}]\n${cfgText}`));
   });
   clear(content,
@@ -169,7 +170,7 @@ export async function renderTools(content) {
     h('div', { class: 'box' }, h('table', { class: 'data' }, h('thead', {}, h('tr', {}, ['Program', 'Status', 'Location', 'Configuration'].map((c) => h('th', {}, c)))),
       h('tbody', {}, rows))),
     h('div', { class: 'section' }, h('h4', {}, 'Example configuration'), h('pre', { class: 'box mono', style: { whiteSpace: 'pre-wrap' } },
-      '[tools.phenix]\nsetup = "source /opt/phenix-1.21.2/phenix_env.sh"\n\n[tools.modelangelo]\nsetup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate model_angelo"\n\n'
+      '[tools.phenix]\nsetup = "source /opt/phenix-2.2.1/phenix_env.sh"\n\n[tools.modelangelo]\nsetup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate model_angelo"\n\n'
       + '[tools.cryoatom]\nsetup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate CryoAtom2"\n\n'
       + '[tools.locscale]\nsetup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate locscale"\n\n[tools.chimerax]\nexecutable = "/usr/bin/chimerax"\n\n'
       + '[interactive]\ndisplay = ":0"   # screen used to open Coot / ISOLDE from the browser')));
@@ -282,7 +283,7 @@ function renderSetup(body) {
       h('pre', {}, 'python3 -m venv ~/cryoplug-venv\n~/cryoplug-venv/bin/pip install /chemin/vers/CryoPlug\n~/cryoplug-venv/bin/cryoplug init\n# éditer ~/.cryoplug/config.toml (logiciels, lanes, affichage)\n~/cryoplug-venv/bin/cryoplug tools\n~/cryoplug-venv/bin/cryoplug fetch-viewer\n~/cryoplug-venv/bin/cryoplug start')),
     ...sec('Déclarer un logiciel',
       h('p', {}, 'Chaque logiciel est lancé dans bash après ses lignes « setup » (source, conda, module). Exemple :'),
-      h('pre', {}, '[tools.phenix]\nsetup = "source /opt/phenix-1.21.2/phenix_env.sh"\n\n[tools.cryoatom]\nsetup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate CryoAtom2"\n\n[interactive]\ndisplay = ":0"   # écran où ouvrir ISOLDE / Coot depuis le navigateur'),
+      h('pre', {}, '[tools.phenix]\nsetup = "source /opt/phenix-2.2.1/phenix_env.sh"\n\n[tools.cryoatom]\nsetup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate CryoAtom2"\n\n[interactive]\ndisplay = ":0"   # écran où ouvrir ISOLDE / Coot depuis le navigateur'),
       h('p', {}, 'La page ', h('a', { href: '#/tools' }, 'Tools'), ' indique ce qui est détecté. Fichier de configuration : ',
         h('code', {}, state.info.config_path || '~/.cryoplug/config.toml'), '.')),
     ...sec('Accès depuis un autre ordinateur', ...remoteAccess()),

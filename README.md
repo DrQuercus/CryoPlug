@@ -154,8 +154,8 @@ Chaque logiciel est lancé dans un `bash` après ses lignes de `setup` (source, 
 même environnement Python que CryoPlug.
 
 ```toml
-[tools.phenix]
-setup = "source /opt/phenix-1.21.2/phenix_env.sh"
+[tools.phenix]             # Phenix 2.x (ou 1.21) : le script phenix_env.sh du dossier d'installation
+setup = "source /opt/phenix-2.2.1/phenix_env.sh"
 
 [tools.modelangelo]
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate model_angelo"
@@ -203,7 +203,10 @@ setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate cryodrgn"
 display = ":0"   # écran (ou bureau TurboVNC, ex. ":1") où ouvrir Coot / ISOLDE depuis le navigateur
 ```
 
-La page **Tools** de l'interface montre l'état de détection, le chemin et la version de chaque programme.
+La page **Tools** de l'interface montre l'état de détection, le chemin et la version de chaque programme
+(pour Phenix, la sortie de `phenix.version` ; si Phenix ne démarre pas dans l'environnement du service, la
+raison s'affiche en orange). Quand un programme échoue, son explication (le « Sorry: … » de Phenix, la dernière
+ligne d'une erreur Python…) est reprise dans l'erreur du job, sur sa carte.
 Chaque job a aussi un champ *Extra arguments* (paramètres avancés) pour passer n'importe quelle option
 supplémentaire, et le job **Custom command** permet d'intégrer un logiciel non prévu en quelques secondes.
 
@@ -212,7 +215,7 @@ Les fichiers de particules `.cs` des versions récentes de CryoSPARC (format com
 
 > Les lignes de commande suivent la documentation et le code source actuels de chaque logiciel
 > (ModelAngelo 1.x, CryoAtom2 v2.1, LocScale 2, spIsoNet 1.0, Boltz-2, DeepEMhancer, EMReady, Servalcat
-> `refine_spa_norefmac`, Phenix 1.21, cryoDRGN 4.x). Si votre version
+> `refine_spa_norefmac`, Phenix 2.x et 1.21, cryoDRGN 4.x). Si votre version
 > diffère, utilisez *Extra arguments* ou adaptez le job correspondant (§7) ; la commande exacte exécutée
 > est toujours enregistrée dans `commands.sh` et dans le log du job.
 
@@ -724,8 +727,10 @@ pytest
 
 Les tests lancent de vrais workers sur des données synthétiques, avec de faux exécutables qui imitent les
 interfaces de ModelAngelo, LocScale et Phenix : import CryoSPARC, FSC, chaîne complète jusqu'au paquet de
-dépôt, CryoAtom2, recherche HMM, Boltz-2, spIsoNet, 3D FSC, eLBOW/douse, session ISOLDE, échec / arrêt de
-jobs, workflows, API HTTP, concurrence API/planificateur, contrôle d'accès (connexion, jeton, mot de passe,
-requêtes d'autres origines), zone carte-modèle du visualiseur (comparée à un calcul exhaustif) et ressources
-(lanes modifiées en direct, GPU choisis ou automatiques, script SLURM, moniteur avec un faux `nvidia-smi`,
-vue des partitions avec de faux `sinfo` / `squeue`, ce que voit chaque utilisateur).
+dépôt, CryoAtom2, recherche HMM, Boltz-2, spIsoNet, 3D FSC, eLBOW/douse, comportements de Phenix 2 (paramètre
+refusé et son message, programmes remplacés lancés avec `--force`, relance sur les contrôles carte/modèle),
+session ISOLDE, échec / arrêt de jobs, workflows, API HTTP, concurrence API/planificateur, contrôle d'accès
+(connexion, jeton, mot de passe, requêtes d'autres origines), zone carte-modèle du visualiseur (comparée à un
+calcul exhaustif) et ressources (lanes modifiées en direct, GPU choisis ou automatiques, script SLURM,
+moniteur avec un faux `nvidia-smi`, vue des partitions avec de faux `sinfo` / `squeue`, ce que voit chaque
+utilisateur).

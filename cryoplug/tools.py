@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -21,6 +22,7 @@ class ToolDef:
     citation: str
     version_args: list[str] = field(default_factory=list)  # appended to the main executable
     gui: bool = False
+    version_program: str = ""  # or a program of the suite printing the version, next to the main executable
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -31,7 +33,7 @@ TOOLS: dict[str, ToolDef] = {
         ToolDef("phenix", "Phenix", ["phenix.real_space_refine", "phenix.version"],
                 "Density modification, sharpening, docking, real-space refinement and validation.",
                 "https://phenix-online.org",
-                "Liebschner D. et al. (2019) Acta Cryst. D75, 861-877."),
+                "Liebschner D. et al. (2019) Acta Cryst. D75, 861-877.", version_program="phenix.version"),
         ToolDef("modelangelo", "ModelAngelo", ["model_angelo"],
                 "Automated de novo model building with graph neural networks.",
                 "https://github.com/3dem/model-angelo",
@@ -156,18 +158,37 @@ def check_tool(key: str, cfg: ToolConfig, timeout: float = 30.0) -> dict[str, An
             break
         if proc.stderr.strip():
             result["message"] = proc.stderr.strip().splitlines()[-1][:300]
-    if result["status"] == "found" and tdef and tdef.version_args:
+    if result["status"] == "found" and tdef and (tdef.version_args or tdef.version_program):
+        if tdef.version_program:
+            sibling = os.path.join(os.path.dirname(result["path"]), tdef.version_program)
+            cmd = [sibling if os.path.isabs(sibling) and os.path.exists(sibling) else tdef.version_program]
+        else:
+            cmd = [result["path"], *tdef.version_args]
         try:
-            proc = subprocess.run(wrap_command(tool, [result["path"], *tdef.version_args], key), capture_output=True,
-                                  text=True, timeout=timeout, env=tool_env(tool))
-            text = (proc.stdout + proc.stderr).strip().splitlines()
-            if text:
-                result["version"] = text[0][:120]
+            proc = subprocess.run(wrap_command(tool, cmd, key), capture_output=True, text=True, timeout=timeout,
+                                  env=tool_env(tool))
+            text = proc.stdout + proc.stderr
+            if tdef.version_program and proc.returncode == 0:
+                result["version"] = version_text(text)
+            elif tdef.version_program:  # the suite does not even start like this: say why, as a failed job would
+                from cryoplug.jobs.base import failure_message, failure_reason
+                result["warning"] = failure_message(cmd[0], proc.returncode, failure_reason(text.splitlines()))
+            elif text.strip():
+                result["version"] = text.strip().splitlines()[0][:120]
         except (subprocess.TimeoutExpired, OSError):
             pass
     elif result["status"] == "missing" and not result["message"]:
         result["message"] = f"None of {', '.join(candidates)} found on PATH"
     return result
+
+
+def version_text(output: str) -> str:
+    """The version printed by a version program (e.g. phenix.version): the line naming a version number, with the
+    "Release tag" line if any, else the first line."""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    number = next((line for line in lines if re.search(r"(?i)\bversion\b\D{0,12}\d", line)), lines[0] if lines else "")
+    tag = next((line for line in lines if re.match(r"(?i)release tag\b", line)), "")
+    return (f"{number} · {tag}" if tag and tag != number else number)[:120]
 
 
 def check_all(config: Config) -> dict[str, dict[str, Any]]:

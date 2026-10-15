@@ -39,6 +39,12 @@ def pick_new_map(ctx: JobContext, since: float, preferred: list[str], exclude: t
                    "It may have stopped on an error without returning a failure code: see the log.")
 
 
+def replaced_in_phenix2(ctx: JobContext) -> list[str]:
+    """Phenix 2 replaced auto_sharpen and local_aniso_sharpen with map_sharpening: they still run, with --force.
+    (Without phenix.map_sharpening, an older Phenix that does not know --force.)"""
+    return ["--force"] if ctx.has_program("phenix", "phenix.map_sharpening") else []
+
+
 def _halves_or_map(params, connected, need_any=("half_maps", "map")) -> list[str]:
     if not any(s in connected for s in need_any):
         return ["Connect half maps or a full map"]
@@ -104,7 +110,7 @@ class PhenixAutoSharpen(JobType):
         hm = ctx.input("half_maps")
         if hm:
             args += [f"half_map_file={hm.files[0]}", f"half_map_file={hm.files[1]}"]
-        args += ctx.split_extra()
+        args += replaced_in_phenix2(ctx) + ctx.split_extra()
         start = time.time()
         ctx.run(args, tool="phenix")
         out = pick_new_map(ctx, start, ["sharpened_map.ccp4", "*sharpened*"])
@@ -132,7 +138,8 @@ class PhenixLocalAnisoSharpen(JobType):
         model = ctx.input("model")
         if model:
             args.append(model.path)
-        args += [f"resolution={ctx.resolution()}", f"nproc={ctx.params['nproc']}", *ctx.split_extra()]
+        args += [f"resolution={ctx.resolution()}", f"nproc={ctx.params['nproc']}", *replaced_in_phenix2(ctx),
+                 *ctx.split_extra()]
         start = time.time()
         ctx.run(args, tool="phenix")
         out = pick_new_map(ctx, start, ["*aniso*sharpen*", "*sharpened*"])
