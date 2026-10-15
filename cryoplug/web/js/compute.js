@@ -16,13 +16,22 @@ export function gpuNeed(t, params) {
   if (t.gpu_param) {
     const p = t.params.find((x) => x.name === t.gpu_param);
     const v = params[t.gpu_param];
-    return p?.type === 'bool' ? (v ? 1 : 0) : Math.max(1, Math.floor(Number(v) || 1));
+    if (p?.type === 'bool') return v ? 1 : 0;
+    const n = v === '' || v === null || v === undefined || Number.isNaN(Number(v)) ? Number(p?.default ?? 1) : Number(v);
+    return Math.max(p?.min === 0 ? 0 : 1, Math.floor(n));  // a minimum of 0 allows running on the CPU
   }
   return t.gpu;
 }
 
+// Parameters whose product gives the CPUs ("mpi*threads": processes × threads).
+export const cpuParams = (t) => (t?.cpu_param ? t.cpu_param.split('*').filter(Boolean) : []);
+
 export function cpuDefault(t, params) {
-  return t.cpu_param ? Math.max(1, Math.floor(Number(params[t.cpu_param]) || t.cpus)) : t.cpus;
+  if (!t.cpu_param) return t.cpus;
+  return cpuParams(t).reduce((acc, name) => {
+    const p = t.params.find((x) => x.name === name);
+    return acc * Math.max(1, Math.floor(Number(params[name]) || Number(p?.default) || 1));
+  }, 1);
 }
 
 export function laneKind(lane) {
@@ -185,7 +194,8 @@ export function computeSection(b, t) {
       all.map((l, i) => h('option', { value: l.name, selected: l.name === lane.name }, `${l.name}${i === 0 ? ' (default)' : ''} — ${laneKind(l)}`)));
     const laneInfo = [lane.description, `up to ${plural(lane.max_jobs, 'job')} at once`].filter(Boolean).join(' · ');
     const cpuDef = cpuDefault(t, b.params);
-    const cpuParam = t.cpu_param ? t.params.find((x) => x.name === t.cpu_param) : null;
+    const cpuParam = t.cpu_param
+      ? { label: cpuParams(t).map((n) => t.params.find((x) => x.name === n)?.label || n).join(' × ') } : null;
     // a program started with N processes (Phenix nproc) gets N CPUs: set by its parameter, not here
     const cpus = cpuParam ? h('div', { class: 'field' }, h('label', {}, 'CPU threads'), h('div', { class: 'compute-fixed' }, String(cpuDef)),
       h('div', { class: 'help' }, `From “${cpuParam.label}” in the parameters${lane.type === 'cluster' ? ' (--cpus-per-task)' : ''}.`))

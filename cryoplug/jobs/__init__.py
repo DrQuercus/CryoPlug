@@ -53,6 +53,7 @@ def _load() -> None:
         maptools,
         masking,
         refinement,
+        relion,
         series,
         sharpening,
         utility,

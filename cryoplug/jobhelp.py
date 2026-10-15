@@ -85,7 +85,6 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "next": ["modelangelo_build", "cryoatom_build", "boltz_predict", "colabfold_predict"],
     },
-    # ----------------------------------------------------------- Map processing
     "import_particles": {
         "purpose": "Importe des particules pour l'analyse d'hétérogénéité (cryoDRGN) : un job CryoSPARC ou un fichier .cs "
                    "(fusionné avec son fichier « passthrough »), ou un fichier .star de RELION. Seules les métadonnées sont "
@@ -121,6 +120,112 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "next": ["series_analysis", "extract_volume"],
     },
+    # ---------------------------------------------------------- Reconstruction
+    "relion_local_refine": {
+        "purpose": "Raffinement 3D gold-standard dans RELION avec recherches angulaires locales autour des poses des "
+                   "particules (raffinement consensus CryoSPARC ou job RELION précédent), focalisé par un masque : "
+                   "l'équivalent RELION du « Local Refinement » de CryoSPARC, avec la régularisation Blush.",
+        "when": [
+            "Une région (domaine, sous-complexe, ligand) est floue dans la carte consensus : raffinement local avec son masque.",
+            "Après une soustraction de signal (« RELION signal subtraction ») : raffinement focalisé des particules "
+            "soustraites, recentrées et recadrées.",
+            "Comparer un raffinement local RELION (Blush) à celui de CryoSPARC sur les mêmes particules.",
+            "Obtenir le modèle RELION (optimiser) nécessaire à la soustraction : une courte passe sur tout le complexe.",
+        ],
+        "avoid": [
+            "Région trop petite (< 100-150 kDa sans signal soustrait) : l'alignement local devient instable ; soustrayez "
+            "d'abord le reste du complexe et essayez Blush.",
+            "Particules sans poses (sortie de classification 2D) : il faut un raffinement consensus.",
+            "Masque serré au bord de la densité : prenez un masque doux (dilatation + bord ≥ 6 Å), sinon la FSC est surestimée.",
+        ],
+        "inputs": "Particules avec poses (import CryoSPARC du raffinement consensus, sélection, particules soustraites), "
+                  "la carte consensus non affûtée comme référence et le masque de la région (dessiné sur la carte consensus).",
+        "tips": [
+            "Les demi-jeux CryoSPARC (alignments3D/split) sont conservés : la FSC reste gold-standard.",
+            "Échantillonnage 1,8° avec recherches locales dès le départ (± 11°) : le réglage standard d'un raffinement local.",
+            "Blush (RELION 5) améliore nettement les petites régions flexibles ; il demande le modèle Blush installé.",
+            "Toutes les cartes sortent sur la grille de la carte consensus, même après recentrage : elles se superposent "
+            "au modèle et servent directement à la carte composite.",
+            "MPI : au moins 3 processus (un maître + un par demi-jeu) ; avec des GPU, 2 processus par GPU + 1.",
+        ],
+        "next": ["relion_subtract", "composite_map", "locscale", "modelangelo_build", "local_resolution"],
+    },
+    "relion_subtract": {
+        "purpose": "Soustraction de signal (relion_particle_subtract) : retire de chaque image la projection de tout ce qui "
+                   "est hors du masque, recentre les particules sur la région gardée et les recadre dans une boîte plus "
+                   "petite. Option : expansion de symétrie préalable (chaque copie d'un complexe symétrique devient une particule).",
+        "when": [
+            "Raffinement ou classification focalisés d'une région que le reste du complexe empêche d'aligner.",
+            "Complexe symétrique dont une copie varie : expansion de symétrie + soustraction, puis classification en C1.",
+            "Préparer une analyse cryoDRGN d'une seule région (petite boîte = entraînement plus rapide).",
+        ],
+        "avoid": [
+            "Particules qui n'ont pas été raffinées dans RELION : la soustraction utilise le modèle RELION du raffinement "
+            "(lancez d'abord « RELION local refinement » sur tout le complexe, recherches locales, quelques heures).",
+            "Masque trop serré : le signal résiduel de la région serait soustrait ; dilatez-le de quelques Å.",
+        ],
+        "inputs": "Les particules de « RELION local refinement » (tout le complexe) et le masque doux de la région à garder.",
+        "tips": [
+            "Boîte automatique : 1,5 × l'étendue du masque (place pour le signal délocalisé par la CTF).",
+            "Le recentrage se fait par voxels entiers : les cartes reviennent exactement sur la grille consensus.",
+            "Les sorties « map » et « mask » reprennent la carte du raffinement et le masque : le job suivant se remplit tout seul.",
+            "Expansion de symétrie : × n particules (C3 → 3 copies), même demi-jeu pour les copies d'une particule.",
+        ],
+        "next": ["relion_local_refine", "relion_class3d", "cryodrgn_train"],
+    },
+    "relion_class3d": {
+        "purpose": "Classification 3D RELION de particules avec poses, focalisée par un masque, sans alignement (ou avec "
+                   "recherches locales) : sépare les états d'une région, typiquement sur des particules soustraites.",
+        "when": [
+            "Hétérogénéité discrète d'un domaine (ligand lié / libre, conformation ouverte / fermée).",
+            "Après expansion de symétrie + soustraction : trouver les copies dans un état donné.",
+            "Nettoyer un jeu de particules avant un raffinement local.",
+        ],
+        "avoid": [
+            "Hétérogénéité continue : cryoDRGN ou la 3D variability de CryoSPARC la décrivent mieux.",
+            "Particules sans poses : il faut un raffinement consensus d'abord.",
+        ],
+        "inputs": "Particules (soustraites de préférence), la carte de référence (consensus ou raffinement focalisé) et le "
+                  "masque de la région.",
+        "tips": [
+            "T = 4 par défaut ; 10 à 40 pour de petites régions soustraites (plus de détails, plus de bruit).",
+            "Sans alignement (--skip_align), 25 itérations suffisent généralement ; regardez la stabilité des classes.",
+            "Chaque classe donne une carte (sur la grille consensus) et ses particules : enchaînez par un raffinement local.",
+        ],
+        "next": ["relion_local_refine", "relion_reconstruct", "cryodrgn_train"],
+    },
+    "relion_postprocess": {
+        "purpose": "Post-traitement RELION de deux demi-cartes : FSC masquée corrigée par randomisation de phase, "
+                   "affûtage par facteur B (ajustement de Guinier automatique ou donné), résolution locale en option.",
+        "when": [
+            "Rapporter une résolution et un facteur B « à la RELION » pour n'importe quelles demi-cartes.",
+            "Carte affûtée de référence pour comparer avec LocScale, DeepEMhancer ou EMReady.",
+        ],
+        "avoid": ["Demi-cartes non indépendantes (après spIsoNet, carte composite) : la FSC serait surestimée."],
+        "inputs": "Les demi-cartes non filtrées et un masque doux sur la même grille.",
+        "tips": [
+            "Facteur B automatique : ajustement à partir de 10 Å, sans objet sous ~8 Å de résolution.",
+            "Le fichier MTF du détecteur (option avancée) corrige l'affûtage aux hautes fréquences.",
+        ],
+        "next": ["locscale", "modelangelo_build", "deposition_package"],
+    },
+    "relion_reconstruct": {
+        "purpose": "Reconstruit les demi-cartes et la carte complète de particules à partir de leurs poses, sans alignement "
+                   "(relion_reconstruct), et calcule la FSC : la carte pleine résolution d'un sous-ensemble.",
+        "when": [
+            "Sous-ensemble sélectionné dans l'espace latent de cryoDRGN : carte à pleine résolution de cet état.",
+            "Vérifier rapidement des particules converties depuis CryoSPARC (même carte que le consensus ?).",
+        ],
+        "avoid": [
+            "Particules sans demi-jeux : ils sont tirés au hasard et la FSC est optimiste (les deux moitiés ont été "
+            "alignées ensemble) ; un raffinement local donne une vraie FSC gold-standard.",
+        ],
+        "inputs": "Particules avec poses (import CryoSPARC, sélection cryoDRGN, sortie d'un job RELION) ; masque facultatif "
+                  "pour la FSC masquée.",
+        "tips": ["Les demi-jeux de CryoSPARC (alignments3D/split) sont repris quand ils existent."],
+        "next": ["relion_local_refine", "map_fsc", "locscale"],
+    },
+    # ----------------------------------------------------------- Map processing
     "map_fsc": {
         "purpose": "FSC gold-standard entre demi-cartes : sans masque, avec masque et corrigée par randomisation de phase "
                    "(Chen et al. 2013). Écrit la courbe au format XML de l'EMDB.",
@@ -1015,6 +1120,7 @@ SECTION_TITLES = {
 }
 CATEGORY_TITLES_FR = {
     "Import": "Import",
+    "Reconstruction": "Reconstruction (RELION)",
     "Map processing": "Traitement de carte",
     "Heterogeneity": "Hétérogénéité (variabilité 3D)",
     "Model building": "Construction de modèle",

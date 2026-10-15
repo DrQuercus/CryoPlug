@@ -34,6 +34,13 @@ TOOLS: dict[str, ToolDef] = {
                 "Density modification, sharpening, docking, real-space refinement and validation.",
                 "https://phenix-online.org",
                 "Liebschner D. et al. (2019) Acta Cryst. D75, 861-877.", version_program="phenix.version"),
+        ToolDef("relion", "RELION", ["relion_refine_mpi", "relion_refine"],
+                "Local (focused) refinement, signal subtraction, focused 3D classification, post-processing and "
+                "reconstruction of particles (RELION 4/5).",
+                "https://relion.readthedocs.io",
+                "Scheres S.H.W. (2012) J. Struct. Biol. 180, 519-530; Kimanius D. et al. (2021) Biochem. J. 478, 4169-4185 "
+                "(RELION 4); Kimanius D. et al. (2024) Nat. Struct. Mol. Biol. 31, 1771-1777 (Blush).",
+                version_args=["--version"]),
         ToolDef("modelangelo", "ModelAngelo", ["model_angelo"],
                 "Automated de novo model building with graph neural networks.",
                 "https://github.com/3dem/model-angelo",

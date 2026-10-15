@@ -372,6 +372,14 @@ exit 0
     fake.write_text(f"#!{sys.executable}\n" + (ROOT / "tests" / "fakes" / "cryodrgn.py").read_text())
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     os.environ["CRYOPLUG_ROOT"] = str(ROOT)
+    # RELION 5.1 (python fake dispatched on the program name) and an mpirun passing the number of processes
+    relion = d / "relion_fake.py"
+    relion.write_text(f"#!{sys.executable}\n" + (ROOT / "tests" / "fakes" / "relion.py").read_text())
+    relion.chmod(relion.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    for prog in ("relion_refine", "relion_refine_mpi", "relion_particle_subtract", "relion_particle_subtract_mpi",
+                 "relion_particle_symmetry_expand", "relion_postprocess", "relion_reconstruct", "relion_reconstruct_mpi",
+                 "mpirun"):
+        (d / prog).symlink_to(relion)
     # Mimics LocScale 2.4.1 path handling: relative -o / -op are resolved against the folder of the first
     # input map (not the working directory), and the inputs are copied into the processing folder.
     _script(d / "locscale", """
@@ -402,7 +410,7 @@ def manager(tmp_path, fakebin) -> Manager:
         lanes=[LaneConfig(name="local", type="local", max_jobs=4, gpus=[0, 1])],
         tools={k: ToolConfig(name=k, bin_dir=str(fakebin))
                for k in ("modelangelo", "phenix", "locscale", "cryoatom", "boltz", "spisonet", "checkmysequence", "onedep",
-                         "cryodrgn")},
+                         "cryodrgn", "relion")},
     )
     m = Manager(cfg)
     m.check_tools()

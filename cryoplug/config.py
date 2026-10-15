@@ -362,6 +362,10 @@ gpus = [0]
 # [tools.phenix]
 # setup = "source /opt/phenix-2.2.1/phenix_env.sh"
 #
+# [tools.relion]
+# bin_dir = "/opt/relion-5.0/bin"
+# env = {{ MPIRUN = "mpirun" }}   # MPI launcher: "mpirun --oversubscribe" (Open MPI), "srun --mpi=pmix" (SLURM)...
+#
 # [tools.modelangelo]
 # setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate model_angelo"
 #
@@ -393,5 +397,6 @@ gpus = [0]
 # executable = "/opt/coot/bin/coot"
 #
 # [tools.colabfold]
-# bin_dir = "/opt/localcolabfold/colabfold-conda/bin"
+# bin_dir = "/opt/localcolabfold/.pixi/envs/default/bin"   # current localcolabfold (pixi)
+# bin_dir = "/opt/localcolabfold/colabfold-conda/bin"      # older localcolabfold installs
 """

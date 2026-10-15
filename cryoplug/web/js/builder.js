@@ -1,6 +1,6 @@
 // Job builder (right panel): pick a job type, connect inputs (select or drag & drop outputs), set parameters, queue.
 import { api } from './api.js';
-import { computeSection, initCompute, requestedBody } from './compute.js';
+import { computeSection, cpuParams, initCompute, requestedBody } from './compute.js';
 import { browseFiles } from './filebrowser.js';
 import { CATEGORY_FR, helpDetails, helpModal } from './help.js';
 import { compatibleOutputs, navigate, refreshJobs, restricted, state, typeTitle } from './state.js';
@@ -199,7 +199,7 @@ export function renderBuilder() {
       } }, b.showAdvanced ? '▾ Hide advanced parameters' : `▸ Advanced parameters (${adv.length})`), advBox);
     }
     // parameters setting the GPU count or the processes change what Compute shows
-    const needs = new Set([t.gpu_param, t.cpu_param].filter(Boolean).map((n) => `p-${n}`));
+    const needs = new Set([t.gpu_param, ...cpuParams(t)].filter(Boolean).map((n) => `p-${n}`));
     if (needs.size) sec.addEventListener('input', (e) => { if (needs.has(e.target.id)) compute.render(); });
     if (needs.size) sec.addEventListener('change', (e) => { if (needs.has(e.target.id)) compute.render(); });
     body.appendChild(sec);

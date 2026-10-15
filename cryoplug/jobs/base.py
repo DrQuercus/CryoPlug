@@ -21,6 +21,7 @@ from cryoplug import tools as toolmod
 
 CATEGORIES = [
     "Import",
+    "Reconstruction",
     "Map processing",
     "Heterogeneity",
     "Model building",
@@ -169,7 +170,7 @@ class JobType:
     gpu: ClassVar[int] = 0
     gpu_param: ClassVar[str] = ""  # parameter giving the number of GPUs (int) or whether one is used (bool)
     cpus: ClassVar[int] = 1
-    cpu_param: ClassVar[str] = ""  # parameter giving the number of processes: the CPUs asked for follow it
+    cpu_param: ClassVar[str] = ""  # parameter(s) giving the number of processes ("mpi*threads": their product)
     interactive: ClassVar[bool] = False
     software: ClassVar[list[str]] = []  # names used in the methods draft
     params: ClassVar[list[Param]] = []
@@ -245,14 +246,22 @@ class JobType:
         gpus = 0 if cls.interactive else cls.gpu
         if cls.gpu_param and not cls.interactive:
             value = params.get(cls.gpu_param)
-            if cls.param(cls.gpu_param).type == "bool":
+            p = cls.param(cls.gpu_param)
+            if p.type == "bool":
                 gpus = 1 if value else 0
-            else:
-                gpus = max(1, int(float(value or 1)))
+            else:  # a GPU parameter whose minimum is 0 allows running on the CPU
+                gpus = max(0 if p.min == 0 else 1, int(float(value if value not in (None, "") else (p.default or 1))))
         cpus = cls.cpus
         if cls.cpu_param:
-            cpus = max(1, int(float(params.get(cls.cpu_param) or cls.cpus)))
-        return {"num_gpus": gpus, "num_cpus": cpus}
+            cpus = 1
+            for name in cls.cpu_params():
+                cpus *= max(1, int(float(params.get(name) or cls.param(name).default or 1)))
+        return {"num_gpus": gpus, "num_cpus": max(1, cpus)}
+
+    @classmethod
+    def cpu_params(cls) -> list[str]:
+        """Parameters whose product gives the CPUs (processes × threads)."""
+        return [n for n in cls.cpu_param.split("*") if n] if cls.cpu_param else []
 
     # ---------------------------------------------------------- execution
     def run(self, ctx: "JobContext") -> None:

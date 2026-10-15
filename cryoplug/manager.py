@@ -151,7 +151,8 @@ class Manager:
             if not 1 <= cpus <= 1024:
                 raise ManagerError("CPUs: between 1 and 1024")
             if jt.cpu_param:  # e.g. Phenix nproc: the program starts that many processes
-                refuse(f"{jt.title} takes its CPUs from the parameter '{jt.param(jt.cpu_param).to_dict()['label']}'")
+                labels = " × ".join(f"'{jt.param(n).to_dict()['label']}'" for n in jt.cpu_params())
+                refuse(f"{jt.title} takes its CPUs from the parameter{'s' if '*' in jt.cpu_param else ''} {labels}")
             else:
                 out["num_cpus"] = cpus
         ids = requested.get("gpu_ids") or []
