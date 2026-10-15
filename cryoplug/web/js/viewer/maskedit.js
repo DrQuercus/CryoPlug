@@ -6,6 +6,7 @@
 // dilation, soft edge, centre and box for re-centred particles.
 import { api } from '../api.js';
 import { clear, h, icon, toast } from '../ui.js';
+import * as R from './rigid.js';
 import * as scene from './scene.js';
 
 const TOOLS = [
@@ -37,6 +38,13 @@ export function createMaskEditor(root, ctl) {
   const levelOf = () => (Number.isFinite(M.level) ? M.level : M.base?.level ?? 0);
   const vec = (p) => [p[0], p[1], p[2]].map((v) => Math.round(v * 100) / 100);
   const toolInfo = () => TOOLS.find((t) => t[0] === M.tool);
+  // The recipe is written in the coordinates of the map drawn on: a map moved in the viewer (Move & fit) gets its
+  // clicks back in its own frame, and a moved model the transform that puts it where it is seen on that map.
+  const toBase = (p) => (M.base?.transform ? R.apply(R.invert(M.base.transform), p) : p);
+  function relative(model) {
+    const rel = R.multiply(R.invert(M.base?.transform || R.identity()), model.transform || R.identity());
+    return R.isIdentity(rel) ? {} : { matrix: R.rows(rel) };
+  }
 
   function describe(op) {
     const verb = { add: 'Add', erase: 'Erase', keep: 'Keep' }[op.mode];
@@ -95,7 +103,7 @@ export function createMaskEditor(root, ctl) {
     if (token !== preview.token || !M.open) { await scene.remove(r.dataRef); return; }
     const old = preview.item;
     preview.item = { kind: 'map', label: 'mask preview', volume: r.volume, refs: { data: r.dataRef, volume: r.volumeRef, repr: null },
-      level: 0.5, style: 'transparent', opacity: M.opacity, color: PREVIEW_COLOR, visible: M.show };
+      level: 0.5, style: 'transparent', opacity: M.opacity, color: PREVIEW_COLOR, visible: M.show, transform: M.base.transform || null };
     try {
       await scene.showMap(preview.item);
     } finally {
@@ -142,7 +150,7 @@ export function createMaskEditor(root, ctl) {
     if (!['sphere', 'box', 'cylinder', 'region'].includes(M.tool)) return false;
     const p = e.position;
     if (!p) { setStatus('Click on the map surface (or an atom): nothing was under the mouse', true); return true; }
-    place(vec(p));
+    place(vec(toBase([p[0], p[1], p[2]])));
     return true;
   }
 
@@ -167,16 +175,16 @@ export function createMaskEditor(root, ctl) {
 
   function placeAtCentre() {
     const target = scene.cameraState().target;
-    place(vec(target));
+    place(vec(toBase(target)));
   }
 
   function addWhole() {
     if (M.tool === 'map') { push({ shape: 'map', mode: M.mode, level: levelOf(), lowpass: M.lowpass }); return; }
     const model = models().find((m) => m.id === M.zoneModel) || models()[0];
     if (!model) { setStatus('Open a model fitted in the map first (Open…)', true); return; }
-    if (M.tool === 'zone') push({ shape: 'zone', mode: M.mode, model: model.path, selection: M.zoneSelection.trim(), radius: M.zoneRadius });
+    if (M.tool === 'zone') push({ shape: 'zone', mode: M.mode, model: model.path, selection: M.zoneSelection.trim(), radius: M.zoneRadius, ...relative(model) });
     else if (M.tool === 'molmap') {
-      push({ shape: 'molmap', mode: M.mode, model: model.path, selection: M.zoneSelection.trim(), resolution: M.molmapRes, enclose: M.molmapEnclose });
+      push({ shape: 'molmap', mode: M.mode, model: model.path, selection: M.zoneSelection.trim(), resolution: M.molmapRes, enclose: M.molmapEnclose, ...relative(model) });
     }
   }
 
@@ -189,7 +197,7 @@ export function createMaskEditor(root, ctl) {
     if (Number.isFinite(resolution)) M.molmapRes = resolution;
     if (Number.isFinite(enclose)) M.molmapEnclose = enclose;
     if (mode) M.mode = mode;
-    const op = { shape: 'molmap', mode: M.mode, model: model.path, selection, resolution: M.molmapRes, enclose: M.molmapEnclose };
+    const op = { shape: 'molmap', mode: M.mode, model: model.path, selection, resolution: M.molmapRes, enclose: M.molmapEnclose, ...relative(model) };
     push(op);
     return op;
   }
@@ -449,6 +457,12 @@ export function createMaskEditor(root, ctl) {
     else close();
   }
 
+  // an item moved in space: the preview follows the map it is drawn on (recipes stay in the map's own frame)
+  function itemMoved(item) {
+    if (!M.open || item !== M.base || !preview.item) return;
+    scene.setTransform(preview.item, item.transform || null).catch(() => {});
+  }
+
   function onKey(e) {
     if (!M.open) return false;
     const k = e.key.toLowerCase();
@@ -467,6 +481,7 @@ export function createMaskEditor(root, ctl) {
     click,
     onKey,
     itemClosed,
+    itemMoved,
     addMolmap,
     state: () => (M.open ? { base: M.base?.path, ops: M.ops, dilate: M.dilate, soft: M.soft, ...(M.job ? { job: M.job.uid } : {}) } : null),
   };

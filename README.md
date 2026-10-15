@@ -13,7 +13,7 @@ local :
 | Raffinement local (RELION) | **RELION 5** : raffinement local gold-standard (recherches locales depuis les poses CryoSPARC, Blush), **soustraction de signal** recentrée et recadrée (avec expansion de symétrie), **classification 3D focalisée** sans alignement, post-traitement, reconstruction | conversion CryoSPARC → RELION automatique (conventions de pyem), cartes toujours rendues sur la grille de la carte consensus, workflows *Focused refinement* et *Focused classification* |
 | Amélioration de carte | **LocScale 2** (model-free / pseudo-modèle / model-based / hybride), **EMmerNet** (avec la carte de confiance pVDDT), **DeepEMhancer**, **EMReady2**, **spIsoNet** (correction de l'anisotropie due à l'orientation préférentielle), Phenix `resolve_cryo_em`, `map_sharpening` (Phenix 2), `auto_sharpen`, `local_aniso_sharpen`, **résolution locale** (`local_resolution`), **cartes composites** de raffinements locaux (`combine_focused_maps`) | + FSC demi-cartes (masquée, corrigée par randomisation de phase), **résolution directionnelle / 3D FSC**, **création de masques** (densité, chaînes du modèle, carte simulée du modèle comme `molmap`, densité proche du modèle ; dilatation et bord doux en Å), **masques dessinés à la main dans le visualiseur 3D** (comme Chimera : sphères, boîtes, cylindres, région de densité cliquée, zone autour de chaînes, carte simulée de chaînes) et opérations de carte (main, B-factor, filtre, masque, boîte) intégrées |
 | Hétérogénéité (variabilité 3D) | **cryoDRGN** (contrôle des entrées, entraînement en deux tours, convergence, analyse, paysage, trajectoires), **cryoDRGN-AI** (ab initio, sans consensus : poses apprises, main et repère, validation), **CryoSPARC 3D Variability** et *3D Variability Display* / 3D Flex (import des coordonnées des particules et des séries de volumes) | **Explorateur de l'espace latent** interactif (UMAP / PCA, coloration par densité, défocus ou orientation, galerie des volumes avec alertes junk, lasso, images des particules, clusters → volumes en 3D, sélection de particules, trajectoire), **lecture des séries** dans le visualiseur 3D, **analyse de série** (carte de variabilité, corrélation entre états, chaînes qui bougent ou disparaissent), sélection de particules vers CryoSPARC ou un nouvel entraînement |
-| Construction de modèle | **ModelAngelo** (avec ou sans séquence) et **identification de chaînes inconnues** (`hmm_search`), **CryoAtom2** (protéines, ARN/ADN, complexes, identification par base de séquences), ColabFold/AlphaFold2, **Boltz-2** (complexes protéines/acides nucléiques/ligands), Phenix `process_predicted_model`, `dock_in_map`, ChimeraX `fitmap` | + restreintes de ligands (Phenix eLBOW), fusion et édition de modèles (gemmi) |
+| Construction de modèle | **ModelAngelo** (avec ou sans séquence) et **identification de chaînes inconnues** (`hmm_search`), **CryoAtom2** (protéines, ARN/ADN, complexes, identification par base de séquences), ColabFold/AlphaFold2, **Boltz-2** (complexes protéines/acides nucléiques/ligands), Phenix `process_predicted_model`, `dock_in_map`, ChimeraX `fitmap` | + **placement de corps rigide intégré** (algorithme de `fitmap` : modèles, cartes et masques, à la main dans le visualiseur puis optimisé, ou recherche globale), restreintes de ligands (Phenix eLBOW), fusion et édition de modèles (gemmi) |
 | Reconstruction interactive | **ISOLDE** (ChimeraX), **Coot** | sessions ouvertes en un clic sur l'écran du serveur, ou paquet téléchargeable pour votre poste |
 | Affinement | Phenix `real_space_refine`, **Servalcat** (demi-cartes, cartes Fo-Fc), `phenix.douse` (eaux) | restreintes de ligands branchées directement sur l'affinement |
 | Validation | MolProbity, EMRinger, Phenix `validation_cryoem`, **checkMySequence** (erreurs de registre de séquence), **rapport officiel wwPDB** (service de validation OneDep) | + **Q-score**, FSC carte-modèle, CC_mask, inclusion d'atomes intégrés (sans logiciel externe) |
@@ -325,7 +325,8 @@ Une interface entre CryoSPARC et ChimeraX, dessinée par Mol\* (qui fonctionne h
 - **Ligne de commande** façon ChimeraX (↑/↓ pour l'historique, `help` pour la liste) :
   `level 3σ`, `level 250kDa`, `style mesh`, `style #2 surface`, `color #2 bychain`, `view /A:45`, `zone 3`,
   `detail 300`, `lowpass 8`, `volume #1 level 0.5 style mesh`, `bg white`, `slab 8A`, `lighting soft`,
-  `slices big`, `fullres #1`, `record spin`, `save figure.png scale 3`, `molmap #2/A,B 10` (masque)…
+  `slices big`, `fullres #1`, `record spin`, `save figure.png scale 3`, `molmap #2/A,B 10` (masque), `move x 5 #2`,
+  `turn y 30 #2`, `fitmap #2 inMap #1`…
 - **Clavier** : **+ / −** seuil de la carte active (0,1 σ, Maj : 0,5 σ), **M** style suivant, **R** vue
   initiale, **S** rotation, **L** coupes, **:** ligne de commande, **?** aide.
 - **Coloration par résolution locale** : menu *Colour* d'une carte (ou `color #1 localres 3 6`), échelle bleu
@@ -354,6 +355,13 @@ Une interface entre CryoSPARC et ChimeraX, dessinée par Mol\* (qui fonctionne h
   (surface orange) ; **Save as job** lance le job *Mask drawn in the 3D viewer* qui le calcule sur la grille complète,
   avec son centre de masse et la boîte pour recentrer des particules. Le dessin reste dans l'adresse de la page et se
   rouvre depuis le job (*Mask editor*).
+- **Move & fit** (bouton **Move**, comme dans Chimera) : cartes, masques et modèles se **déplacent dans l'espace** à la
+  souris (glisser : rotation autour de l'objet, clic droit : translation, Maj + clic droit : profondeur ; Échap rend la
+  souris à la caméra, Ctrl + Z annule) ou en commande (`move x 5 #2`, `turn y 30 #2`, `view initial`), puis
+  s'**ajustent dans une carte** (rigid body fit, algorithme de `fitmap` de ChimeraX, calculé sur le serveur) : valeur
+  moyenne de la carte aux atomes, ou overlap / corrélation de la carte simulée du modèle ou d'une carte, localement ou
+  par recherche depuis des placements aléatoires (`fitmap #2 inMap #1 resolution 8 search 50`). **Save as job** écrit
+  le modèle placé ou la carte rééchantillonnée sur la grille de la cible (job *Fit in map (rigid body)*).
 
 ### Raffinement local et classification focalisée (RELION)
 
@@ -692,7 +700,7 @@ qu'un compte existe), toute requête doit donc être authentifiée :
 
 La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes) est dans
 [docs/JOBS.md](docs/JOBS.md), générée depuis `cryoplug/jobhelp.py` par `cryoplug docs-jobs`.
-`cryoplug jobtypes` liste les 65 types de jobs :
+`cryoplug jobtypes` liste les 66 types de jobs :
 
 | Catégorie | Jobs |
 |---|---|
@@ -700,7 +708,7 @@ La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes
 | Reconstruction | RELION local refinement · RELION signal subtraction · RELION 3D classification (focused) · RELION post-processing · RELION reconstruction |
 | Map processing | Half-map FSC · Directional resolution (3D FSC) · Local resolution (Phenix) · Create mask · Mask drawn in the 3D viewer · Composite map (focused maps) · Map operations · LocScale 2 · EMmerNet · DeepEMhancer · EMReady2 · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Map sharpening (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
 | Heterogeneity | cryoDRGN input check (backprojection) · cryoDRGN training · cryoDRGN-AI ab initio reconstruction · cryoDRGN continue training · cryoDRGN convergence check · cryoDRGN analysis · cryoDRGN landscape analysis · cryoDRGN trajectory · cryoDRGN volumes at particles · Select particles (latent space) · Volume series analysis · Extract volume from series |
-| Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
+| Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Fit in map (rigid body) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
 | Interactive | ISOLDE session · Coot session |
 | Refinement | Real-space refinement (Phenix) · Refinement (Servalcat) · Add waters (phenix.douse) |
 | Validation | Comprehensive validation (Phenix) · MolProbity · EMRinger · Map-model validation (Q-score, FSC) · Sequence register check (checkMySequence) · wwPDB validation report (OneDep) |

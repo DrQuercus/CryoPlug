@@ -705,7 +705,7 @@ poses dans le repère du consensus :
 | Résolution ≲ 4 Å, séquence connue | Construction de novo | ModelAngelo build **et/ou** CryoAtom2 build ; gardez le meilleur |
 | Complexe protéine–ARN/ADN | De novo avec FASTA séparés | CryoAtom2 build (ou ModelAngelo) |
 | Sous-unité inconnue / densité inattendue | Identifier puis reconstruire | ModelAngelo sans séquence → Identify chains → CryoAtom2 avec les séquences trouvées (workflow « Identify unknown proteins ») |
-| 4–8 Å ou régions mal résolues | Modèle prédit puis ajustement | AlphaFold DB / ColabFold / Boltz-2 → Process predicted model → Rigid-body fit ou Dock in map → Real-space refinement (morphing) |
+| 4–8 Å ou régions mal résolues | Modèle prédit puis ajustement | AlphaFold DB / ColabFold / Boltz-2 → Process predicted model → **Fit in map** (intégré ; ou Rigid-body fit ChimeraX, Dock in map) → Real-space refinement (morphing) |
 | Ligand, cofacteur, médicament | Pose initiale + restreintes | Boltz-2 (pose) + Ligand restraints (eLBOW) → affinement → vérification Fo-Fc (Servalcat) |
 
 ### 5.2 Contrôler une construction automatique
@@ -756,9 +756,48 @@ slab) et la caméra : recharger la page redonne la même vue, et **Link** copie 
 accès au projet. **Image** enregistre un PNG (avec l'échelle de couleur d'une carte coloriée), **Movie** une vidéo.
 
 `help` dans la ligne de commande liste les commandes (`level`, `style`, `color`, `view`, `zone`, `detail`,
-`lowpass`, `volume`, `bg`, `slab`, `record`, `distance`, `molmap`, `save`…), **?** les gestes souris et les touches.
+`lowpass`, `volume`, `bg`, `slab`, `record`, `distance`, `molmap`, `move`, `turn`, `fitmap`, `save`…), **?** les gestes
+souris et les touches.
 
-### 5.3 Assembler
+### 5.3 Placer un modèle, une carte ou un masque (Move & fit)
+
+Comme dans Chimera, tout objet du visualiseur se **déplace dans l'espace** : bouton **Move** (ou « Move / fit in a
+map… » dans le menu ··· d'une carte, d'un masque ou d'un modèle). La souris déplace alors l'objet choisi au lieu de
+la caméra : **glisser** le fait tourner autour de son centre, **clic droit + glisser** (ou Ctrl + glisser) le
+translate dans le plan de l'écran, **Maj + clic droit + glisser** le rapproche ou l'éloigne ; un clic sur un autre
+objet le choisit ; **Échap** rend la souris à la caméra, **Ctrl + Z** annule le dernier déplacement. Les commandes de
+ChimeraX marchent aussi : `move x 5 #2` (Å, axes de l'écran), `turn y 30 #2` (degrés, autour du centre de l'objet ;
+`center`, `coordinateSystem #1`), `view initial` remet tout en place.
+
+Le **rigid body fit** suit l'algorithme de `fitmap` de ChimeraX (calculé sur le serveur, sans ChimeraX) : montée de
+gradient alternant translations et rotations, par pas d'une demi-voxel puis de plus en plus fins.
+
+| Objet | Ce qui est maximisé | Quand |
+|---|---|---|
+| Modèle, résolution 0 | la **valeur moyenne de la carte aux atomes** (défaut de ChimeraX) | modèle déjà proche de sa place |
+| Modèle, résolution 6–10 Å | **overlap**, **corrélation** ou **cam** de sa carte simulée (molmap) avec la carte | modèle encore loin, carte à basse résolution, domaine |
+| Carte ou masque | overlap / corrélation de ses voxels au-dessus de son seuil | superposer un raffinement local, un masque, une autre carte |
+
+**Fit** (ou `fitmap #2 inMap #1`, `fitmap #2/A inMap #1 resolution 8 metric correlation`) optimise depuis la position
+actuelle ; le journal donne, comme ChimeraX, la valeur moyenne ou la corrélation avant / après, le nombre de pas, le
+déplacement et la rotation, et les atomes hors du contour. **Search** (`search 50`) part de placements aléatoires
+(dans un rayon donné, ou partout dans la densité), regroupe les solutions à moins de 6° et 3 Å et les liste, la
+meilleure en premier (un clic en applique une autre). Le plus efficace : approcher l'objet à la main, puis **Fit**.
+Une optimisation locale ne monte qu'au maximum le plus proche : si le modèle part de plus de 3–4 Å, ajustez d'abord
+sa **carte simulée à 6–8 Å** (sa portée est plus grande), puis à nouveau les atomes (résolution 0) pour la position
+fine — sur le projet de démonstration, un modèle décalé de 6 Å revient à 0,03 Å ainsi, alors que les atomes seuls
+restent bloqués à 4 Å.
+
+La position n'existe d'abord que dans le visualiseur (et dans son adresse). **Save as job** lance *Fit in map
+(rigid body)*, qui écrit le **modèle placé**, ou la **carte / le masque rééchantillonné sur la grille de la carte
+cible** — prêt pour un masque de raffinement local, une carte composite ou une comparaison. Le job peut aussi
+s'utiliser seul (builder) : position donnée, optimisation locale ou recherche, chaînes utilisées pour le fit. Le
+workflow *Predicted model* l'emploie pour placer le modèle prédit (recherche de 100 placements, carte simulée à 8 Å).
+
+Un objet déplacé reste cohérent dans tout le visualiseur : clic, centrage, distances, coloration par résolution
+locale et éditeur de masque (les formes et les cartes simulées sont calculées là où on les voit).
+
+### 5.4 Assembler
 
 Des domaines ou sous-unités dockés séparément se combinent avec **Merge models** (les identifiants de
 chaîne en conflit sont renommés). **Model operations** renomme les chaînes comme dans l'article.
@@ -861,7 +900,7 @@ sont à revoir (ou situés dans des régions de basse résolution locale).
 |---|---|---|
 | EMRinger proche de 0, hélices gauches | Main inversée | Flip handedness puis reconstruire |
 | Bon CC, mauvaise géométrie | Surajustement, restreintes trop faibles | ISOLDE, restreintes de structure secondaire |
-| Bonne géométrie, CC/Q-score faibles | Modèle mal placé ou registre décalé | Vérifier dans la carte, fitmap, ISOLDE |
+| Bonne géométrie, CC/Q-score faibles | Modèle mal placé ou registre décalé | Vérifier dans la carte, Fit in map (ou `fitmap` dans le visualiseur), ISOLDE |
 | Q-score bas dans une région seulement | Résolution locale faible ou erreur locale | Comparer avec la carte LocScale ; corriger ou retirer les atomes non soutenus |
 | FSC carte–modèle meilleure que la FSC demi-cartes | Ajustement du bruit | Affinement moins agressif, cible demi-cartes (Servalcat) |
 | Beaucoup de résidus UNK | Séquence absente ou mal attribuée | Identifier les chaînes, reconstruire avec la séquence |
@@ -918,7 +957,7 @@ Raccourci : workflow *De novo model → deposition (ModelAngelo ou CryoAtom2)*.
 1. Import · LocScale (model-free) ou modification de densité Phenix
 2. Modèles prédits : AlphaFold DB, ColabFold ou Boltz-2 (complexe entier)
 3. Process predicted model (découpe en domaines si nécessaire)
-4. Rigid-body fit (recherche globale) ou Dock in map, domaine par domaine → Merge models
+4. Fit in map (recherche globale, ou à la main puis Fit dans le visualiseur) ou Dock in map, domaine par domaine → Merge models
 5. Real-space refinement avec morphing → ISOLDE (restreintes adaptatives) → affinement final
 6. LocScale en mode hybride avec le modèle pour la carte d'interprétation finale
 
@@ -961,7 +1000,7 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 2. Local resolution sur la carte consensus : repérer les régions faibles ; si besoin, un masque (Create mask : densité
    proche des chaînes de la région, ou dessiné dans le visualiseur) pour de nouveaux raffinements locaux, dans CryoSPARC
    ou directement dans RELION (workflow *Focused refinement with signal subtraction*)
-3. Modèle ajusté dans la consensus (prédictions, Rigid-body fit ou Dock in map, Merge models)
+3. Modèle ajusté dans la consensus (prédictions, Fit in map ou Dock in map, Merge models)
 4. Composite map (consensus + cartes locales, demi-cartes combinées)
 5. Real-space refinement dans la carte composite → ISOLDE → affinement final
 6. Local resolution sur les demi-cartes composites (résolution de chaque sous-unité), checkMySequence,
@@ -999,7 +1038,7 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 |---|---|---|
 | Le job échoue immédiatement | Programme introuvable | Page **Tools** : configurez `setup` / `bin_dir` / `executable`, redémarrez, *Re-check* |
 | Job en échec : « phenix.… exited with code 1: Sorry: … » | Le programme a refusé une entrée ou un paramètre : la fin du message est son explication (le « Sorry » de Phenix, la dernière ligne d'une erreur Python…) | Corrigez ce qu'il indique ; un paramètre refusé (« not recognized ») se retire ou se renomme dans *Extra arguments* |
-| Phenix : « Map and model are not aligned » ou « Model is not similar to … » | Symétrie / boîte (CRYST1) du modèle différente de celle de la carte, ou modèle hors de la carte | CryoPlug relance une fois avec `skip_map_model_overlap_check=True` ou `ignore_symmetry_conflicts=True`, comme Phenix le propose (avertissement dans le log). Si le modèle est vraiment hors de la carte : **Dock in map** ou **Rigid-body fit** d'abord |
+| Phenix : « Map and model are not aligned » ou « Model is not similar to … » | Symétrie / boîte (CRYST1) du modèle différente de celle de la carte, ou modèle hors de la carte | CryoPlug relance une fois avec `skip_map_model_overlap_check=True` ou `ignore_symmetry_conflicts=True`, comme Phenix le propose (avertissement dans le log). Si le modèle est vraiment hors de la carte : **Fit in map** (à la main dans le visualiseur puis Fit), **Dock in map** ou **Rigid-body fit** d'abord |
 | Phenix 2 : « phenix.auto_sharpen is replaced by phenix.map_sharpening » | Phenix 2 a remplacé auto_sharpen et local_aniso_sharpen par map_sharpening | Rien à faire : CryoPlug les lance avec `--force` (ils fonctionnent toujours) ; le job **Map sharpening (Phenix)** lance directement le nouvel outil |
 | Page **Tools** : avertissement orange sous Phenix (« phenix.version exited with code … ») | Phenix ne démarre pas dans l'environnement du service CryoPlug (la raison suit) | Vérifiez la ligne `setup` (`source /chemin/phenix-2.x/phenix_env.sh`) ; essayez la même commande dans un terminal ouvert comme l'utilisateur du service |
 | « Resolution is unknown » | Pas de FSC à l'import | Renseignez le paramètre *Resolution* |

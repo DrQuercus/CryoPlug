@@ -69,7 +69,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Une colonne B-factor de type pLDDT est détectée et signalée.",
             "La sortie « sequence » est extraite du modèle : pratique, mais ne remplace pas la séquence de l'échantillon pour la vérification avant dépôt.",
         ],
-        "next": ["phenix_process_predicted_model", "chimerax_fitmap", "phenix_dock_in_map", "mapmodel_validation"],
+        "next": ["phenix_process_predicted_model", "fit_in_map", "chimerax_fitmap", "phenix_dock_in_map", "mapmodel_validation"],
     },
     "import_sequence": {
         "purpose": "Déclare la ou les séquences de l'échantillon (FASTA collé, fichier ou accessions UniProt). "
@@ -278,7 +278,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Les opérations s'enchaînent dans un ordre fixe : pixel → boîte → main → B-factor → filtre → masque → normalisation.",
             "B-factor négatif = affûtage, positif = flou.",
         ],
-        "next": ["modelangelo_build", "cryoatom_build", "chimerax_fitmap"],
+        "next": ["modelangelo_build", "cryoatom_build", "fit_in_map", "chimerax_fitmap"],
     },
     "create_mask": {
         "purpose": "Crée un masque à bord doux : à partir de la densité (passe-bas + seuil), des atomes de chaînes choisies, "
@@ -404,7 +404,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Le mode model-free utilise EMmerNet : un GPU est fortement conseillé.",
             "Le mode pseudo-modèle convient aux cartes très bruitées ou de basse résolution.",
         ],
-        "next": ["modelangelo_build", "cryoatom_build", "chimerax_fitmap", "isolde_session"],
+        "next": ["modelangelo_build", "cryoatom_build", "fit_in_map", "chimerax_fitmap", "isolde_session"],
     },
     "emmernet": {
         "purpose": "Carte « améliorée » par le réseau EMmerNet (LocScale 2) avec estimation d'incertitude Monte-Carlo.",
@@ -434,7 +434,7 @@ HELP: dict[str, dict[str, Any]] = {
         "tips": [
             "tightTarget par défaut ; wideTarget conserve plus de densité autour de la particule ; highRes pour les cartes meilleures que 4 Å.",
         ],
-        "next": ["chimerax_fitmap", "isolde_session"],
+        "next": ["fit_in_map", "chimerax_fitmap", "isolde_session"],
     },
     "emready": {
         "purpose": "Amélioration de carte par apprentissage profond combinant informations locales et non locales.",
@@ -442,7 +442,7 @@ HELP: dict[str, dict[str, Any]] = {
         "avoid": ["Mêmes limites que les autres réseaux : interprétation seulement, pas de validation ni de dépôt comme carte primaire."],
         "inputs": "La carte (non affûtée ou affûtée), masque optionnel.",
         "tips": ["Un pas (stride) plus petit est plus précis mais plus lent."],
-        "next": ["chimerax_fitmap", "modelangelo_build"],
+        "next": ["fit_in_map", "chimerax_fitmap", "modelangelo_build"],
     },
     "spisonet": {
         "purpose": "Corrige l'anisotropie due à l'orientation préférentielle : un réseau auto-supervisé apprend, à partir des "
@@ -481,7 +481,7 @@ HELP: dict[str, dict[str, Any]] = {
         "inputs": "La carte NON affûtée ; les demi-cartes sont optionnelles.",
         "tips": ["Comparez visuellement avec la carte CryoSPARC dans le visualiseur 3D avant de choisir.",
                  "Phenix 2 remplace auto_sharpen par map_sharpening : CryoPlug le lance avec --force, il fonctionne toujours."],
-        "next": ["modelangelo_build", "chimerax_fitmap"],
+        "next": ["modelangelo_build", "fit_in_map", "chimerax_fitmap"],
     },
     "phenix_map_sharpening": {
         "purpose": "L'outil d'affûtage de Phenix 2 (phenix.map_sharpening, qui remplace auto_sharpen et local_aniso_sharpen) : "
@@ -811,7 +811,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Depuis l'explorateur latent : un cluster sélectionné → « Extract map… » prépare ce job avec le bon numéro.",
             "Indiquez la résolution dans les jobs suivants : elle n'est pas connue pour ces volumes.",
         ],
-        "next": ["chimerax_fitmap", "isolde_session", "mapmodel_validation"],
+        "next": ["fit_in_map", "chimerax_fitmap", "isolde_session", "mapmodel_validation"],
     },
     "modelangelo_build": {
         "purpose": "Construction automatique de novo (réseaux de graphes) de protéines, ARN et ADN, guidée par la séquence. "
@@ -884,7 +884,7 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "inputs": "Séquence(s) protéiques ; « Predict as a complex » pour prédire l'assemblage.",
         "tips": ["Passez ensuite par « Process predicted model » puis un ajustement dans la carte."],
-        "next": ["phenix_process_predicted_model", "chimerax_fitmap"],
+        "next": ["phenix_process_predicted_model", "fit_in_map", "chimerax_fitmap"],
     },
     "boltz_predict": {
         "purpose": "Prédiction de structure de complexes entiers (protéines, ARN/ADN, ligands par code CCD ou SMILES) avec Boltz-2.",
@@ -902,7 +902,7 @@ HELP: dict[str, dict[str, Any]] = {
             "ipTM > 0,8 : interface prédite avec confiance ; < 0,6 : à prendre avec précaution.",
             "Plusieurs échantillons (samples) donnent une idée de la variabilité.",
         ],
-        "next": ["phenix_process_predicted_model", "chimerax_fitmap", "phenix_dock_in_map"],
+        "next": ["phenix_process_predicted_model", "fit_in_map", "chimerax_fitmap", "phenix_dock_in_map"],
     },
     "phenix_process_predicted_model": {
         "purpose": "Prépare un modèle prédit : retire les résidus de faible confiance (pLDDT), convertit le pLDDT en B-factors, "
@@ -911,7 +911,7 @@ HELP: dict[str, dict[str, Any]] = {
         "avoid": ["Modèle expérimental : ses B-factors ne sont pas des pLDDT."],
         "inputs": "Le modèle prédit.",
         "tips": ["pLDDT minimal 70 par défaut ; baissez-le si vous perdez des régions importantes bien définies dans la carte."],
-        "next": ["chimerax_fitmap", "phenix_dock_in_map"],
+        "next": ["fit_in_map", "chimerax_fitmap", "phenix_dock_in_map"],
     },
     "phenix_dock_in_map": {
         "purpose": "Recherche globale de la position d'un modèle (ou d'un domaine) dans la carte (phenix.dock_in_map).",
@@ -920,6 +920,34 @@ HELP: dict[str, dict[str, Any]] = {
         "inputs": "Modèle (traité s'il est prédit) et carte.",
         "tips": ["Dockez domaine par domaine si l'assemblage diffère de la prédiction, puis fusionnez."],
         "next": ["phenix_real_space_refine", "merge_models"],
+    },
+    "fit_in_map": {
+        "purpose": "Placement de corps rigide d'un modèle, d'une carte ou d'un masque dans une carte, intégré (sans ChimeraX), avec "
+                   "l'algorithme de « fitmap » de ChimeraX : à partir de la position réglée à la main dans le visualiseur 3D "
+                   "(Move), optimisation locale de la valeur moyenne de la carte aux atomes, ou de l'overlap / corrélation de la "
+                   "carte simulée du modèle à une résolution, ou recherche depuis des placements aléatoires.",
+        "when": [
+            "Placer un modèle prédit (AlphaFold, ColabFold, Boltz) ou un domaine dans la densité avant l'affinement.",
+            "Superposer une carte de raffinement local, un masque ou une autre carte sur la carte consensus (sortie sur sa grille).",
+            "Écrire la position d'un objet déplacé à la souris dans le visualiseur (« Save as job » de Move & fit).",
+        ],
+        "avoid": [
+            "Changement de conformation important : il faut de la flexibilité (ISOLDE, real-space refine avec morphing).",
+            "Recherche globale d'un petit domaine dans une très grande carte : partez d'une position approchée (à la main) "
+            "ou limitez le rayon de recherche.",
+        ],
+        "inputs": "Le modèle (ou la carte / le masque) à placer, et la carte cible ; la position du visualiseur est remplie par "
+                  "« Save as job » dans Move & fit.",
+        "tips": [
+            "Résolution 0 : ajustement des atomes dans la densité (défaut de ChimeraX) ; 6-10 Å avec « correlation » pour un "
+            "modèle encore loin de sa place ou une carte à basse résolution.",
+            "Modèle à plus de 3-4 Å de sa place : une résolution de 6-8 Å (la carte simulée porte plus loin) ; « Then fit the "
+            "atoms » donne ensuite la position exacte.",
+            "Recherche : 50-100 placements aléatoires ; « Search radius » pour rester près de la position donnée.",
+            "« Chains fitted » : le fit ne regarde que ces chaînes (un domaine, une sous-unité), mais tout le modèle est déplacé.",
+            "Dans le visualiseur : commande « fitmap #2 inMap #1 resolution 8 », ou le bouton Fit de Move & fit.",
+        ],
+        "next": ["phenix_real_space_refine", "servalcat_refine", "isolde_session", "mapmodel_validation", "merge_models"],
     },
     "chimerax_fitmap": {
         "purpose": "Ajustement de corps rigide par corrélation avec une carte simulée à la résolution de la carte (ChimeraX fitmap).",

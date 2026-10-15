@@ -7,6 +7,8 @@ import { COMMAND_HELP, createCommands } from './viewer/commands.js';
 import { binning, COARSE_BOX, DEFAULT_BOX, expectedSeconds, fetchMap, fmtBytes, fmtDims, mapInfo, SERIES_BOXES, seriesBox } from './viewer/mapdata.js';
 import { createMaskEditor } from './viewer/maskedit.js';
 import { COLOR_KINDS, colorLegend, createPanel, hex } from './viewer/panel.js';
+import { createPlacePanel } from './viewer/place.js';
+import * as rigid from './viewer/rigid.js';
 import * as scene from './viewer/scene.js';
 import { createSeriesPlayer, initSeries, SPEEDS } from './viewer/series.js';
 import { createSlices } from './viewer/slices.js';
@@ -35,6 +37,7 @@ let toolbar;
 let player;
 let playerBar;
 let maskEditor;
+let placePanel;
 
 // ------------------------------------------------------------------ theme
 try {
@@ -72,6 +75,9 @@ function fail(err, what = '') {
 }
 
 const byId = (id) => V.items.find((i) => i.id === id);
+// The item under the mouse (scene.describeLoci): a model by its structure, a map by its volume (moved or not).
+const itemOf = (d) => (!d ? null : d.kind === 'atom' ? V.items.find((i) => i.kind === 'model' && i.structure === d.root)
+  : V.items.find((i) => i.kind === 'map' && (i.volume === d.volume || scene.shownVolume(i) === d.volume)));
 const activeMap = () => (V.active?.kind === 'map' ? V.active : V.items.find((i) => i.kind === 'map'));
 const activeModel = () => (V.active?.kind === 'model' ? V.active : V.items.find((i) => i.kind === 'model'));
 // the series the player controls: the active item if it is one, otherwise the first one
@@ -85,6 +91,7 @@ const round = (v) => Number(v.toPrecision(6));
 function itemState(i) {
   const out = { kind: i.kind, path: i.path, label: i.label, ...(i.otype && i.otype !== 'map' ? { otype: i.otype } : {}) };
   if (!i.visible) out.visible = false;
+  if (i.transform) out.transform = rigid.rows(i.transform); // moved in space (Move & fit)
   if (i.kind === 'map') {
     Object.assign(out, { color: i.color, level: round(i.level), style: i.style });
     if (i.style === 'transparent') out.opacity = i.opacity;
@@ -200,6 +207,7 @@ async function addMap(spec, withModel) {
     color: Number.isInteger(spec.color) ? spec.color : otype === 'mask' ? MASK_COLOR : MAP_COLORS[V.mapColors++ % MAP_COLORS.length],
     style: MAP_STYLES.includes(spec.style) ? spec.style
       : otype === 'mask' ? 'transparent' : (withModel || V.items.some((i) => i.kind === 'model') ? 'mesh' : 'surface'),
+    transform: !frames && spec.transform ? rigid.fromRows(spec.transform) : null, // drawn there from the start
   };
   if (frames) {
     item.box = seriesLimit(Number.isFinite(spec.box) ? spec.box : seriesBox(frames.length));
@@ -324,6 +332,8 @@ async function addModel(spec, withMap) {
     item.id = V.nextId++;
     V.items.push(item);
     await scene.showModel(item);
+    const moved = spec.transform && rigid.fromRows(spec.transform);
+    if (moved) await scene.setTransform(item, moved);
     return item;
   } finally {
     loaded();
@@ -436,9 +446,28 @@ async function reloadSeriesOnce(item) {
   s.rest?.then(() => { if (!s.closed) log(`#${item.id}: ${s.loaded} of ${s.frames.length} volumes ready to play`); });
 }
 
+// An item moved in space (Move & fit, move / turn / fitmap). Zones are cut by the server from the files: a zone whose
+// map or model moves is turned off. The mask editor keeps drawing on a moved map.
+async function setItemTransform(item, m) {
+  if (item.series) throw new Error('A volume series cannot be moved');
+  for (const map of V.items) {
+    if (map.kind === 'map' && map.zone && (map === item || map.zone.model === item.id)) {
+      map.zone = null;
+      log(`Zone of #${map.id} off: it is computed from the files, and #${item.id} moved`);
+      reloadMap(map, { keep: 'absolute' }).catch((err) => fail(err));
+    }
+  }
+  const wasMoved = !!item.transform;
+  await scene.setTransform(item, m);
+  maskEditor?.itemMoved(item);
+  if (wasMoved !== !!item.transform) panel.renderItem(item); // "moved" in its card
+  syncHashSoon();
+}
+
 async function closeItem(item) {
   V.items = V.items.filter((i) => i !== item);
   maskEditor?.itemClosed(item);
+  placePanel?.itemClosed(item);
   if (V.active === item) V.active = V.items[0] || null;
   if (slices.item === item) hideSlices();
   if (item.series) await player.dispose(item);
@@ -777,6 +806,14 @@ const ctl = {
   },
   goToQuiet: goTo,
   close: (item) => closeItem(item).catch((err) => fail(err)),
+  // move / turn / view initial / fitmap commands (Move & fit)
+  moveItem: (item, vector) => placePanel.moveBy(item, vector),
+  turnItem: (item, axis, degrees, center) => placePanel.turnBy(item, axis, degrees, center),
+  resetPositions: (list) => placePanel.reset(list),
+  openMove: (item) => { placePanel.open(item); toolbar.refresh(); },
+  fitItem: (item, target, opts) => placePanel.fit({ ...opts, item, target }),
+  screenFrame: () => scene.screenFrame(),
+  itemCenter: (item) => scene.itemCenter(item),
   // molmap command: the mask editor opened (on the map named, or the active one) and a model map added to it
   molmapMask({ map, ...spec }) {
     if ((!maskEditor.isOpen() || map) && !maskEditor.open(map ? { base: map.path } : {})) {
@@ -893,6 +930,10 @@ function buildToolbar() {
       maskEditor.toggle();
       toolbar.refresh();
     }),
+    move: tool('Move', 'move', 'Move maps, masks and models in space with the mouse and fit them into a map (rigid body, as ChimeraX’s fitmap)', () => {
+      placePanel.toggle(V.active?.kind === 'model' ? V.active : null);
+      toolbar.refresh();
+    }),
     link: tool('Link', 'link', 'Copy a link to this view (items, settings, camera)', async () => { log(await ctl.copyLink()); }),
     help: tool('Help', 'help', 'Mouse, keys and commands (?)', () => helpDialog()),
   };
@@ -905,7 +946,7 @@ function buildToolbar() {
     dataset: { color: String(color) }, onclick: () => ctl.setBackground(color),
   })));
   clear(root, t.reset, t.spin, t.slab, slab, t.ortho, t.soft, h('span', { class: 'vw-sep' }), bgs, h('span', { class: 'vw-sep' }),
-    t.slices, t.mask, t.image, t.movie, t.link, t.help);
+    t.slices, t.mask, t.move, t.image, t.movie, t.link, t.help);
   return {
     refresh() {
       t.spin.classList.toggle('on', V.spin);
@@ -917,6 +958,7 @@ function buildToolbar() {
       t.soft.classList.toggle('on', V.soft);
       t.slices.classList.toggle('on', !!slices.item);
       t.mask.classList.toggle('on', !!maskEditor?.isOpen());
+      t.move.classList.toggle('on', !!placePanel?.isOpen());
       t.movie.classList.toggle('rec', !!rec.recorder);
       t.movie.querySelector('.lbl').textContent = rec.recorder ? 'Stop' : 'Movie';
       t.movie.title = rec.recorder ? 'Stop recording and save the video' : 'Record a video of the view';
@@ -1061,7 +1103,8 @@ function helpDialog() {
         ['Shift + click two atoms', 'Measure their distance (distance clear removes the measurements)'],
         ['Histogram', 'Drag the line to set the contour level of a map'],
         ['Slices', 'Click: move the crosshair · wheel: next slice (large slices: zoom; Shift + wheel: next slice) · drag: pan · double-click: enlarge or fit'],
-        ['Mask editor (Mask button)', 'Click on the map: place a sphere, a box, a cylinder (two clicks) or pick a region of density; zones and model maps (molmap) of an open model are added with their button · Ctrl + Z: undo · Delete: remove the selected operation']]),
+        ['Mask editor (Mask button)', 'Click on the map: place a sphere, a box, a cylinder (two clicks) or pick a region of density; zones and model maps (molmap) of an open model are added with their button · Ctrl + Z: undo · Delete: remove the selected operation'],
+        ['Move & fit (Move button)', 'Left-drag: rotate the item about its centre · right-drag (or Ctrl + drag): move it · Shift + right-drag: along the view · click an item to move it instead · Esc: the mouse moves the camera again · Ctrl + Z: undo a move']]),
       h('h4', {}, 'Keys'),
       table([['+  /  −', 'Raise / lower the level of the active map by 0.1 σ (Shift: 0.5 σ)'], ['M', 'Next map style (surface, mesh, transparent)'],
         ['R', 'Reset the view'], ['S', 'Spin on / off'], ['L', 'Slices on / off'], ['Space', 'Play / pause a volume series'],
@@ -1080,7 +1123,7 @@ function bindKeys() {
   document.addEventListener('keydown', (e) => {
     const k = e.key;
     if (!e.target.closest?.('input, textarea, select, [contenteditable]') && !document.querySelector('.modal-backdrop')
-        && maskEditor?.onKey(e)) { e.preventDefault(); return; }
+        && (placePanel?.onKey(e) || maskEditor?.onKey(e))) { e.preventDefault(); return; }
     // the series slider keeps the player keys (its own arrows move it)
     const onSlider = e.target.classList?.contains('vw-pslider') && [' ', ',', '.', '<', '>'].includes(k);
     if ((!onSlider && e.target.closest('input, textarea, select, [contenteditable]')) || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -1134,6 +1177,7 @@ function bindCommandLine() {
 
 // -------------------------------------------------------------- hover/click
 let statusText = HINT;
+let currentHint = HINT; // the mouse hint (another one while moving items)
 function setStatus(text) { $('vw-status').textContent = text || statusText; }
 function mapStatus(item) {
   const frame = item.series ? `  ·  ${item.series.frames[item.series.index].label}` : '';
@@ -1143,18 +1187,19 @@ function mapStatus(item) {
 function bindPointer() {
   setStatus(HINT);
   scene.onHover((d) => {
-    if (!d) { statusText = HINT; setStatus(); return; }
+    if (!d) { statusText = currentHint; setStatus(); return; }
     if (d.kind === 'atom') {
       const item = V.items.find((i) => i.kind === 'model' && i.structure === d.root);
       statusText = d.chain === undefined ? `${item ? `#${item.id} ` : ''}atom`
         : `${item ? `#${item.id}  ` : ''}/${d.chain} ${d.resn} ${d.resi}${d.ins}  ${d.atom}  ·  ${d.element}  ·  B ${Number(d.b).toFixed(1)}`;
     } else {
-      const item = V.items.find((i) => i.kind === 'map' && i.volume === d.volume);
+      const item = itemOf(d);
       statusText = item ? mapStatus(item) : 'Map';
     }
     setStatus();
   });
   scene.onClick((d, e) => {
+    if (placePanel?.pick(d)) return; // moving with the mouse: a click picks the item to move
     if (maskEditor?.isOpen() && maskEditor.click(d, e)) return; // the mask editor places its shapes
     if (e.button !== undefined && e.button !== 0 && e.button !== 1) return;
     if (d?.kind !== 'atom' || d.chain === undefined) return;
@@ -1240,6 +1285,13 @@ async function main() {
   maskEditor = createMaskEditor($('vw-mask'), {
     items: () => V.items, activeMap, project: () => V.project, log,
     syncHash: () => { syncHashSoon(); toolbar?.refresh(); },
+  });
+  placePanel = createPlacePanel($('vw-place'), {
+    items: () => V.items, active: () => V.active, project: () => V.project, log, fail, itemOf,
+    setTransform: (item, m) => setItemTransform(item, m),
+    syncHash: () => { syncHashSoon(); toolbar?.refresh(); },
+    canvasElement: () => $('vw-canvas'),
+    setHint: (text) => { currentHint = text || HINT; statusText = currentHint; setStatus(); },
   });
   ctl.setBackground(V.background);
   bindPointer();

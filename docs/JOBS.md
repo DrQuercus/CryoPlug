@@ -39,7 +39,7 @@ Importe un modèle atomique : fichier PDB/mmCIF, entrée de la PDB ou prédictio
 - Une colonne B-factor de type pLDDT est détectée et signalée.
 - La sortie « sequence » est extraite du modèle : pratique, mais ne remplace pas la séquence de l'échantillon pour la vérification avant dépôt.
 
-**Étapes suivantes** : Process predicted model (Phenix), Rigid-body fit (ChimeraX), Dock in map (Phenix), Map-model validation (Q-score, FSC)
+**Étapes suivantes** : Process predicted model (Phenix), Fit in map (rigid body), Rigid-body fit (ChimeraX), Dock in map (Phenix), Map-model validation (Q-score, FSC)
 
 ### Import from CryoSPARC
 
@@ -351,7 +351,7 @@ Affûtage global optimisé pour maximiser le détail et la connectivité (phenix
 - Comparez visuellement avec la carte CryoSPARC dans le visualiseur 3D avant de choisir.
 - Phenix 2 remplace auto_sharpen par map_sharpening : CryoPlug le lance avec --force, il fonctionne toujours.
 
-**Étapes suivantes** : ModelAngelo build, Rigid-body fit (ChimeraX)
+**Étapes suivantes** : ModelAngelo build, Fit in map (rigid body), Rigid-body fit (ChimeraX)
 
 ### Composite map (focused maps)
 
@@ -434,7 +434,7 @@ Post-traitement par apprentissage profond : masquage et affûtage local implicit
 
 - tightTarget par défaut ; wideTarget conserve plus de densité autour de la particule ; highRes pour les cartes meilleures que 4 Å.
 
-**Étapes suivantes** : Rigid-body fit (ChimeraX), ISOLDE session
+**Étapes suivantes** : Fit in map (rigid body), Rigid-body fit (ChimeraX), ISOLDE session
 
 ### Density modification (Phenix)
 
@@ -505,7 +505,7 @@ Amélioration de carte par apprentissage profond combinant informations locales 
 
 - Un pas (stride) plus petit est plus précis mais plus lent.
 
-**Étapes suivantes** : Rigid-body fit (ChimeraX), ModelAngelo build
+**Étapes suivantes** : Fit in map (rigid body), Rigid-body fit (ChimeraX), ModelAngelo build
 
 ### EMmerNet feature enhancement
 
@@ -582,7 +582,7 @@ Affûtage local (local amplitude scaling) : renforce le contraste là où la car
 - Le mode model-free utilise EMmerNet : un GPU est fortement conseillé.
 - Le mode pseudo-modèle convient aux cartes très bruitées ou de basse résolution.
 
-**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Rigid-body fit (ChimeraX), ISOLDE session
+**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Fit in map (rigid body), Rigid-body fit (ChimeraX), ISOLDE session
 
 ### Local anisotropic sharpening (Phenix)
 
@@ -659,7 +659,7 @@ Opérations simples sur une carte : taille de pixel, recadrage/agrandissement de
 - Les opérations s'enchaînent dans un ordre fixe : pixel → boîte → main → B-factor → filtre → masque → normalisation.
 - B-factor négatif = affûtage, positif = flou.
 
-**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Rigid-body fit (ChimeraX)
+**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Fit in map (rigid body), Rigid-body fit (ChimeraX)
 
 ### Map sharpening (Phenix)
 
@@ -740,7 +740,7 @@ Prend un volume d'une série (un cluster cryoDRGN, une frame de 3DVA) comme cart
 - Depuis l'explorateur latent : un cluster sélectionné → « Extract map… » prépare ce job avec le bon numéro.
 - Indiquez la résolution dans les jobs suivants : elle n'est pas connue pour ces volumes.
 
-**Étapes suivantes** : Rigid-body fit (ChimeraX), ISOLDE session, Map-model validation (Q-score, FSC)
+**Étapes suivantes** : Fit in map (rigid body), Rigid-body fit (ChimeraX), ISOLDE session, Map-model validation (Q-score, FSC)
 
 ### Select particles (latent space)
 
@@ -1073,7 +1073,7 @@ Prédiction AlphaFold2 locale (ColabFold) pour obtenir des modèles de départ.
 
 - Passez ensuite par « Process predicted model » puis un ajustement dans la carte.
 
-**Étapes suivantes** : Process predicted model (Phenix), Rigid-body fit (ChimeraX)
+**Étapes suivantes** : Process predicted model (Phenix), Fit in map (rigid body), Rigid-body fit (ChimeraX)
 
 ### Complex prediction (Boltz-2)
 
@@ -1099,7 +1099,7 @@ Prédiction de structure de complexes entiers (protéines, ARN/ADN, ligands par 
 - ipTM > 0,8 : interface prédite avec confiance ; < 0,6 : à prendre avec précaution.
 - Plusieurs échantillons (samples) donnent une idée de la variabilité.
 
-**Étapes suivantes** : Process predicted model (Phenix), Rigid-body fit (ChimeraX), Dock in map (Phenix)
+**Étapes suivantes** : Process predicted model (Phenix), Fit in map (rigid body), Rigid-body fit (ChimeraX), Dock in map (Phenix)
 
 ### CryoAtom2 build
 
@@ -1150,6 +1150,35 @@ Recherche globale de la position d'un modèle (ou d'un domaine) dans la carte (p
 - Dockez domaine par domaine si l'assemblage diffère de la prédiction, puis fusionnez.
 
 **Étapes suivantes** : Real-space refinement (Phenix), Merge models
+
+### Fit in map (rigid body)
+
+`fit_in_map` — intégré (aucun logiciel externe)
+
+Placement de corps rigide d'un modèle, d'une carte ou d'un masque dans une carte, intégré (sans ChimeraX), avec l'algorithme de « fitmap » de ChimeraX : à partir de la position réglée à la main dans le visualiseur 3D (Move), optimisation locale de la valeur moyenne de la carte aux atomes, ou de l'overlap / corrélation de la carte simulée du modèle à une résolution, ou recherche depuis des placements aléatoires.
+
+**Quand l'utiliser**
+
+- Placer un modèle prédit (AlphaFold, ColabFold, Boltz) ou un domaine dans la densité avant l'affinement.
+- Superposer une carte de raffinement local, un masque ou une autre carte sur la carte consensus (sortie sur sa grille).
+- Écrire la position d'un objet déplacé à la souris dans le visualiseur (« Save as job » de Move & fit).
+
+**À éviter / pièges**
+
+- Changement de conformation important : il faut de la flexibilité (ISOLDE, real-space refine avec morphing).
+- Recherche globale d'un petit domaine dans une très grande carte : partez d'une position approchée (à la main) ou limitez le rayon de recherche.
+
+**Entrées conseillées** : Le modèle (ou la carte / le masque) à placer, et la carte cible ; la position du visualiseur est remplie par « Save as job » dans Move & fit.
+
+**Conseils**
+
+- Résolution 0 : ajustement des atomes dans la densité (défaut de ChimeraX) ; 6-10 Å avec « correlation » pour un modèle encore loin de sa place ou une carte à basse résolution.
+- Modèle à plus de 3-4 Å de sa place : une résolution de 6-8 Å (la carte simulée porte plus loin) ; « Then fit the atoms » donne ensuite la position exacte.
+- Recherche : 50-100 placements aléatoires ; « Search radius » pour rester près de la position donnée.
+- « Chains fitted » : le fit ne regarde que ces chaînes (un domaine, une sous-unité), mais tout le modèle est déplacé.
+- Dans le visualiseur : commande « fitmap #2 inMap #1 resolution 8 », ou le bouton Fit de Move & fit.
+
+**Étapes suivantes** : Real-space refinement (Phenix), Refinement (Servalcat), ISOLDE session, Map-model validation (Q-score, FSC), Merge models
 
 ### Identify chains (ModelAngelo HMM search)
 
@@ -1248,7 +1277,7 @@ Prépare un modèle prédit : retire les résidus de faible confiance (pLDDT), c
 
 - pLDDT minimal 70 par défaut ; baissez-le si vous perdez des régions importantes bien définies dans la carte.
 
-**Étapes suivantes** : Rigid-body fit (ChimeraX), Dock in map (Phenix)
+**Étapes suivantes** : Fit in map (rigid body), Rigid-body fit (ChimeraX), Dock in map (Phenix)
 
 ### Rigid-body fit (ChimeraX)
 

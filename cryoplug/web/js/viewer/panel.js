@@ -109,7 +109,8 @@ export function createPanel(root, ctl) {
       }),
       h('span', { class: 'vid' }, `#${item.id}`),
       h('span', { class: 'name', title: `${item.label}\n${item.path}` }, item.label),
-      h('span', { class: 'kind' }, item.kind === 'model' ? 'model' : item.series ? `series · ${item.series.frames.length}` : item.otype === 'mask' ? 'mask' : 'map'),
+      h('span', { class: 'kind', title: item.transform ? 'Moved in space (Move & fit)' : '' },
+        `${item.kind === 'model' ? 'model' : item.series ? `series · ${item.series.frames.length}` : item.otype === 'mask' ? 'mask' : 'map'}${item.transform ? ' · moved' : ''}`),
       h('button', {
         class: 'icon-btn', type: 'button', title: 'More', 'aria-label': `More actions for #${item.id}`,
         onclick: (e) => { e.stopPropagation(); popupMenu(e.currentTarget, menuItems(item)); },
@@ -136,6 +137,10 @@ export function createPanel(root, ctl) {
     if (item.kind === 'map') {
       items.push({ label: 'Show slices', action: () => ctl.showSlices(item) });
       items.push({ label: 'Large slices beside the 3D view', action: () => ctl.showSlices(item, { enlarge: true }) });
+    }
+    if (!item.series) {
+      items.push({ label: 'Move / fit in a map…', action: () => ctl.openMove(item) });
+      if (item.transform) items.push({ label: 'Back where its file puts it', action: () => ctl.resetPositions([item]) });
     }
     items.push({ label: 'Close', action: () => ctl.close(item) });
     return items;

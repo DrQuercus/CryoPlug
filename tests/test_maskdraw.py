@@ -94,6 +94,22 @@ def test_model_map_operation():
         md.draw(md.validate({"ops": [op()]}), vol)
 
 
+def test_model_moved_in_the_viewer():
+    """Zones and model maps of a model moved in the viewer: the transform relative to the map moves its atoms."""
+    vol = _two_blobs()
+    atom = np.array([[33.0, 48.0, 48.0]])  # on blob 2 (i = 20); moved by +33 Å along x: on blob 1 (i = 42)
+    shift = [[1, 0, 0, 33.0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+    zone = md.validate({"ops": [{"shape": "zone", "model": "m.pdb", "radius": 3, "matrix": shift}]})
+    core = md.draw(zone, vol, models=lambda path, sel: atom)
+    assert core[32, 32, 42] and not core[32, 32, 20]
+    mm = md.validate({"ops": [{"shape": "molmap", "model": "m.pdb", "resolution": 8, "matrix": shift}]})
+    core = md.draw(mm, vol, atoms=lambda path, sel: (atom, np.array([6.0])), molmaps=lambda *a: pytest.fail("cache used"))
+    assert core[32, 32, 42] and not core[32, 32, 20]
+    assert "moved in the viewer" in md.describe(mm["ops"][0])
+    with pytest.raises(ValueError, match="no scaling"):
+        md.validate({"ops": [{"shape": "zone", "model": "m.pdb", "matrix": [[2, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]}]})
+
+
 def test_draw_mask_job_and_preview(manager, synthetic):
     from cryoplug.server.app import create_app
     p = manager.create_project("Drawn mask")

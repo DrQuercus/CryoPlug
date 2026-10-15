@@ -465,6 +465,75 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
         return Response(content=data, media_type="application/octet-stream",
                         headers={"Content-Encoding": "gzip", "Cache-Control": "no-store"})
 
+    @app.post("/api/projects/{puid}/fit")
+    def fit_in_map(puid: str, body: dict = Body(...)) -> dict[str, Any]:
+        """Rigid-body fit for the 3D viewer, as ChimeraX's fitmap: a model, map or mask (``moving``: kind, path, its
+        current transform ``matrix`` in the viewer, contour ``level`` of a map, ``chains`` of a model) into the
+        ``target`` map (moved by ``target_matrix`` in the viewer, contour ``target_level``), locally or from
+        ``search`` random placements. Returns the new transform of the moving item and the statistics of the fit."""
+        import numpy as np
+
+        from cryoplug import fitting as ft
+        from cryoplug.masks import select_atoms
+        from cryoplug.modelio import read_structure
+        target_path = manager.safe_path(puid, str(body.get("target") or ""))
+        moving = body.get("moving") or {}
+        moving_path = manager.safe_path(puid, str(moving.get("path") or ""))
+        try:
+            item_matrix = ft.as_matrix(moving.get("matrix") or np.eye(4).tolist())
+            target_matrix = ft.as_matrix(body.get("target_matrix") or np.eye(4).tolist())
+            resolution = float(body.get("resolution") or 0)
+            metric = str(body.get("metric") or "overlap")
+            search = int(body.get("search") or 0)
+            radius = float(body.get("radius") or 0) or None
+            if metric not in ft.METRICS:
+                raise ValueError(f"metric must be one of {', '.join(ft.METRICS)}")
+            if not 0 <= search <= 100 or not 0 <= resolution <= 60:
+                raise ValueError("search: 0 to 100 random placements; resolution: 0 to 60 Å")
+            target = ft.Target(mapviews.read(target_path))
+            level_t = body.get("target_level")
+            level_t = float(level_t) if level_t is not None else ft.default_level(target.vol)
+            if moving.get("kind") == "model":
+                sel = select_atoms(read_structure(moving_path), str(moving.get("chains") or ""))
+                if not len(sel["xyz"]):
+                    raise ValueError("No atom selected")
+                if resolution > 0:
+                    points, weights = ft.simulated_points(sel["xyz"], sel["weights"], resolution)
+                elif metric != "overlap":
+                    raise ValueError("Correlation needs a resolution for a model (its simulated map); without one the "
+                                     "atoms are fitted by the average map value")
+                else:
+                    points, weights = sel["xyz"], None
+            else:
+                vol = mapviews.read(moving_path)
+                level = moving.get("level")
+                points, weights = ft.map_points(vol, float(level) if level is not None else ft.default_level(vol),
+                                                max_points=30_000)
+            start = np.linalg.inv(target_matrix) @ item_matrix  # fitted in the target map's own coordinates
+            shift, rotate = body.get("shift", True) is not False, body.get("rotate", True) is not False
+            result = ft.fit(points, weights, target, metric, start=start, search=search, radius=radius, level=level_t,
+                            shift=shift, rotate=rotate, workers=min(4, os.cpu_count() or 1))
+            if moving.get("kind") == "model" and resolution > 0 and body.get("polish"):  # then the atoms, for the exact position
+                result["polish"] = ft.fit(sel["xyz"], None, target, "overlap", start=result["matrix"], level=level_t,
+                                          shift=shift, rotate=rotate)
+        except (ValueError, TypeError, OSError) as exc:
+            raise HTTPException(400, str(exc)) from None
+
+        def clean(stats: dict[str, Any]) -> dict[str, Any]:
+            return {k: (round(v, 6) if isinstance(v, float) else v) for k, v in stats.items()}
+
+        names = str(moving.get("label") or moving_path.name), str(body.get("target_label") or target_path.name)
+        polish = result.get("polish")
+        return {
+            "matrix": ft.matrix_rows(target_matrix @ (polish or result)["matrix"]),
+            "stats": clean(result["stats"]), "before": clean(result["before"]),
+            "polish": {"stats": clean(polish["stats"]), "before": clean(polish["before"])} if polish else None,
+            "message": ft.message(*names, result) + (f"\nThen on the atoms:\n{ft.message(*names, polish)}" if polish else ""),
+            "fits": [{"matrix": ft.matrix_rows(target_matrix @ f["matrix"]), "score": round(ft.score_of(f["stats"]), 6),
+                      "hits": f["hits"], "shift": round(f["stats"]["shift"], 3), "angle": round(f["stats"]["angle"], 3),
+                      "inside": round(f["stats"].get("inside_fraction", 1.0), 4)} for f in result["fits"][:20]],
+        }
+
     @app.get("/api/projects/{puid}/map-info")
     def map_info_endpoint(puid: str, path: str) -> dict[str, Any]:
         """Header of a map (box, voxel size, origin, file size): the viewer's detail choices."""

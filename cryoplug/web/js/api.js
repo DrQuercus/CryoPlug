@@ -109,5 +109,6 @@ export const api = {
     }
     return new Uint8Array(await res.arrayBuffer());
   },
+  fit: (p, body) => request('POST', `/api/projects/${p}/fit`, body),
   bundleUrl: (p, j) => `/api/projects/${p}/jobs/${j}/interactive/bundle`,
 };

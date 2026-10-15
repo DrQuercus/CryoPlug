@@ -18,6 +18,10 @@ export const COMMAND_HELP = [
   ['volume [#id] level <v> style <s> color <c> transparency <t>', 'Several map settings at once, ChimeraX syntax (also step <n>, sdLevel, rmsLevel, encloseVolume)'],
   ['volume zone #map nearAtoms #model range <r>', 'Same as zone, ChimeraX syntax'],
   ['molmap [#model[/A,B:10-250]] <Å> [displayThreshold 0.95] [onGrid #map] [erase | keep]', 'Mask from the density simulated from a model (ChimeraX molmap): added to the mask editor, cut at the contour enclosing 95 % of it'],
+  ['move x | y | z | <vector> <Å> #id [coordinateSystem #id]', 'Move a map, mask or model in space (screen axes, or those of an item), as ChimeraX’s move … models #id'],
+  ['turn x | y | z | <vector> <degrees> #id [center x,y,z | #id] [coordinateSystem #id]', 'Rotate an item in space about its centre (or the centre given)'],
+  ['view initial [#id]', 'Put moved items back where their files put them'],
+  ['fitmap #id[/A,B] inMap #map [resolution <Å>] [metric overlap | correlation | cam] [search <n>] [radius <Å>]', 'Rigid-body fit of a model, map or mask into a map, as ChimeraX’s fitmap (atoms: average map value; with a resolution: the simulated map)'],
   ['bg black | white | gray | <colour>', 'Background (also: set bgColor white)'],
   ['slab <1–99> | slab <Å>A | slab off', 'Keep only a slab around the centre, Coot-like: % of the thickness shown, or Å (slab 12A); the cut density is drawn filled'],
   ['spin [off]', 'Rotate continuously'],
@@ -204,6 +208,114 @@ export function createCommands(ctl) {
     return names.flatMap((c) => (spans.length ? spans.map((r) => `${c}:${r}`) : [c])).join(', ');
   }
 
+  const itemArg = (word, what) => {
+    const m = /^#(\d+)$/.exec(word || '');
+    const item = m && ctl.byId(Number(m[1]));
+    if (!item) throw new Error(`${what}: an item such as #2${word ? `, not '${word}'` : ''}`);
+    return item;
+  };
+
+  // An axis of ChimeraX's move / turn: x, y, z or a vector, in the axes of the screen, or of an item (coordinateSystem).
+  function axisVector(word, frame) {
+    const unit = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[word.toLowerCase()];
+    const v = unit || word.split(',').map(Number);
+    if (v.length !== 3 || !v.every(Number.isFinite) || !Math.hypot(...v)) throw new Error(`Axis: x, y, z or a vector such as 1,0,0 — got '${word}'`);
+    if (frame) { // the axes of that item, as it is turned in the viewer
+      const m = frame.transform;
+      return m ? [0, 1, 2].map((r) => m[r * 4] * v[0] + m[r * 4 + 1] * v[1] + m[r * 4 + 2] * v[2]) : v;
+    }
+    const f = ctl.screenFrame();
+    return [0, 1, 2].map((k) => f.right[k] * v[0] + f.up[k] * v[1] + f.toward[k] * v[2]);
+  }
+
+  // move x 10 #2 · move x 10 models #2 · turn y 30 #2 center #1 coordinateSystem #1
+  async function moveTurn(kind, words) {
+    let axisWord = null;
+    let amount = null;
+    let item = null;
+    let frame = null;
+    let center = null;
+    for (let k = 0; k < words.length; k++) {
+      const w = words[k];
+      const lw = w.toLowerCase();
+      if (lw === 'models') continue;
+      if (/^#\d+$/.test(w)) { item = itemArg(w, kind); continue; }
+      if (lw === 'coordinatesystem') { frame = itemArg(words[++k], 'coordinateSystem'); continue; }
+      if (lw === 'frames') { k += 1; continue; } // ChimeraX animates the motion: here it is done at once
+      if (lw === 'center' && kind === 'turn') {
+        const v = words[++k] || '';
+        if (v.startsWith('#')) center = ctl.itemCenter(itemArg(v, 'center'));
+        else center = v.split(',').map(Number);
+        if (!center || center.length !== 3 || !center.every(Number.isFinite)) throw new Error('center: x,y,z in Å, or an item such as #1');
+        continue;
+      }
+      if (axisWord === null) { axisWord = w; continue; }
+      if (amount === null) {
+        amount = Number(w.replace(/(a|å|°|deg)$/i, ''));
+        if (!Number.isFinite(amount)) throw new Error(`${kind}: ${kind === 'move' ? 'a distance in Å' : 'an angle in degrees'}, not '${w}'`);
+        continue;
+      }
+      throw new Error(`${kind}: unexpected '${w}'`);
+    }
+    const usage = kind === 'move' ? 'move x 5 #2 (Å along the screen x axis)' : 'turn y 30 #2 (degrees about the screen y axis)';
+    if (axisWord === null || amount === null) throw new Error(usage);
+    if (!item) throw new Error(`Say which item to ${kind}: ${usage} — without an item ChimeraX moves the camera; drag with the mouse for that`);
+    const axis = axisVector(axisWord, frame);
+    if (kind === 'move') {
+      const n = Math.hypot(...axis);
+      await ctl.moveItem(item, axis.map((v) => (v / n) * amount));
+    } else {
+      await ctl.turnItem(item, axis, amount, center);
+    }
+    return null; // reported by Move & fit
+  }
+
+  // fitmap #2[/A,B] inMap #1 [resolution 8] [metric correlation] [search 20] [radius 10] [shift false] [rotate false]
+  async function fitmap(words) {
+    let item = null;
+    let target = null;
+    let chains = '';
+    const opts = {};
+    for (let k = 0; k < words.length; k++) {
+      const w = words[k];
+      const lw = w.toLowerCase();
+      const spec = /^#(\d+)(\/.+)?$/.exec(w);
+      if (lw === 'inmap' || lw === 'in') {
+        target = itemArg(words[++k], 'inMap');
+        if (target.kind !== 'map' || target.series) throw new Error(`inMap: #${target.id} is not a map`);
+      } else if (spec && !item) {
+        item = itemArg(`#${spec[1]}`, 'fitmap');
+        if (spec[2]) {
+          if (item.kind !== 'model') throw new Error(`#${item.id} is not a model: chains are chosen on models`);
+          chains = chainSelection(spec[2]);
+        }
+      } else if (['resolution', 'search', 'radius'].includes(lw)) {
+        const v = Number(words[++k]);
+        if (!Number.isFinite(v) || v < 0) throw new Error(`${w}: a number (0 or more)`);
+        opts[lw] = v;
+      } else if (lw === 'metric') {
+        const v = (words[++k] || '').toLowerCase();
+        const m = v && ['overlap', 'correlation', 'cam'].find((x) => x.startsWith(v));
+        if (!m) throw new Error('metric: overlap, correlation or cam');
+        opts.metric = m;
+      } else if (lw === 'shift' || lw === 'rotate') {
+        opts[lw] = onOff(words[++k]);
+      } else if (/^(envelope|zeros|symmetric|movewholemolecules|placement|clusterangle|clustershift|asymmetricunit|levelinside|sequence|eachmodel|listfits|logfits|maxsteps|gridstepmin|gridstepmax|subtractmaps|seed)$/.test(lw)) {
+        throw new Error(`fitmap: ${w} is not available here (supported: resolution, metric, search, radius, shift, rotate)`);
+      } else {
+        throw new Error(`fitmap: unexpected '${w}' (fitmap #2 inMap #1 resolution 8)`);
+      }
+    }
+    if (!item) throw new Error('fitmap #2 inMap #1: the item to fit first');
+    if (!target) throw new Error(`fitmap #${item.id} inMap #1: the map to fit into`);
+    if (target === item) throw new Error('An item cannot be fitted into itself');
+    if (item.kind === 'model' && !opts.resolution && opts.metric && opts.metric !== 'overlap') {
+      throw new Error(`Correlation needs a resolution for a model: fitmap #${item.id} inMap #${target.id} resolution 8 metric ${opts.metric}`);
+    }
+    await ctl.fitItem(item, target, { ...opts, chains, fromCommand: true });
+    return null; // the fit is written in the log
+  }
+
   // molmap #2/A,B 10 [displayThreshold 0.95] [onGrid #1]: ChimeraX's command, turned into a mask operation
   function molmap(words) {
     let model = null;
@@ -255,7 +367,11 @@ export function createCommands(ctl) {
     },
     show: ({ items }) => { const list = items.length ? items : ctl.items(); list.forEach((i) => ctl.setVisible(i, true)); return `Shown ${ids(list)}`; },
     hide: ({ items }) => { const list = items.length ? items : ctl.items(); list.forEach((i) => ctl.setVisible(i, false)); return `Hidden ${ids(list)}`; },
-    view: ({ items, rest }) => {
+    view: async ({ items, rest }) => {
+      if (rest[0] && /^initial$/i.test(rest[0])) { // ChimeraX: moved models back to their positions
+        const moved = await ctl.resetPositions(items.length ? items : ctl.items());
+        return moved.length ? `Back where their files put them: ${ids(moved)}` : 'Nothing was moved';
+      }
       if (rest.length) {
         const m = /^\/?([A-Za-z0-9]+)(?::(-?\d+))?$/.exec(rest[0]);
         if (!m) throw new Error(`Expected /chain or /chain:residue, e.g. /A:45 — got '${rest[0]}'`);
@@ -470,6 +586,10 @@ export function createCommands(ctl) {
   handlers.spheres = ({ items }) => { const ms = models(items); ms.forEach((m) => ctl.setDisplay(m, 'spheres')); return `Spheres for ${ids(ms)}`; };
   handlers.windowsize = () => 'The view follows the window size';
   handlers.molmap = ({ words }) => molmap(words);
+  handlers.fitmap = ({ words }) => fitmap(words);
+  handlers.fit = handlers.fitmap;
+  handlers.move = ({ words }) => moveTurn('move', words);
+  handlers.turn = ({ words }) => moveTurn('turn', words);
 
   async function run(line) {
     const words = line.trim().split(/\s+/).filter(Boolean);
@@ -477,7 +597,8 @@ export function createCommands(ctl) {
     const verb = words.shift().toLowerCase();
     const handler = handlers[verb];
     if (!handler) throw new Error(`Unknown command '${verb}'. Type help for the list.`);
-    return handler(verb === 'molmap' ? { words } : split(words)); // molmap reads #2/A,B and onGrid #1 itself
+    // these read #2/A,B, inMap #1, center #1… themselves
+    return handler(['molmap', 'fitmap', 'fit', 'move', 'turn'].includes(verb) ? { words } : split(words));
   }
 
   return { run };

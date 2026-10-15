@@ -1,5 +1,6 @@
 // Mol* adapter: the rendering engine behind the CryoPlug viewer. Every Mol*-specific call lives here,
 // so the interface (models panel, command line, slices) only handles plain item objects.
+import { apply as applyRigid, columnMajor, isIdentity } from './rigid.js';
 
 const VIEWER_OPTIONS = {
   layoutIsExpanded: false,
@@ -113,7 +114,7 @@ function mapColorTheme(volume, s) {
       name: 'external-volume',
       params: {
         ...defaultsOf(theme.getParams({ volume })),
-        volume: { ref: by.refs.volume },
+        volume: { ref: hasCell(by.refs.xform) ? by.refs.xform : by.refs.volume }, // moved with the map it colours
         coloring: { name: 'absolute-value', params: { domain: { name: 'custom', params: [by.min, by.max] }, list: { kind: 'interpolate', colors: RESOLUTION_COLORS } } },
         defaultColor: s.color,
       },
@@ -174,13 +175,21 @@ export function showMap(item) {
 }
 
 async function showMapNow(item) {
+  const moved = !isIdentity(item.transform);
+  if (moved && item.colorBy && !hasCell(item.colorBy.refs.xform)) await placeVolume(item.colorBy, item.transform);
   const params = isosurfaceParams(item.volume, item);
   if (hasCell(item.refs.repr)) {
     await plugin.build().to(item.refs.repr).update(params).commit();
   } else {
-    const update = plugin.build().to(item.refs.volume).apply(lib.plugin.StateTransforms.Representation.VolumeRepresentation3D, params);
-    item.refs.repr = update.ref;
-    await update.commit();
+    // a map moved in space: its isosurface hangs below the transform of its data (a new copy of a map gets it again)
+    const b = plugin.build();
+    let parent = b.to(item.refs.volume);
+    if (moved) {
+      parent = parent.apply(lib.plugin.StateTransforms.Volume.VolumeTransform, transformParams(item.transform));
+      item.refs.xform = parent.ref;
+    }
+    item.refs.repr = parent.apply(lib.plugin.StateTransforms.Representation.VolumeRepresentation3D, params).ref;
+    await b.commit();
   }
   if (!item.visible) setHidden(item.refs.repr, true);
 }
@@ -325,7 +334,7 @@ export async function clearDistances() {
 }
 
 export function residueLoci(item, chain, resno) {
-  const structure = cellData(item.refs.structure);
+  const structure = shownStructure(item);
   if (!structure) return null;
   const { Queries, StructureSelection, StructureProperties: SP, QueryContext } = lib.structure;
   const query = Queries.generators.residues({
@@ -384,6 +393,80 @@ export function describeLoci(loci) {
   }
   if (loci.volume) return { kind: 'volume', volume: loci.volume };
   return null;
+}
+
+// --------------------------------------------------------------- positions
+// Items moved in space (ChimeraX's move, turn and fitmap): a transform of the data under the representations, so that
+// picking, distances, centring and colouring follow. Maps: Mol*'s VolumeTransform above their isosurface (also above
+// the map colouring them); models: TransformStructureConformation above their components (only the instance
+// matrices of the drawn geometry change, nothing is recomputed). `m`: 16 numbers row by row, or null.
+const transformParams = (m) => ({ transform: { name: 'matrix', params: { data: columnMajor(m || [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]), transpose: false } } });
+
+async function placeVolume(holder, m) {
+  if (hasCell(holder.refs.xform)) {
+    await plugin.build().to(holder.refs.xform).update(transformParams(m)).commit();
+    return;
+  }
+  const update = plugin.build().to(holder.refs.volume).apply(lib.plugin.StateTransforms.Volume.VolumeTransform, transformParams(m));
+  holder.refs.xform = update.ref;
+  await update.commit();
+}
+
+export async function setTransform(item, m) {
+  item.transform = isIdentity(m) ? null : [...m];
+  if (item.kind === 'map') {
+    if (item.colorBy) await placeVolume(item.colorBy, item.transform);
+    if (hasCell(item.refs.volume)) await placeVolume(item, item.transform);
+    if (item.colorBy) await showMap(item); // the colour theme then reads the moved colouring map
+    return;
+  }
+  if (hasCell(item.refs.xform)) {
+    await plugin.build().to(item.refs.xform).update(transformParams(item.transform)).commit();
+  } else if (hasCell(item.refs.structure)) {
+    const update = plugin.build().to(item.refs.structure).apply(lib.plugin.StateTransforms.Model.TransformStructureConformation, transformParams(item.transform));
+    item.refs.xform = update.ref;
+    await update.commit();
+  }
+}
+
+// The structure drawn (moved or not) and the volume drawn: what picking returns for this item.
+export const shownStructure = (item) => (hasCell(item.refs?.xform) ? cellData(item.refs.xform) : cellData(item.refs?.structure)) || item.structure;
+export const shownVolume = (item) => (hasCell(item.refs?.xform) ? cellData(item.refs.xform) : item.volume);
+
+// Centre (Å) of an item as it is drawn: the centre of its atoms, or of the voxels above its level.
+export function itemCenter(item) {
+  const sphere = sphereOf(item);
+  return sphere ? [...sphere.center] : null;
+}
+
+// Mouse drags move items instead of the camera (on: true), or the camera again.
+let cameraBindings = null;
+export function setCameraDrag(on) {
+  const trackball = plugin.canvas3d.attribs.trackball;
+  if (!on) {
+    cameraBindings ||= { ...trackball.bindings };
+    const off = { ...trackball.bindings };
+    for (const key of ['dragRotate', 'dragRotateZ', 'dragPan', 'dragZoom', 'dragFocus', 'dragFocusZoom']) off[key] = { triggers: [], action: '', description: '' };
+    plugin.canvas3d.setAttribs({ trackball: { bindings: off } });
+  } else if (cameraBindings) {
+    plugin.canvas3d.setAttribs({ trackball: { bindings: cameraBindings } });
+    cameraBindings = null;
+  }
+}
+
+// The axes of the screen in the scene (right, up, towards the viewer) and the size of a pixel (Å) at a depth.
+export function screenFrame(at) {
+  const c = plugin.canvas3d.camera.getSnapshot();
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const norm = (v) => { const n = Math.hypot(...v) || 1; return v.map((x) => x / n); };
+  const dir = norm(sub([...c.target], [...c.position])); // into the screen
+  const right = norm(cross(dir, [...c.up]));
+  const up = cross(right, dir);
+  const depth = at ? Math.max(1, (at[0] - c.position[0]) * dir[0] + (at[1] - c.position[1]) * dir[1] + (at[2] - c.position[2]) * dir[2])
+    : Math.hypot(...sub([...c.target], [...c.position]));
+  const height = canvas().clientHeight || 600;
+  return { right, up, toward: dir.map((v) => -v), pixel: (2 * depth * Math.tan(c.fov / 2)) / height };
 }
 
 export function onHover(fn) {
@@ -493,8 +576,15 @@ function union(spheres) {
   return { center: c, radius: r };
 }
 
-const sphereOf = (item) => (item.kind === 'map' ? item.volume && isoSphere(item)
-  : item.structure && lib.loci.Loci.getBoundingSphere(lib.structure.Structure.toStructureElementLoci(item.structure)));
+function sphereOf(item) {
+  if (item.kind !== 'map') {
+    const structure = shownStructure(item);
+    return structure && lib.loci.Loci.getBoundingSphere(lib.structure.Structure.toStructureElementLoci(structure));
+  }
+  const sphere = item.volume && isoSphere(item);
+  if (!sphere || isIdentity(item.transform)) return sphere;
+  return { center: applyRigid(item.transform, [...sphere.center]), radius: sphere.radius }; // a moved map
+}
 
 // Sphere around what is shown: the models and the isosurfaces of the maps.
 export function contentSphere(items) {
@@ -527,7 +617,7 @@ export function reapplySlab(delayMs = 0) {
 
 // Frame the isosurfaces of these maps; false when none is above its level.
 export function frameMaps(items, durationMs = 250) {
-  const found = items.filter((i) => i.kind === 'map' && i.visible && i.volume).map(isoSphere).filter(Boolean);
+  const found = items.filter((i) => i.kind === 'map' && i.visible && i.volume).map(sphereOf).filter(Boolean);
   if (!found.length) return false;
   const sphere = union(found);
   plugin.managers.camera.focusSphere(sphere, { durationMs, extraRadius: 2 + 0.1 * sphere.radius });
@@ -547,7 +637,7 @@ export function keepInView(item) {
 
 export function focusItem(item) {
   if (item.kind === 'model') {
-    const structure = cellData(item.refs.structure);
+    const structure = shownStructure(item);
     if (structure) plugin.managers.camera.focusLoci(lib.structure.Structure.toStructureElementLoci(structure), { durationMs: 300 });
     return;
   }

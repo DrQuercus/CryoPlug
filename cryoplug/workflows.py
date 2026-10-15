@@ -105,7 +105,7 @@ WORKFLOWS: list[dict[str, Any]] = [
     {
         "id": "alphafold_docking",
         "title": "Predicted model → deposition (AlphaFold)",
-        "description": ("CryoSPARC refinement + AlphaFold DB / file model → trim low pLDDT → global rigid-body fit → "
+        "description": ("CryoSPARC refinement + AlphaFold DB / file model → trim low pLDDT → global rigid-body fit (built-in, 100 placements of the 8 Å simulated map) → "
                         "refinement → ISOLDE → final refinement → validation → deposition package."),
         "nodes": [
             IMPORT_NODE,
@@ -113,7 +113,8 @@ WORKFLOWS: list[dict[str, Any]] = [
              "ask": ["source", "accession", "path"]},
             {"id": "seq", "type": "import_sequence", "title": "Sample sequence", "ask": ["fasta", "uniprot"], "optional": True},
             {"id": "trim", "type": "phenix_process_predicted_model", "inputs": {"model": ["model", "model"]}, "optional": True},
-            {"id": "fit", "type": "chimerax_fitmap", "title": "Global fit in map", "params": {"search": 200},
+            {"id": "fit", "type": "fit_in_map", "title": "Global fit in map",
+             "params": {"search": 100, "resolution": 8.0, "metric": "correlation"},
              "inputs": {"model": [["trim", "model"], ["model", "model"]], "map": ["import", "map_sharp"]}},
             {"id": "refine1", "type": "phenix_real_space_refine", "title": "Initial refinement",
              "params": {"run": "minimization_global+rigid_body+local_grid_search+morphing+simulated_annealing+adp"},

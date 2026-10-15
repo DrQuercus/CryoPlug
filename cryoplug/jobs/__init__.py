@@ -52,6 +52,7 @@ def _load() -> None:
         localmaps,
         maptools,
         masking,
+        placement,
         refinement,
         relion,
         series,

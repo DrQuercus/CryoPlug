@@ -85,6 +85,12 @@ def validate(recipe: Any) -> dict[str, Any]:
             selection = str(op.get("selection") or "")
             parse_selection(selection)  # readable error now rather than in the job
             clean.update(model=model, selection=selection)
+            if op.get("matrix") is not None:  # the model moved in the viewer: where it is seen on the map
+                from cryoplug import fitting
+                try:
+                    clean["matrix"] = fitting.matrix_rows(fitting.as_matrix(op["matrix"]))
+                except ValueError as exc:
+                    raise ValueError(f"{where}: {exc}") from None
             if shape == "zone":
                 clean["radius"] = _num(op.get("radius", 3), f"{where} radius", 0.1, 100)
             else:
@@ -119,10 +125,11 @@ def describe(op: dict[str, Any]) -> str:
         return f"{verb} connected region at level {op['level']:.4g}" + (f" (low-pass {op['lowpass']:g} Å)" if op["lowpass"] else "")
     if s == "map":
         return f"{verb} density above {op['level']:.4g}" + (f" (low-pass {op['lowpass']:g} Å)" if op["lowpass"] else "")
+    moved = " (moved in the viewer)" if op.get("matrix") else ""
     if s == "zone":
-        return f"{verb} {op['radius']:g} Å around {op['selection'] or 'all atoms'} of {op['model'].split('/')[-1]}"
+        return f"{verb} {op['radius']:g} Å around {op['selection'] or 'all atoms'} of {op['model'].split('/')[-1]}{moved}"
     if s == "molmap":
-        return (f"{verb} model map of {op['selection'] or 'all atoms'} of {op['model'].split('/')[-1]} at {op['resolution']:g} Å "
+        return (f"{verb} model map of {op['selection'] or 'all atoms'} of {op['model'].split('/')[-1]}{moved} at {op['resolution']:g} Å "
                 f"(molmap), contour enclosing {op['enclose']:g} % of its density")
     return f"{verb} mask {op['path'].split('/')[-1]}"
 
@@ -247,13 +254,14 @@ def draw(recipe: dict[str, Any], base: MapVolume, models: Callable[[str, str], n
         elif s == "zone":
             if models is None:
                 raise ValueError("Zones need the model")
-            xyz = models(op["model"], op["selection"])
+            xyz = _placed(op, models(op["model"], op["selection"]))
             part = zone_mask(base, xyz, op["radius"]) if len(xyz) else np.zeros_like(core)
         elif s == "molmap":
-            if molmaps is not None:
+            if molmaps is not None and not op.get("matrix"):
                 density = molmaps(op["model"], op["selection"], op["resolution"])
             elif atoms is not None:
-                density = molmap(base, *atoms(op["model"], op["selection"]), op["resolution"])
+                xyz, weights = atoms(op["model"], op["selection"])
+                density = molmap(base, _placed(op, xyz), weights, op["resolution"])
             else:
                 raise ValueError("Model maps need the model")
             level = level_enclosing(density, op["enclose"] / 100.0)
@@ -278,6 +286,14 @@ def draw(recipe: dict[str, Any], base: MapVolume, models: Callable[[str, str], n
         else:
             core &= part
     return core
+
+
+def _placed(op: dict[str, Any], xyz: np.ndarray) -> np.ndarray:
+    """Atom positions where the viewer showed the model (its transform relative to the map), as they are otherwise."""
+    if not op.get("matrix") or not len(xyz):
+        return xyz
+    from cryoplug import fitting
+    return fitting.apply(np.asarray(op["matrix"], dtype=np.float64), xyz)
 
 
 def finish(core: np.ndarray, voxel: np.ndarray, recipe: dict[str, Any]) -> np.ndarray:
