@@ -35,6 +35,7 @@ class MapViews:
         self._recent: tuple[tuple[str, int], MapVolume, float] | None = None
         self._reading: dict[tuple[str, int], _Reading] = {}
         self._timer: threading.Timer | None = None
+        self._preview_base: tuple[tuple[str, int, int], MapVolume, dict] | None = None  # binned map of the mask editor
 
     # ---------------------------------------------------------------- reading
     def read(self, p: Path) -> MapVolume:
@@ -173,6 +174,47 @@ class MapViews:
         key = (f"v{CACHE_VERSION}:zone:{mp.resolve()}:{mp.stat().st_mtime_ns}:{md.resolve()}:{md.stat().st_mtime_ns}:"
                f"{radius:.2f}:{factor}:{lowpass}:{enc}")
         return self.cached(puid, key, build, enc)
+
+
+    def mask_preview(self, puid: str, p: Path, recipe: dict[str, Any], max_box: int,
+                     resolve: Callable[[str], Path]) -> bytes:
+        """A mask drawn in the viewer, computed on a binned copy of its map (8-bit MRC, gzip-compressed): what the
+        mask editor shows while drawing. ``resolve`` turns a project path (model, mask) into a file."""
+        import gzip
+        import tempfile
+
+        from cryoplug import maskdraw
+        factor = self.factor(p, max_box)
+        key = (str(p.resolve()), p.stat().st_mtime_ns, factor)
+        with self._lock:
+            cached = self._preview_base if self._preview_base and self._preview_base[0] == key else None
+        if cached is None:
+            base = bin_map(self.read(p), factor)
+            cached = (key, base, {})
+            with self._lock:
+                self._preview_base = cached
+        base, memo = cached[1], cached[2]
+
+        def models(path: str, selection: str):
+            f = resolve(path)
+            k = ("model", str(f), f.stat().st_mtime_ns, selection)
+            if k not in memo:
+                memo[k] = maskdraw.atom_positions(str(f), selection)
+            return memo[k]
+
+        def masks(path: str):
+            f = resolve(path)
+            k = ("mask", str(f), f.stat().st_mtime_ns)
+            if k not in memo:
+                memo[k] = maskdraw.resample_mask(str(f), base)
+            return memo[k]
+
+        core = maskdraw.draw(recipe, base, models=models, masks=masks)
+        shown = base.like(maskdraw.preview(core, base.voxel, recipe))
+        with tempfile.NamedTemporaryFile(suffix=".mrc") as tmp:
+            write_view_map(shown, tmp.name, "i8")
+            raw = Path(tmp.name).read_bytes()
+        return gzip.compress(raw, compresslevel=3)
 
 
 class _Reading:

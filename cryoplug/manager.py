@@ -571,7 +571,8 @@ class Manager:
                 broken.append(f"{ref['job']} {parent['status']}")
                 continue
             if parent["status"] != "completed":
-                waiting.append(ref["job"])
+                # a parent never queued (e.g. a mask still to be drawn in the 3D viewer) waits for its user
+                waiting.append(f"{ref['job']} (not queued yet)" if parent["status"] == "building" else ref["job"])
                 continue
             out = next((o for o in parent["outputs"] if o["name"] == ref["output"]), None)
             if out is None:

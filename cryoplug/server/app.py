@@ -450,6 +450,21 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
         mp, md = manager.safe_path(puid, map), manager.safe_path(puid, model)
         return map_response(request, mapviews.zone(puid, mp, md, radius, max_box, enc, lowpass))
 
+    @app.post("/api/projects/{puid}/mask-preview")
+    def mask_preview(puid: str, body: dict = Body(...)) -> Response:
+        """The mask being drawn in the 3D viewer (shapes, regions, zones of a recipe) computed on a binned copy of its
+        map, at most ``max_box`` voxels per side: 0/1 values as an 8-bit MRC file, gzip-compressed."""
+        from cryoplug import maskdraw
+        path = manager.safe_path(puid, str(body.get("map") or ""))
+        try:
+            recipe = maskdraw.validate({"ops": body.get("ops") or [], "dilate": body.get("dilate", 0), "soft": 0})
+            max_box = max(48, min(int(body.get("max_box") or 128), 256))
+            data = mapviews.mask_preview(puid, path, recipe, max_box, lambda rel: manager.safe_path(puid, rel))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from None
+        return Response(content=data, media_type="application/octet-stream",
+                        headers={"Content-Encoding": "gzip", "Cache-Control": "no-store"})
+
     @app.get("/api/projects/{puid}/map-info")
     def map_info_endpoint(puid: str, path: str) -> dict[str, Any]:
         """Header of a map (box, voxel size, origin, file size): the viewer's detail choices."""

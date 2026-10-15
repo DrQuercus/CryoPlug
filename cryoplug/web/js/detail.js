@@ -137,6 +137,14 @@ function renderHeaderOnly() {
   }
   const view = job.status === 'completed' ? jobViewItems(job) : [];
   if (view.length > 0) add('view', h('a', { class: 'btn', href: viewerUrl(view), target: '_blank', rel: 'noopener', title: 'Open the maps and models of this job in the 3D viewer' }, icon('eye'), 'View 3D'));
+  if (job.type === 'draw_mask') {
+    const href = maskEditorFor(job);
+    if (href) {
+      add('maskedit', h('a', { class: `btn${job.status === 'building' ? ' primary' : ''}`, href, target: '_blank', rel: 'noopener',
+        title: job.status === 'building' ? 'Draw the mask on the map in the 3D viewer, then “Save as job” there queues this job'
+          : 'Open the drawing in the 3D viewer (saving it again makes a new job)' }, icon('edit'), job.status === 'building' ? 'Draw in 3D' : 'Mask editor'));
+    }
+  }
   actions.push(h('button', {
     class: 'btn icon-only', type: 'button', title: 'More actions', 'aria-label': `More actions for ${job.uid}`, 'aria-haspopup': 'menu',
     onclick: (e) => popupMenu(e.currentTarget, jobMenuItems(job, e.currentTarget).filter((it) => !shown.includes(it.key))),
@@ -211,6 +219,11 @@ export function jobMenuItems(job, anchor, { withOpen = false } = {}) {
   }
   const view = job.status === 'completed' ? jobViewItems(job) : [];
   if (view.length) items.push({ key: 'view', label: 'View in 3D', ic: 'eye', action: () => window.open(viewerUrl(view), '_blank', 'noopener') });
+  const maskHref = maskEditorFor(job);
+  if (maskHref) {
+    items.push({ key: 'maskedit', label: job.type === 'draw_mask' ? 'Open in the mask editor' : 'Draw a mask on this map', ic: 'edit',
+      action: () => window.open(maskHref, '_blank', 'noopener') });
+  }
   items.push({ separator: true });
   items.push({ key: 'clone', label: 'Clone', ic: 'copy', action: () => jobOps.clone(job) });
   if (['completed', 'failed', 'killed'].includes(job.status)) items.push({ key: 'clear', label: 'Clear (back to building)', ic: 'undo', action: () => jobOps.clear(job) });
@@ -263,6 +276,36 @@ function continueWith(job, typeName, params = null) {
 // ---------------------------------------------------------------- overview
 export function viewerUrl(items) {
   return `viewer.html#${encodeURIComponent(JSON.stringify({ project: state.project.uid, items }))}`;
+}
+
+// The input of a job given as an output of its parent: { path, label } (job lists carry only the references).
+function inputOutput(job, slot) {
+  const ref = job.inputs && job.inputs[slot];
+  const out = ref && (state.jobsByUid[ref.job]?.outputs || []).find((o) => o.name === ref.output);
+  return out ? { path: out.path, label: `${ref.job} ${out.label || out.name}` } : null;
+}
+
+function maskEditorFor(job) {
+  if (job.type === 'draw_mask') {
+    const map = inputOutput(job, 'map');
+    if (!map) return null;
+    const model = inputOutput(job, 'model');
+    return maskEditorLink({ mapPath: map.path, mapLabel: map.label, modelPath: model?.path, modelLabel: model?.label, job });
+  }
+  const map = job.status === 'completed' && (job.outputs || []).find((o) => o.type === 'map');
+  return map ? maskEditorLink({ mapPath: map.path, mapLabel: `${job.uid} ${map.label || map.name}` }) : null;
+}
+
+function maskEditorLink(opts) {
+  const items = [{ kind: 'map', path: opts.mapPath, label: opts.mapLabel || opts.mapPath.split('/').pop() }];
+  if (opts.modelPath) items.push({ kind: 'model', path: opts.modelPath, label: opts.modelLabel || opts.modelPath.split('/').pop() });
+  const mask = { base: opts.mapPath };
+  if (opts.job) {
+    let ops = [];
+    try { ops = JSON.parse(opts.job.params?.recipe || '{}').ops || []; } catch { ops = []; }
+    Object.assign(mask, { ops, dilate: opts.job.params?.dilate, soft: opts.job.params?.soft, job: opts.job.uid });
+  }
+  return `viewer.html#${encodeURIComponent(JSON.stringify({ project: state.project.uid, items, mask }))}`;
 }
 
 // Everything of a job the 3D viewer can show (its maps, or its model with the map it was fitted in);

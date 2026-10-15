@@ -211,6 +211,55 @@ WORKFLOWS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "relion_focused_refinement",
+        "title": "Focused refinement with signal subtraction (RELION)",
+        "description": ("Local refinement of a region in RELION, from a CryoSPARC consensus refinement: particles and maps "
+                        "imported → short gold-standard refinement of the whole complex with local searches (the RELION "
+                        "model the subtraction needs) → mask of the region drawn in the 3D viewer (open the job and click "
+                        "“Draw in 3D”: the rest of the chain waits for it) → signal subtraction, re-centred and re-boxed → "
+                        "focused refinement with Blush, post-processed. Every map comes back on the grid of the consensus "
+                        "map, ready for LocScale, model building or a composite map."),
+        "nodes": [
+            {"id": "import", "type": "import_cryosparc", "title": "Import CryoSPARC consensus refinement",
+             "ask": ["job_dir", "symmetry"]},
+            {"id": "consensus", "type": "relion_local_refine", "title": "RELION refinement of the whole complex",
+             "inputs": {"particles": ["import", "particles"], "map": ["import", "map"], "mask": ["import", "mask"]},
+             "ask": ["mpi", "threads", "gpus"]},
+            {"id": "focus", "type": "draw_mask", "title": "Mask of the region (draw it in 3D)",
+             "inputs": {"map": ["import", "map"]}, "ask": ["dilate", "soft"]},
+            {"id": "subtract", "type": "relion_subtract", "title": "Signal subtraction around the region",
+             "inputs": {"particles": ["consensus", "particles"], "mask": ["focus", "mask"]}, "ask": ["expand_symmetry"]},
+            {"id": "focused", "type": "relion_local_refine", "title": "RELION focused refinement", "params": {"blush": True},
+             "inputs": {"particles": ["subtract", "particles"], "map": ["consensus", "map"], "mask": ["focus", "mask"]},
+             "ask": ["blush", "mpi", "threads", "gpus"]},
+            {"id": "locscale", "type": "locscale", "title": "LocScale of the focused map",
+             "inputs": {"half_maps": ["focused", "half_maps"], "mask": ["focused", "mask"]}, "optional": True, "default": False},
+        ],
+    },
+    {
+        "id": "relion_focused_classification",
+        "title": "Focused 3D classification (RELION)",
+        "description": ("States of one region: CryoSPARC consensus → RELION refinement with local searches → mask of the "
+                        "region drawn in the 3D viewer → signal subtraction (after symmetry expansion for one copy of a "
+                        "symmetric complex) → 3D classification without alignment, focused by the mask. Each class gives a "
+                        "map and its particles: refine them locally, or reconstruct them at full size."),
+        "nodes": [
+            {"id": "import", "type": "import_cryosparc", "title": "Import CryoSPARC consensus refinement",
+             "ask": ["job_dir", "symmetry"]},
+            {"id": "consensus", "type": "relion_local_refine", "title": "RELION refinement of the whole complex",
+             "inputs": {"particles": ["import", "particles"], "map": ["import", "map"], "mask": ["import", "mask"]},
+             "ask": ["mpi", "threads", "gpus"]},
+            {"id": "focus", "type": "draw_mask", "title": "Mask of the region (draw it in 3D)",
+             "inputs": {"map": ["import", "map"]}, "ask": ["dilate", "soft"]},
+            {"id": "subtract", "type": "relion_subtract", "title": "Signal subtraction around the region",
+             "inputs": {"particles": ["consensus", "particles"], "mask": ["focus", "mask"]}, "ask": ["expand_symmetry"]},
+            {"id": "classify", "type": "relion_class3d", "title": "Focused classification",
+             "params": {"classes": 4, "tau2_fudge": 10.0},
+             "inputs": {"particles": ["subtract", "particles"], "map": ["consensus", "map"], "mask": ["focus", "mask"]},
+             "ask": ["classes", "tau2_fudge", "iterations"]},
+        ],
+    },
+    {
         "id": "validate_deposit",
         "title": "Validate & prepare deposition",
         "description": "Bring an existing model and maps, run all validation tools and assemble the deposition package.",

@@ -1,6 +1,8 @@
 """Mask creation (built-in): soft-edged masks for FSC, local refinement, LocScale, spIsoNet, signal subtraction."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from cryoplug.jobs import register
@@ -214,3 +216,123 @@ class CreateMask(JobType):
             {"name": "Voxels (log10)", "x": centres, "y": logc},
             {"name": "Threshold", "x": [threshold, threshold], "y": [0, top]},
         ], x_label="Map value", y_label="log10(voxels + 1)")
+
+
+@register
+class DrawMask(JobType):
+    name = "draw_mask"
+    title = "Mask drawn in the 3D viewer"
+    category = "Map processing"
+    software = ["CryoPlug"]
+    cpus = 2
+    description = ("Mask drawn by hand on a map in the 3D viewer, as in Chimera: spheres, boxes and cylinders placed with "
+                   "the mouse, connected regions of density picked at the contour level, zones around chains, the "
+                   "density above a level or an existing mask, added, erased or intersected; then dilated and given a "
+                   "soft edge. Computed here on the full grid of the map, with its centre of mass and the box to "
+                   "re-centre particles on it (signal subtraction).")
+    inputs = [
+        Slot("map", ("map",), "Map", help="The map the mask is drawn on: it sets the box and the pixel size."),
+        Slot("model", ("model",), "Model", required=False, help="For zones around chains (drawn in the viewer)."),
+    ]
+    params = [
+        Param("recipe", "text", "", label="Drawing (from the 3D viewer)", advanced=True,
+              help="Written by the mask editor of the 3D viewer (Mask button): the shapes and regions, in Å."),
+        Param("dilate", "float", 2.0, label="Dilation", unit="Å", min=0.0, max=100.0,
+              help="The drawn region is grown by this distance."),
+        Param("soft", "float", 6.0, label="Soft edge", unit="Å", min=0.0, max=100.0,
+              help="Raised-cosine fall-off from 1 to 0 beyond the dilation (≥ 6 Å for a refinement mask)."),
+        Param("invert", "bool", False, label="Invert", advanced=True, help="1 outside the drawn region, 0 inside."),
+        Param("output_name", "str", "mask_drawn", label="Output file name", advanced=True, path_kind="name"),
+    ]
+    outputs = [OutputDef("mask", "mask", "Drawn mask")]
+
+    @classmethod
+    def validate(cls, params, connected):
+        import json
+
+        from cryoplug import maskdraw
+        text = str(params.get("recipe") or "").strip()
+        if not text:
+            return ["Draw the mask first: open the map in the 3D viewer and use the Mask tool (or 'Open mask editor' on "
+                    "this job)"]
+        try:
+            recipe = maskdraw.validate(json.loads(text))
+        except (ValueError, TypeError) as exc:
+            return [f"Drawing: {exc}"]
+        if not recipe["ops"]:
+            return ["The drawing is empty: add at least one shape or region in the mask editor"]
+        if not any(op["mode"] == "add" for op in recipe["ops"]):
+            return ["The drawing only erases or intersects: add a shape, a region or the map density first"]
+        return []
+
+    def run(self, ctx: JobContext) -> None:
+        import json
+
+        from cryoplug import maskdraw
+        from cryoplug import masks as mk
+        from cryoplug import relion as rl
+        from cryoplug.imaging import write_png
+        p = ctx.params
+        recipe = maskdraw.validate({**json.loads(p["recipe"]), "dilate": p["dilate"], "soft": p["soft"]})
+        vol = MapVolume.read(ctx.require("map").path)
+        model = ctx.input("model")
+
+        def inside_project(path: str) -> Path:
+            target = ctx.abs(path)
+            try:
+                target.resolve().relative_to(ctx.project_dir.resolve())
+            except ValueError:
+                if not (model and Path(model.path).resolve() == target.resolve()):
+                    raise JobError(f"{path} is not a file of this project") from None
+            if not target.exists():
+                raise JobError(f"{path} does not exist any more")
+            return target
+
+        def models(path: str, selection: str) -> np.ndarray:
+            try:
+                return maskdraw.atom_positions(str(inside_project(path)), selection)
+            except ValueError as exc:
+                raise JobError(f"Zone around {selection or 'the model'}: {exc}") from None
+
+        def masks(path: str) -> np.ndarray:
+            return maskdraw.resample_mask(str(inside_project(path)), vol)
+
+        ctx.progress(0.1, f"Drawing {len(recipe['ops'])} operation{'s' if len(recipe['ops']) > 1 else ''} on the full grid")
+        try:
+            core = maskdraw.draw(recipe, vol, models=models, masks=masks)
+        except ValueError as exc:
+            raise JobError(str(exc)) from None
+        if not core.any():
+            raise JobError("The drawn region is empty on the map's grid (shapes outside the box?)")
+        ctx.progress(0.6, "Dilation and soft edge")
+        mask = maskdraw.finish(core, vol.voxel, recipe)
+        if p["invert"]:
+            mask = 1.0 - mask
+        out = vol.like(mask).write(ctx.path(f"{p['output_name'] or 'mask_drawn'}.mrc"))
+        stats = mk.statistics(mask, vol.voxel)
+        com = rl.center_of_mass(mask)  # voxels from the box centre (x, y, z)
+        box = vol.shape_xyz[0]
+        com_a = vol.origin + (np.array(vol.shape_xyz) // 2 + com) * vol.voxel
+        suggested = rl.suggest_box(mask, np.round(com), box) if vol.shape_xyz[0] == vol.shape_xyz[1] == vol.shape_xyz[2] else None
+        rows = [
+            {"label": "Volume (at 0.5)", "value": f"{stats['volume_nm3']:,.0f} nm³"},
+            {"label": "Protein-equivalent mass", "value": mk.format_mass(stats["mass_kda"])},
+            {"label": "Fraction of the box", "value": f"{100 * stats['fraction']:.1f} %"},
+            {"label": "Centre of mass", "value": f"({', '.join(f'{c:.1f}' for c in com_a)}) Å · "
+                                                 f"({', '.join(f'{c:+.1f}' for c in com)}) voxels from the box centre"},
+            {"label": "Edge", "value": f"dilation {p['dilate']:g} Å + soft edge {p['soft']:g} Å"},
+        ]
+        if suggested:
+            rows.append({"label": "Box for re-centred particles", "value": f"{suggested} px ({suggested * vol.pixel_size:.0f} Å)"})
+        ctx.add_metrics("Mask", rows)
+        ctx.add_table("Drawing", ["#", "Operation"], [[i + 1, maskdraw.describe(op)] for i, op in enumerate(recipe["ops"])])
+        image = write_png(ctx.path("mask_sections.png"), mk.overlay_slices(vol.data, mask, mk.centroid(mask)))
+        ctx.add_image("Sections through the mask centre (XY, XZ, YZ): map in grey, mask in orange", image)
+        meta = {**ctx.inherited_meta("map"), "source": "drawn", "dilation": p["dilate"], "soft_edge": p["soft"],
+                "volume_nm3": round(stats["volume_nm3"], 1), "mass_kda": round(stats["mass_kda"], 1),
+                "center_of_mass": [round(float(c), 2) for c in com_a], "operations": len(recipe["ops"])}
+        if suggested:
+            meta["suggested_box"] = int(suggested)
+        ctx.add_output("mask", "mask", out, f"Drawn mask ({mk.format_mass(stats['mass_kda'])})", meta=meta)
+        ctx.add_highlight("Mask", mk.format_mass(stats["mass_kda"]))
+        ctx.add_highlight("Edge", f"{p['dilate']:g} + {p['soft']:g} Å")

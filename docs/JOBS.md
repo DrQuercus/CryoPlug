@@ -66,7 +66,7 @@ Point d'entrée habituel : récupère la reconstruction finale d'un job CryoSPAR
 - Indiquez la symétrie réellement imposée (C1, C2, D7…) : LocScale, EMmerNet et le dépôt l'utilisent.
 - « copy » rend le projet autonome ; « symlink » économise de l'espace mais dépend du dossier CryoSPARC.
 
-**Étapes suivantes** : Directional resolution (3D FSC), LocScale 2, ModelAngelo build, CryoAtom2 build, Import sequence
+**Étapes suivantes** : Directional resolution (3D FSC), LocScale 2, ModelAngelo build, CryoAtom2 build, Import sequence, Mask drawn in the 3D viewer, RELION local refinement
 
 ### Import maps
 
@@ -115,7 +115,7 @@ Importe des particules pour l'analyse d'hétérogénéité (cryoDRGN) : un job C
 - « Import from CryoSPARC » importe déjà les particules du job en même temps que les cartes.
 - Si les chemins des images sont cassés, indiquez le dossier des images (Image folder).
 
-**Étapes suivantes** : cryoDRGN input check (backprojection), cryoDRGN training, cryoDRGN-AI ab initio reconstruction
+**Étapes suivantes** : cryoDRGN input check (backprojection), cryoDRGN training, cryoDRGN-AI ab initio reconstruction, RELION local refinement, RELION reconstruction
 
 ### Import sequence
 
@@ -408,7 +408,7 @@ Crée un masque à bord doux : à partir de la densité (passe-bas + seuil), des
 - Les coupes du rapport montrent le masque (orange) sur la carte : vérifiez qu'il ne coupe pas de densité.
 - Le chemin du fichier est donné pour l'importer dans CryoSPARC (Import 3D Volumes, type mask).
 
-**Étapes suivantes** : Half-map FSC, LocScale 2, Anisotropy correction (spIsoNet), Local resolution
+**Étapes suivantes** : Half-map FSC, LocScale 2, Anisotropy correction (spIsoNet), Local resolution, RELION local refinement, RELION signal subtraction
 
 ### DeepEMhancer
 
@@ -658,6 +658,35 @@ Opérations simples sur une carte : taille de pixel, recadrage/agrandissement de
 - B-factor négatif = affûtage, positif = flou.
 
 **Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Rigid-body fit (ChimeraX)
+
+### Mask drawn in the 3D viewer
+
+`draw_mask` — intégré (aucun logiciel externe)
+
+Masque dessiné à la main sur une carte dans le visualiseur 3D, comme dans Chimera : sphères, boîtes et cylindres placés à la souris, région de densité connexe cliquée au niveau de contour, zone autour de chaînes, densité au-dessus d'un niveau, ajoutés, effacés ou intersectés ; puis dilatation et bord doux. Le job calcule le masque sur la grille complète de la carte, avec son centre de masse et la boîte pour recentrer les particules.
+
+**Quand l'utiliser**
+
+- Masque de raffinement local ou de soustraction d'une région qu'aucun modèle ne décrit encore.
+- Retoucher un masque automatique : effacer une densité parasite, ajouter un domaine flexible.
+- Masque de classification focalisée autour d'un site (ligand, domaine mobile).
+
+**À éviter / pièges**
+
+- Masque FSC global : « Create mask » (densité filtrée + seuil) est plus reproductible.
+- Bord trop dur pour un raffinement : gardez dilatation + bord doux ≥ 6-8 Å.
+
+**Entrées conseillées** : La carte sur laquelle dessiner (elle fixe la boîte et le pixel : prenez la carte consensus pour les jobs RELION) ; un modèle ajusté pour les zones autour de chaînes.
+
+**Conseils**
+
+- Visualiseur 3D → bouton « Mask » : choisissez un outil, cliquez sur la carte ; la surface orange est le masque.
+- « Region » prend toute la densité connexe au niveau de contour (réglez le niveau, ou un passe-bas pour lisser).
+- « At the centre of the view » : cliquez d'abord un atome pour centrer la vue dessus, puis placez la forme.
+- Ctrl + Z annule, Suppr retire l'opération sélectionnée ; les curseurs modifient l'opération sélectionnée.
+- Un job créé dans un workflow attend le dessin : « Draw in 3D » sur ce job, puis « Save as job » le lance.
+
+**Étapes suivantes** : RELION signal subtraction, RELION local refinement, RELION 3D classification (focused), Half-map FSC, LocScale 2
 
 ## Hétérogénéité (variabilité 3D)
 

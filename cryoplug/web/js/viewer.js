@@ -5,6 +5,7 @@ import { api } from './api.js';
 import { clear, h, icon, modal, popupMenu, showError, toast } from './ui.js';
 import { COMMAND_HELP, createCommands } from './viewer/commands.js';
 import { binning, COARSE_BOX, DEFAULT_BOX, expectedSeconds, fetchMap, fmtBytes, fmtDims, mapInfo, SERIES_BOXES, seriesBox } from './viewer/mapdata.js';
+import { createMaskEditor } from './viewer/maskedit.js';
 import { COLOR_KINDS, colorLegend, createPanel, hex } from './viewer/panel.js';
 import * as scene from './viewer/scene.js';
 import { createSeriesPlayer, initSeries, SPEEDS } from './viewer/series.js';
@@ -33,6 +34,7 @@ let commands;
 let toolbar;
 let player;
 let playerBar;
+let maskEditor;
 
 // ------------------------------------------------------------------ theme
 try {
@@ -107,6 +109,8 @@ function syncHash() {
   const state = { project: V.project, items: V.items.map(itemState) };
   if (V.items.length) state.view = scene.cameraState();
   if (V.slab !== null) state.slab = V.slab;
+  const mask = maskEditor?.state();
+  if (mask) state.mask = mask;
   history.replaceState(null, '', `${location.pathname}${location.search}#${encodeURIComponent(JSON.stringify(state))}`);
   const labels = V.items.map((i) => i.label);
   $('vw-title').textContent = labels.length ? `${V.project} · ${labels.join('  ·  ')}` : V.project;
@@ -434,6 +438,7 @@ async function reloadSeriesOnce(item) {
 
 async function closeItem(item) {
   V.items = V.items.filter((i) => i !== item);
+  maskEditor?.itemClosed(item);
   if (V.active === item) V.active = V.items[0] || null;
   if (slices.item === item) hideSlices();
   if (item.series) await player.dispose(item);
@@ -877,6 +882,10 @@ function buildToolbar() {
         { label: 'Record until stopped', ic: 'record', action: () => startRecording('free') },
       ]);
     }),
+    mask: tool('Mask', 'edit', 'Draw a mask on the map with the mouse (spheres, boxes, regions, zones), saved as a job', () => {
+      maskEditor.toggle();
+      toolbar.refresh();
+    }),
     link: tool('Link', 'link', 'Copy a link to this view (items, settings, camera)', async () => { log(await ctl.copyLink()); }),
     help: tool('Help', 'help', 'Mouse, keys and commands (?)', () => helpDialog()),
   };
@@ -889,7 +898,7 @@ function buildToolbar() {
     dataset: { color: String(color) }, onclick: () => ctl.setBackground(color),
   })));
   clear(root, t.reset, t.spin, t.slab, slab, t.ortho, t.soft, h('span', { class: 'vw-sep' }), bgs, h('span', { class: 'vw-sep' }),
-    t.slices, t.image, t.movie, t.link, t.help);
+    t.slices, t.mask, t.image, t.movie, t.link, t.help);
   return {
     refresh() {
       t.spin.classList.toggle('on', V.spin);
@@ -900,6 +909,7 @@ function buildToolbar() {
       t.ortho.classList.toggle('on', V.ortho);
       t.soft.classList.toggle('on', V.soft);
       t.slices.classList.toggle('on', !!slices.item);
+      t.mask.classList.toggle('on', !!maskEditor?.isOpen());
       t.movie.classList.toggle('rec', !!rec.recorder);
       t.movie.querySelector('.lbl').textContent = rec.recorder ? 'Stop' : 'Movie';
       t.movie.title = rec.recorder ? 'Stop recording and save the video' : 'Record a video of the view';
@@ -1043,7 +1053,8 @@ function helpDialog() {
         ['Wheel', 'Zoom'], ['Shift + wheel', 'Move the clipping planes (the cut density is drawn filled)'], ['Click an atom', 'Centre on its residue (Coot-like)'],
         ['Shift + click two atoms', 'Measure their distance (distance clear removes the measurements)'],
         ['Histogram', 'Drag the line to set the contour level of a map'],
-        ['Slices', 'Click: move the crosshair · wheel: next slice (large slices: zoom; Shift + wheel: next slice) · drag: pan · double-click: enlarge or fit']]),
+        ['Slices', 'Click: move the crosshair · wheel: next slice (large slices: zoom; Shift + wheel: next slice) · drag: pan · double-click: enlarge or fit'],
+        ['Mask editor (Mask button)', 'Click on the map: place a sphere, a box, a cylinder (two clicks) or pick a region of density · Ctrl + Z: undo · Delete: remove the selected operation']]),
       h('h4', {}, 'Keys'),
       table([['+  /  −', 'Raise / lower the level of the active map by 0.1 σ (Shift: 0.5 σ)'], ['M', 'Next map style (surface, mesh, transparent)'],
         ['R', 'Reset the view'], ['S', 'Spin on / off'], ['L', 'Slices on / off'], ['Space', 'Play / pause a volume series'],
@@ -1061,6 +1072,8 @@ function helpDialog() {
 function bindKeys() {
   document.addEventListener('keydown', (e) => {
     const k = e.key;
+    if (!e.target.closest?.('input, textarea, select, [contenteditable]') && !document.querySelector('.modal-backdrop')
+        && maskEditor?.onKey(e)) { e.preventDefault(); return; }
     // the series slider keeps the player keys (its own arrows move it)
     const onSlider = e.target.classList?.contains('vw-pslider') && [' ', ',', '.', '<', '>'].includes(k);
     if ((!onSlider && e.target.closest('input, textarea, select, [contenteditable]')) || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -1135,6 +1148,7 @@ function bindPointer() {
     setStatus();
   });
   scene.onClick((d, e) => {
+    if (maskEditor?.isOpen() && maskEditor.click(d, e)) return; // the mask editor places its shapes
     if (e.button !== undefined && e.button !== 0 && e.button !== 1) return;
     if (d?.kind !== 'atom' || d.chain === undefined) return;
     if (e.modifiers?.shift) { measure(d); return; }
@@ -1216,6 +1230,10 @@ async function main() {
   playerBar = buildPlayerBar();
   panel = createPanel($('vw-items'), ctl);
   commands = createCommands(ctl);
+  maskEditor = createMaskEditor($('vw-mask'), {
+    items: () => V.items, activeMap, project: () => V.project, log,
+    syncHash: () => { syncHashSoon(); toolbar?.refresh(); },
+  });
   ctl.setBackground(V.background);
   bindPointer();
   bindKeys();
@@ -1231,6 +1249,7 @@ async function main() {
   panel.render();
   await openItems(spec.items || [], { view: spec.view });
   if (!V.items.length) panel.render();
+  if (spec.mask && V.items.some((i) => i.kind === 'map')) maskEditor.open(spec.mask);
   if (V.items.length && (typeof spec.slab === 'number' || spec.slab?.angstrom > 0)) setTimeout(() => ctl.setSlab(spec.slab), 300);
   playerBar.refresh();
   V.ready = true;

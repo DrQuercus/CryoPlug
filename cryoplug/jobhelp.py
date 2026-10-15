@@ -36,7 +36,8 @@ HELP: dict[str, dict[str, Any]] = {
             "Indiquez la symétrie réellement imposée (C1, C2, D7…) : LocScale, EMmerNet et le dépôt l'utilisent.",
             "« copy » rend le projet autonome ; « symlink » économise de l'espace mais dépend du dossier CryoSPARC.",
         ],
-        "next": ["directional_fsc", "locscale", "modelangelo_build", "cryoatom_build", "import_sequence"],
+        "next": ["directional_fsc", "locscale", "modelangelo_build", "cryoatom_build", "import_sequence", "draw_mask",
+                 "relion_local_refine"],
     },
     "import_maps": {
         "purpose": "Importe des demi-cartes, une carte complète, une carte affûtée et un masque venant de n'importe quel logiciel.",
@@ -101,7 +102,7 @@ HELP: dict[str, dict[str, Any]] = {
             "« Import from CryoSPARC » importe déjà les particules du job en même temps que les cartes.",
             "Si les chemins des images sont cassés, indiquez le dossier des images (Image folder).",
         ],
-        "next": ["cryodrgn_backproject", "cryodrgn_train", "cryodrgn_abinit"],
+        "next": ["cryodrgn_backproject", "cryodrgn_train", "cryodrgn_abinit", "relion_local_refine", "relion_reconstruct"],
     },
     "import_volume_series": {
         "purpose": "Importe des séries de volumes : 3D Variability Display et 3D Flex Generate de CryoSPARC, cryoDRGN, "
@@ -302,7 +303,33 @@ HELP: dict[str, dict[str, Any]] = {
             "Les coupes du rapport montrent le masque (orange) sur la carte : vérifiez qu'il ne coupe pas de densité.",
             "Le chemin du fichier est donné pour l'importer dans CryoSPARC (Import 3D Volumes, type mask).",
         ],
-        "next": ["map_fsc", "locscale", "spisonet", "local_resolution"],
+        "next": ["map_fsc", "locscale", "spisonet", "local_resolution", "relion_local_refine", "relion_subtract"],
+    },
+    "draw_mask": {
+        "purpose": "Masque dessiné à la main sur une carte dans le visualiseur 3D, comme dans Chimera : sphères, boîtes et "
+                   "cylindres placés à la souris, région de densité connexe cliquée au niveau de contour, zone autour de "
+                   "chaînes, densité au-dessus d'un niveau, ajoutés, effacés ou intersectés ; puis dilatation et bord doux. "
+                   "Le job calcule le masque sur la grille complète de la carte, avec son centre de masse et la boîte "
+                   "pour recentrer les particules.",
+        "when": [
+            "Masque de raffinement local ou de soustraction d'une région qu'aucun modèle ne décrit encore.",
+            "Retoucher un masque automatique : effacer une densité parasite, ajouter un domaine flexible.",
+            "Masque de classification focalisée autour d'un site (ligand, domaine mobile).",
+        ],
+        "avoid": [
+            "Masque FSC global : « Create mask » (densité filtrée + seuil) est plus reproductible.",
+            "Bord trop dur pour un raffinement : gardez dilatation + bord doux ≥ 6-8 Å.",
+        ],
+        "inputs": "La carte sur laquelle dessiner (elle fixe la boîte et le pixel : prenez la carte consensus pour les "
+                  "jobs RELION) ; un modèle ajusté pour les zones autour de chaînes.",
+        "tips": [
+            "Visualiseur 3D → bouton « Mask » : choisissez un outil, cliquez sur la carte ; la surface orange est le masque.",
+            "« Region » prend toute la densité connexe au niveau de contour (réglez le niveau, ou un passe-bas pour lisser).",
+            "« At the centre of the view » : cliquez d'abord un atome pour centrer la vue dessus, puis placez la forme.",
+            "Ctrl + Z annule, Suppr retire l'opération sélectionnée ; les curseurs modifient l'opération sélectionnée.",
+            "Un job créé dans un workflow attend le dessin : « Draw in 3D » sur ce job, puis « Save as job » le lance.",
+        ],
+        "next": ["relion_subtract", "relion_local_refine", "relion_class3d", "map_fsc", "locscale"],
     },
     "local_resolution": {
         "purpose": "Carte de résolution locale à partir des deux demi-cartes (phenix.local_resolution) : distribution dans "

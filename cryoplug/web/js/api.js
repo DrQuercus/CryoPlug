@@ -99,5 +99,15 @@ export const api = {
   zoneUrl: (p, map, model, radius, maxBox, { encoding, lowpass } = {}) => `/api/projects/${p}/zone?map=${enc(map)}`
     + `&model=${enc(model)}&radius=${radius}&max_box=${maxBox}${viewOptions(encoding, lowpass)}`,
   mapInfo: (p, path) => request('GET', `/api/projects/${p}/map-info?path=${enc(path)}`),
+  // the mask being drawn in the viewer, computed on a coarse copy of its map: the bytes of an 8-bit MRC file
+  async maskPreview(p, body) {
+    const res = await fetch(`/api/projects/${p}/mask-preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { detail = (await res.json()).detail || detail; } catch { /* not JSON */ }
+      throw new Error(String(detail));
+    }
+    return new Uint8Array(await res.arrayBuffer());
+  },
   bundleUrl: (p, j) => `/api/projects/${p}/jobs/${j}/interactive/bundle`,
 };

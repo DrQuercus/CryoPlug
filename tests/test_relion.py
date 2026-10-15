@@ -243,3 +243,39 @@ def test_relion_star_import_is_relinked(manager, relion_project, tmp_path):
     rec = _run(manager, puid, "relion_reconstruct", {}, {"particles": {"job": imp["uid"], "output": "particles"}})
     assert (pdir / rec["uid"] / "Particles").is_dir()
     assert Path(pdir / rec["uid"] / "particles.star").exists()
+
+
+def test_relion_workflow_waits_for_the_drawn_mask(manager, cs_particles, synthetic, tmp_path):
+    """The focused-refinement workflow: the mask job waits for its drawing, the chain waits for the mask, then runs."""
+    import json
+    import shutil
+    root = tmp_path / "CS-both"
+    shutil.copytree(cs_particles["root"], root)
+    for f in synthetic["cryosparc_job"].iterdir():  # maps and particles of the same CryoSPARC job
+        if f.suffix == ".mrc":
+            shutil.copy(f, root / "J5" / f.name)
+    p = manager.create_project("RELION workflow")
+    puid = p["uid"]
+    res = manager.instantiate_workflow(puid, "relion_focused_refinement", queue=True,
+                                       overrides={"import": {"job_dir": str(root / "J5")}, "consensus": {"mpi": 3},
+                                                  "focused": {"mpi": 3}})
+    jobs = {j["type"] if j["type"] != "relion_local_refine" else f"refine_{i}": j for i, j in enumerate(res["jobs"])}
+    mask_job = jobs["draw_mask"]
+    assert list(res["problems"]) == [mask_job["uid"]] and "3D viewer" in res["problems"][mask_job["uid"]]
+    first = [j["uid"] for j in res["jobs"][:2]]  # import and the refinement of the whole complex
+    run_until_done(manager, puid, first, timeout=180)
+    from cryoplug.scheduler import Scheduler
+    Scheduler(manager).tick()
+    sub = jobs["relion_subtract"]
+    assert manager.job(puid, sub["uid"])["status"] == "queued"
+    assert "not queued yet" in manager.job(puid, sub["uid"])["message"]
+    # the mask editor saves its drawing into the job and queues it
+    imp = next(j for j in res["jobs"] if j["type"] == "import_cryosparc")
+    vol = MapVolume.read(manager.project_dir(puid) / next(o for o in manager.job(puid, imp["uid"])["outputs"] if o["name"] == "map")["path"])
+    centre = (vol.origin + np.array(vol.shape_xyz) / 2 * vol.voxel).tolist()
+    manager.update_job(puid, mask_job["uid"], params={"recipe": json.dumps({"ops": [{"shape": "sphere", "mode": "add",
+                                                                                      "center": centre, "radius": 10}]})})
+    manager.queue_job(puid, mask_job["uid"])
+    run_until_done(manager, puid, [j["uid"] for j in res["jobs"]], timeout=240)
+    states = {j["uid"]: manager.job(puid, j["uid"])["status"] for j in res["jobs"]}
+    assert all(s == "completed" for s in states.values()), states
