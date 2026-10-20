@@ -93,6 +93,7 @@ MIGRATIONS = (
     ("projects", "members", "TEXT DEFAULT '[]'"),
     ("jobs", "created_by", "TEXT DEFAULT ''"),
     ("jobs", "requested", "TEXT DEFAULT '{}'"),
+    ("sessions", "label", "TEXT DEFAULT ''"),  # API tokens (scripts, AI agents) have one; browser sessions none
 )
 
 JSON_FIELDS = {"params", "inputs", "outputs", "resources", "highlights", "gpus", "requested"}
@@ -343,10 +344,11 @@ class Database:
                     self.update_project(project["uid"], **changes)
 
     # ----------------------------------------------------------------- sessions
-    def add_session(self, token_hash: str, user_id: int, expires_at: float, ip: str = "", agent: str = "") -> None:
-        now = time.time()
-        self._execute("INSERT INTO sessions (token_hash, user_id, created_at, expires_at, last_seen_at, ip, agent) VALUES (?,?,?,?,?,?,?)",
-                      (token_hash, user_id, now, expires_at, now, ip, agent))
+    def add_session(self, token_hash: str, user_id: int, expires_at: float, ip: str = "", agent: str = "",
+                    label: str = "") -> None:
+        now = time.time()  # an API token is "used" only when a request comes with it
+        self._execute("INSERT INTO sessions (token_hash, user_id, created_at, expires_at, last_seen_at, ip, agent, label) "
+                      "VALUES (?,?,?,?,?,?,?,?)", (token_hash, user_id, now, expires_at, None if label else now, ip, agent, label))
 
     def get_session(self, token_hash: str) -> dict[str, Any] | None:
         row = self._one("SELECT * FROM sessions WHERE token_hash = ?", (token_hash,))
@@ -355,15 +357,18 @@ class Database:
     def touch_session(self, token_hash: str, when: float) -> None:
         self._execute("UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?", (when, token_hash))
 
-    def list_sessions(self, user_id: int) -> list[dict[str, Any]]:
-        return [dict(r) for r in self._all("SELECT * FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY last_seen_at DESC",
-                                           (user_id, time.time()))]
+    def list_sessions(self, user_id: int, tokens: bool = False) -> list[dict[str, Any]]:
+        """Browser sessions, or the API tokens (``tokens``) of an account, still valid."""
+        return [dict(r) for r in self._all("SELECT * FROM sessions WHERE user_id = ? AND expires_at > ? AND (COALESCE(label, '') != '') = ? "
+                                           "ORDER BY last_seen_at DESC", (user_id, time.time(), int(tokens)))]
 
     def delete_session(self, token_hash: str) -> None:
         self._execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
 
-    def delete_user_sessions(self, user_id: int, keep: str | None = None) -> None:
-        self._execute("DELETE FROM sessions WHERE user_id = ? AND token_hash != ?", (user_id, keep or ""))
+    def delete_user_sessions(self, user_id: int, keep: str | None = None, browsers_only: bool = False) -> None:
+        """Every session of an account (API tokens too, unless ``browsers_only``), except ``keep``."""
+        self._execute("DELETE FROM sessions WHERE user_id = ? AND token_hash != ? AND (? = 0 OR COALESCE(label, '') = '')",
+                      (user_id, keep or "", int(browsers_only)))
 
     def purge_sessions(self) -> None:
         self._execute("DELETE FROM sessions WHERE expires_at <= ?", (time.time(),))

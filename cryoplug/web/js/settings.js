@@ -87,6 +87,7 @@ export async function renderSettings(content, sub) {
   const me = state.info.user || { builtin: true, role: 'admin' };
   const tabs = [];
   if (!me.builtin) tabs.push(['account', 'My account', 'user']);
+  tabs.push(['agents', 'AI agents', 'bot']);
   if (me.role === 'admin') tabs.push(['users', 'Users', 'users'], ['compute', 'Compute', 'cpu'], ['access', 'Access & security', 'lock']);
   const tab = tabs.some(([k]) => k === sub) ? sub : tabs[0][0];
   const body = h('div', { class: 'settings-body' });
@@ -96,6 +97,7 @@ export async function renderSettings(content, sub) {
     }, icon(ic), label))),
     body));
   if (tab === 'account') await renderAccount(body, me);
+  else if (tab === 'agents') await renderAgents(body);
   else if (tab === 'users') await (me.builtin ? renderFirstAdmin(body) : renderUsers(body, me));
   else if (tab === 'compute') await renderCompute(body);
   else await renderAccess(body);
@@ -166,6 +168,130 @@ async function renderAccount(body, me) {
     h('div', {}, section('Profile', profile), section('Password', password)),
     h('div', {}, section('My folders', folders), section('Where I am logged in', sessionsBox))));
   loadSessions();
+}
+
+// ------------------------------------------------------------------ AI agents
+// A local AI assistant (Claude Code, Codex, Claude Desktop, LM Studio, Open WebUI…) drives CryoPlug through the
+// Model Context Protocol: `cryoplug mcp` started by the client, or the /mcp address of this server. With user
+// accounts it acts as the account whose API token it holds.
+const TOOL_KIND = { read: 'Reads', write: 'Creates and changes', destructive: 'Stops and resets' };
+
+function snippet(label, text) {
+  return h('div', { class: 'snippet' },
+    h('div', { class: 'snippet-head' }, h('span', {}, label), btn('Copy', () => copyText(text), { cls: 'small', ic: 'copy' })),
+    h('pre', {}, h('code', {}, text)));
+}
+
+async function renderAgents(body) {
+  let info;
+  try { info = await api.agentInfo(); } catch (e) { clear(body, h('div', { class: 'alert error' }, e.message)); return; }
+  const users = info.auth === 'users';
+  const onServer = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+  let where = onServer ? 'server' : 'computer';
+  let token = ''; // a token just created: written into the commands below, never stored
+  const how = h('div', { class: 'box settings-box' });
+
+  const credential = () => {
+    if (users) return token || '<API token>';
+    if (where === 'server') return '';
+    return { token: '<access token>', password: '<password>' }[info.auth] || '';
+  };
+  const drawHow = () => {
+    const tok = credential();
+    const env = {};
+    if (where === 'computer') env.CRYOPLUG_URL = location.origin;
+    if (tok) env.CRYOPLUG_TOKEN = tok;
+    const flags = Object.entries(env).map(([k, v]) => ` --env ${k}=${v}`).join('');
+    const command = where === 'server' && info.command_path ? info.command_path : 'cryoplug';
+    const entry = { command, args: ['mcp'], ...(Object.keys(env).length ? { env } : {}) };
+    const bearer = users ? (token || '<API token>') : { token: '<access token>', password: '<password>' }[info.auth];
+    const toggle = (key, label) => h('button', { type: 'button', class: where === key ? 'on' : '', onclick: () => { where = key; drawHow(); } }, label);
+    const credentialNote = users
+      ? (token ? 'Your new token is filled in below: copy the commands now, it is not shown again.'
+        : 'The assistant acts as you, with an API token: create one on the right and the commands below are filled in.')
+      : info.auth === 'token' ? (where === 'server'
+        ? 'On this machine, run as the Unix account that runs CryoPlug, `cryoplug mcp` reads the access token by itself.'
+        : 'Use the access token printed when CryoPlug started (`cryoplug url` on the server shows it again).')
+        : info.auth === 'password' ? (where === 'server' ? '`cryoplug mcp` reads [server] password from the configuration of this machine.'
+          : 'Use the password of [server] password.')
+          : where === 'server' ? 'No login: CryoPlug answers on this computer only.'
+            : 'CryoPlug answers on its own computer only: from yours, open an SSH tunnel to it and use http://localhost.';
+    clear(how,
+      h('p', { style: { marginTop: 0 } }, 'An AI assistant uses CryoPlug through the Model Context Protocol (MCP): it lists your projects, creates '
+        + 'and queues jobs, follows them and reads the reports, with your rights. It cannot delete projects or jobs, manage accounts or run '
+        + 'arbitrary commands. Its skills teach it the cryo-EM procedures: map assessment, masks and fitting, model building, refinement, '
+        + 'validation and deposition, heterogeneity, RELION focused refinement, troubleshooting.'),
+      h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+        h('span', { class: 'muted small' }, 'The assistant runs'),
+        h('div', { class: 'seg', role: 'group', 'aria-label': 'Where the assistant runs' }, toggle('server', 'on the CryoPlug server'), toggle('computer', 'on my computer'))),
+      h('div', { class: 'alert info' }, credentialNote),
+      where === 'computer' ? h('p', { class: 'muted small' }, 'Install CryoPlug on your computer too (the command `cryoplug mcp`): ',
+        h('code', {}, 'pip install git+https://github.com/DrQuercus/CryoPlug.git'), ', or connect a client to the address below.') : null,
+      snippet('Claude Code', `claude mcp add cryoplug${flags} -- cryoplug mcp`),
+      snippet('Codex', `codex mcp add cryoplug${flags} -- cryoplug mcp`),
+      snippet('Claude Desktop, LM Studio (mcp.json), Cursor, Gemini CLI, Jan, Goose…', JSON.stringify({ mcpServers: { cryoplug: entry } }, null, 2)),
+      snippet('Clients that connect to an address (Open WebUI: Settings › Admin › Integrations, type MCP Streamable HTTP)',
+        `${location.origin}${info.mcp_path}` + (bearer ? `\nAuthorization: Bearer ${bearer}` : '\n(no authentication)')),
+      snippet('Skills, where the assistant runs (Claude Code; Codex and other Agent Skills clients)',
+        'cryoplug ai skills --install claude\ncryoplug ai skills --install agents'),
+      h('p', { class: 'muted small', style: { marginBottom: 0 } }, 'On the server, ', h('code', {}, 'cryoplug ai setup'),
+        ' prints these commands and ', h('code', {}, 'cryoplug ai check'), ' tests the connection as an assistant would.'));
+  };
+
+  const tokensBox = h('div', { class: 'box settings-box' });
+  const loadTokens = async () => {
+    let list;
+    try { list = await api.myTokens(); } catch (e) { clear(tokensBox, h('div', { class: 'alert error' }, e.message)); return; }
+    const label = h('input', { type: 'text', id: 'tok-label', placeholder: 'e.g. Claude Code on my laptop', maxlength: 80 });
+    const days = h('input', { type: 'number', id: 'tok-days', min: 1, max: 3650, value: 365 });
+    const create = async (e) => {
+      e.preventDefault();
+      let made;
+      try { made = await guard(api.createToken(label.value || 'AI agent', Number(days.value) || 365)); } catch { return; }
+      token = made.token;
+      drawHow();
+      loadTokens();
+      const m = modal({
+        title: 'New API token',
+        body: h('div', {},
+          h('p', { style: { marginTop: 0 } }, 'Give it to the AI assistant (CRYOPLUG_TOKEN). It is shown only once: CryoPlug keeps only a fingerprint.'),
+          h('div', { class: 'secret' }, h('code', {}, made.token), btn('Copy', () => copyText(made.token), { cls: 'small', ic: 'copy' })),
+          h('p', { class: 'muted small' }, `“${made.label}”, valid until ${fmtTime(made.expires_at)}. The commands on this page now contain it. `
+            + 'It acts as you: anyone holding it can use your projects. Revoke it here when you no longer need it.')),
+        footer: [btn('Done', () => m.close(), { cls: 'primary' })],
+      });
+    };
+    clear(tokensBox,
+      list.length ? h('table', { class: 'data' },
+        h('thead', {}, h('tr', {}, ['Token', 'Created', 'Last used', 'Ends', ''].map((c) => h('th', {}, c)))),
+        h('tbody', {}, list.map((t) => h('tr', {},
+          h('td', {}, t.label, h('div', { class: 'muted small mono' }, t.id)), h('td', {}, ago(t.created_at)),
+          h('td', {}, t.last_used_at ? ago(t.last_used_at) : 'never'), h('td', {}, fmtTime(t.expires_at)),
+          h('td', {}, btn('Revoke', async () => {
+            if (!await confirmDialog('Revoke this token?', `“${t.label}” stops working at once.`, 'Revoke', true)) return;
+            try { await guard(api.revokeToken(t.id), 'Token revoked'); } catch { return; }
+            loadTokens();
+          }, { cls: 'small danger', ic: 'trash' })))))) : h('p', { class: 'muted small', style: { marginTop: 0 } }, 'No API token yet.'),
+      h('form', { class: 'token-form', onsubmit: create },
+        field('What it is for', label), field('Valid for (days)', days),
+        h('div', { class: 'row end' }, h('button', { class: 'btn primary', type: 'submit' }, icon('key'), 'Create a token'))),
+      h('p', { class: 'muted small', style: { marginBottom: 0 } }, 'Tokens end with your password (a new password revokes them) and cannot '
+        + 'manage accounts, tokens or settings. On the server: ', h('code', {}, 'cryoplug user token <name>'), '.'));
+  };
+
+  const kinds = {};
+  info.tools.forEach((t) => { (kinds[t.kind] = kinds[t.kind] || []).push(t); });
+  const toolsBox = h('div', { class: 'box settings-box' },
+    Object.entries(TOOL_KIND).filter(([k]) => kinds[k]).map(([k, title]) => h('div', { class: 'kv' }, h('div', { class: 'k' }, title),
+      h('div', { class: 'v' }, kinds[k].map((t) => h('code', { class: 'tool-chip', title: t.description }, t.name))))),
+    h('div', { class: 'kv' }, h('div', { class: 'k' }, 'Skills'),
+      h('div', { class: 'v' }, info.skills.map((sk) => h('code', { class: 'tool-chip', title: sk.description }, sk.name)))));
+
+  clear(body, h('div', { class: 'settings-grid' },
+    h('div', {}, section('Connect an AI assistant', how)),
+    h('div', {}, users ? section('My API tokens', tokensBox) : null, section('What the assistant can do', toolsBox))));
+  drawHow();
+  if (users) loadTokens();
 }
 
 // ------------------------------------------------------------------ users (administrators)

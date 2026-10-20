@@ -1,0 +1,419 @@
+# CryoPlug job types
+
+Generated from the job registry by `cryoplug ai skills --write-reference`: do not edit by hand.
+One entry per job type: name, title, program, GPU use, inputs (slot: accepted data types; `?` = optional)
+and outputs (name: data type).  `describe_job_type NAME` gives the parameters with their defaults and the
+detailed guidance; the server tells which programs are installed (`server_status`).
+
+## Import
+
+### `import_model` — Import atomic model
+built-in. In: none. Out: model: model, sequence: sequence.
+
+Import a PDB/mmCIF model from disk, or fetch an entry from the PDB or the AlphaFold database (starting model for docking and refinement).
+Usually followed by: `phenix_process_predicted_model`, `fit_in_map`, `chimerax_fitmap`, `phenix_dock_in_map`, `mapmodel_validation`.
+
+### `import_cryosparc` — Import from CryoSPARC
+built-in. In: none. Out: half_maps: half_maps, map: map, map_sharp: map, mask: mask, map_locres: locres, particles: particles, latent: latent.
+
+Import the final reconstruction of a CryoSPARC refinement job (half maps, unsharpened and sharpened maps, FSC mask, local resolution) and its particles (for heterogeneity analysis) by pointing at its job directory, e.g. /data/CS-myproject/J245. The latest iteration is selected automatically.
+Usually followed by: `directional_fsc`, `locscale`, `modelangelo_build`, `cryoatom_build`, `import_sequence`, `draw_mask`, `relion_local_refine`.
+
+### `import_maps` — Import maps
+built-in. In: none. Out: half_maps: half_maps, map: map, map_sharp: map, mask: mask.
+
+Import half maps, full maps and masks from any software (RELION, cryoDRGN, EMDB entries...).
+Usually followed by: `map_fsc`, `directional_fsc`, `locscale`, `import_model`.
+
+### `import_particles` — Import particles
+built-in. In: none. Out: particles: particles, latent: latent.
+
+Particles for heterogeneity analysis (cryoDRGN): a CryoSPARC job folder or .cs file (merged with its passthrough file), or a RELION .star file. Only the metadata is read: the images stay in place.
+Usually followed by: `cryodrgn_backproject`, `cryodrgn_train`, `cryodrgn_abinit`, `relion_local_refine`, `relion_reconstruct`.
+
+### `import_sequence` — Import sequence
+built-in. In: none. Out: sequence: sequence.
+
+Paste FASTA, read a FASTA file or fetch UniProt entries. Protein, RNA and DNA records are separated automatically (ModelAngelo needs them in separate files).
+Usually followed by: `modelangelo_build`, `cryoatom_build`, `boltz_predict`, `colabfold_predict`.
+
+### `import_volume_series` — Import volume series
+built-in. In: none. Out: series: volume_series.
+
+Series of volumes from CryoSPARC 3D Variability Display, 3D Flex Generate, cryoDRGN, RELION multi-body or any program: a folder, a ZIP file or a file pattern. One series per variability component; play them in the 3D viewer and analyse them with 'Volume series analysis'.
+Usually followed by: `series_analysis`, `extract_volume`.
+
+## Reconstruction
+
+### `relion_class3d` — RELION 3D classification (focused)
+RELION · GPU optional. In: particles: particles, map: map, mask?: mask. Out: maps: volume_series, particles: particles, class_1: particles, map_1: map.
+
+3D classification in RELION of particles with poses, focused by a mask, without alignment (or with local searches): separates the states of a region, typically on subtracted particles. Every class gives a map and its particles.
+Usually followed by: `relion_local_refine`, `relion_reconstruct`, `cryodrgn_train`.
+
+### `relion_local_refine` — RELION local refinement
+RELION · GPU optional. In: particles: particles, map: map, mask?: mask. Out: map: map, half_maps: half_maps, map_sharp: map, mask: mask, fsc: fsc, particles: particles.
+
+Gold-standard 3D auto-refinement in RELION with local angular searches around the poses of the particles (a CryoSPARC consensus refinement or an earlier RELION job), focused by a mask: the RELION counterpart of CryoSPARC's local refinement, with Blush regularisation for small or flexible regions. CryoSPARC half sets are kept. Writes the map, half maps, FSC, refined particles and, with a mask, the post-processed map, all on the grid of the consensus map.
+Usually followed by: `relion_subtract`, `composite_map`, `locscale`, `modelangelo_build`, `local_resolution`.
+
+### `relion_postprocess` — RELION post-processing
+RELION. In: half_maps: half_maps, mask: mask. Out: map_sharp: map, map_masked: map, fsc: fsc, map_locres: locres.
+
+relion_postprocess of two half maps: FSC with the mask corrected by phase randomisation, B-factor sharpening (automatic Guinier fit or given), optional local resolution. Works on the half maps of any job (CryoSPARC imports, RELION refinements, composite maps).
+Usually followed by: `locscale`, `modelangelo_build`, `deposition_package`.
+
+### `relion_reconstruct` — RELION reconstruction
+RELION. In: particles: particles, mask?: mask. Out: map: map, half_maps: half_maps, fsc: fsc.
+
+Reconstructs the two half maps and the full map of particles from their poses, without alignment (relion_reconstruct): a full-resolution map of a particle subset (a cryoDRGN selection, a class), with its gold-standard FSC.
+Usually followed by: `relion_local_refine`, `map_fsc`, `locscale`.
+
+### `relion_subtract` — RELION signal subtraction
+RELION. In: particles: particles, mask: mask. Out: particles: particles, map: map, mask: mask.
+
+Removes from each particle image the projection of everything outside a mask (relion_particle_subtract), re-centres the particles on the masked region and puts them in a smaller box: the particles of a focused refinement or classification. Optionally expands the symmetry first, so that every copy of a symmetric complex becomes a particle. Needs particles refined in RELION (it uses that refinement's model).
+Usually followed by: `relion_local_refine`, `relion_class3d`, `cryodrgn_train`.
+
+## Map processing
+
+### `spisonet` — Anisotropy correction (spIsoNet)
+spIsoNet · GPU. In: half_maps: half_maps, mask: mask. Out: half_maps: half_maps, map: map, fsc3d: map.
+
+Self-supervised correction of the resolution anisotropy caused by preferred orientation (spIsoNet, Liu et al. 2025): computes the 3D FSC, then trains a network on the half maps to restore the poorly sampled directions. The corrected half maps are no longer independent: never use them for the deposited FSC.
+Usually followed by: `modelangelo_build`, `cryoatom_build`, `isolde_session`.
+
+### `phenix_auto_sharpen` — Auto-sharpen (Phenix)
+Phenix. In: map: map, half_maps?: half_maps. Out: map: map.
+
+Global sharpening maximising map detail and connectivity (phenix.auto_sharpen). With Phenix 2, 'Map sharpening (Phenix)' is the current tool (auto_sharpen still runs, with --force).
+Usually followed by: `modelangelo_build`, `fit_in_map`, `chimerax_fitmap`.
+
+### `composite_map` — Composite map (focused maps)
+Phenix. In: model: model, reference: map, focused_1: map, focused_2?: map, focused_3?: map, focused_4?: map, focused_5?: map, focused_6?: map, focused_7?: map, focused_8?: map. Out: map: map, half_maps: half_maps.
+
+Combines the maps of local (focused) refinements into one composite map with phenix.combine_focused_maps: each part of the model takes the map that fits it best. The half maps of every map are combined the same way when available, for the FSC and the local resolution of the composite.
+Usually followed by: `local_resolution`, `phenix_real_space_refine`, `isolde_session`.
+
+### `create_mask` — Create mask
+built-in. In: map: map, model?: model, mask?: mask. Out: mask: mask, model_map: map.
+
+Soft-edged mask from the map density (low-pass + threshold), from the atoms of chosen chains, from the density simulated from them as ChimeraX's molmap, or from the map density near them, with dilation and soft edge in Å as in CryoSPARC. For FSC, local refinement, LocScale, spIsoNet or signal subtraction; can be combined with another mask.
+Usually followed by: `map_fsc`, `locscale`, `spisonet`, `local_resolution`, `relion_local_refine`, `relion_subtract`.
+
+### `deepemhancer` — DeepEMhancer
+DeepEMhancer · GPU. In: half_maps?: half_maps, map?: map. Out: map: map.
+
+Deep-learning post-processing producing a masked, locally sharpened-like map (Sanchez-Garcia et al. 2021).
+Usually followed by: `fit_in_map`, `chimerax_fitmap`, `isolde_session`.
+
+### `phenix_resolve_cryo_em` — Density modification (Phenix)
+Phenix. In: half_maps: half_maps, sequence?: sequence. Out: map: map.
+
+Maximum-likelihood density modification from half maps (phenix.resolve_cryo_em, Terwilliger et al. 2020). Typically improves interpretability and the half-map FSC. A sequence helps.
+Usually followed by: `modelangelo_build`, `cryoatom_build`, `phenix_real_space_refine`.
+
+### `directional_fsc` — Directional resolution (3D FSC)
+built-in. In: half_maps: half_maps, mask?: mask. Out: report: report.
+
+Conical FSC in every direction (3D FSC, Tan et al. 2017): reveals the resolution anisotropy caused by preferred orientation, with the best / worst directions and a direction map. Strong anisotropy: consider spIsoNet, tilted data collection or orientation rebalancing.
+Usually followed by: `spisonet`, `locscale`.
+
+### `emready` — EMReady2
+EMReady2 · GPU. In: map: map, mask?: mask. Out: map: map.
+
+Deep-learning map enhancement aware of the local quality of the map (EMReady2, Cao et al. 2026; EMReady 1 is run the same way). A mask restricts the result to the region of interest.
+Usually followed by: `fit_in_map`, `chimerax_fitmap`, `modelangelo_build`.
+
+### `emmernet` — EMmerNet feature enhancement
+LocScale 2 / EMmerNet · GPU. In: half_maps?: half_maps, map?: map, mask?: mask. Out: map: map, confidence: map, map_locscale: map.
+
+Confidence-weighted, feature-enhanced map from EMmerNet (locscale feature_enhance) with Monte-Carlo uncertainty estimation. Treat high-uncertainty regions with caution.
+Usually followed by: `modelangelo_build`, `isolde_session`.
+
+### `map_fsc` — Half-map FSC
+built-in. In: half_maps: half_maps, mask?: mask. Out: fsc: fsc.
+
+Gold-standard Fourier shell correlation between half maps: unmasked, masked and corrected by high-resolution phase randomisation. Writes an EMDB-compatible FSC XML for deposition.
+Usually followed by: `directional_fsc`, `deposition_package`.
+
+### `locscale` — LocScale 2
+LocScale 2 / EMmerNet · GPU. In: half_maps?: half_maps, map?: map, model?: model, mask?: mask. Out: map: map.
+
+Local amplitude scaling. Model-free (EMmerNet reference, default), pseudo-atomic model, model-based (requires a model; REFMAC/Servalcat used for B-factor refinement) or hybrid (partial model completed with pseudo-atoms). Use unfiltered, unsharpened half maps.
+Usually followed by: `modelangelo_build`, `cryoatom_build`, `fit_in_map`, `chimerax_fitmap`, `isolde_session`.
+
+### `phenix_local_aniso_sharpen` — Local anisotropic sharpening (Phenix)
+Phenix. In: half_maps: half_maps, model?: model. Out: map: map.
+
+Local, anisotropic sharpening and resolution-dependent scaling from half maps (phenix.local_aniso_sharpen), optionally guided by a model.
+Usually followed by: `modelangelo_build`, `phenix_real_space_refine`.
+
+### `local_resolution` — Local resolution
+Phenix. In: half_maps: half_maps, map?: map, mask?: mask, model?: model. Out: local_resolution: locres, per_residue: report.
+
+Local resolution map from the two half maps (phenix.local_resolution), its distribution in the molecule and, with a model, per chain and per residue. The 3D viewer colours a map by it.
+Usually followed by: `create_mask`, `locscale`, `mapmodel_validation`.
+
+### `map_tools` — Map operations
+built-in. In: map: map, mask?: mask. Out: map: map.
+
+Built-in map manipulations applied in order: set pixel size, crop/pad, flip handedness, global B-factor sharpening/blurring, low-pass filter, mask, normalisation.
+Usually followed by: `modelangelo_build`, `cryoatom_build`, `fit_in_map`, `chimerax_fitmap`.
+
+### `phenix_map_sharpening` — Map sharpening (Phenix)
+Phenix. In: half_maps?: half_maps, map?: map, model?: model, sequence?: sequence. Out: map: map.
+
+Phenix's sharpening tool (phenix.map_sharpening, which replaces auto_sharpen and local_aniso_sharpen in Phenix 2): shell scaling from two half maps (or a map and a fitted model), anisotropic and optionally local; or B-factor sharpening of a single map.
+Usually followed by: `modelangelo_build`, `cryoatom_build`, `phenix_real_space_refine`, `local_resolution`.
+
+### `draw_mask` — Mask drawn in the 3D viewer
+built-in. In: map: map, model?: model. Out: mask: mask.
+
+Mask drawn by hand on a map in the 3D viewer, as in Chimera: spheres, boxes and cylinders placed with the mouse, connected regions of density picked at the contour level, zones around chains, the density simulated from chains of a model (molmap), the density above a level or an existing mask, added, erased or intersected; then dilated and given a soft edge. Computed here on the full grid of the map, with its centre of mass and the box to re-centre particles on it (signal subtraction).
+Usually followed by: `relion_subtract`, `relion_local_refine`, `relion_class3d`, `map_fsc`, `locscale`.
+
+## Heterogeneity
+
+### `extract_volume` — Extract volume from series
+built-in. In: series: volume_series. Out: map: map.
+
+Takes one volume of a series (a cryoDRGN cluster, a 3D variability frame) as a map, to build or refine a model of that state.
+Usually followed by: `fit_in_map`, `chimerax_fitmap`, `isolde_session`, `mapmodel_validation`.
+
+### `select_particles` — Select particles (latent space)
+built-in. In: latent: latent. Out: particles: particles, excluded: particles.
+
+Keeps or removes particles chosen in a latent space (cryoDRGN or 3D variability): whole clusters, a region drawn with the lasso of the explorer, or the outliers far from the other particles. To discard junk or to isolate a state. Writes the selection and the particles left out (CryoSPARC .cs or RELION .star, plus cryoDRGN indices): train again with cryoDRGN, or classify / refine in CryoSPARC.
+Usually followed by: `cryodrgn_train`, `cryodrgn_abinit`, `cryodrgn_backproject`.
+
+### `series_analysis` — Volume series analysis
+built-in. In: series: volume_series, model?: model, mask?: mask. Out: variability: variability, mean: map, difference: map.
+
+Interprets a volume series (3D variability frames, cryoDRGN clusters or trajectories): variability map (where the density changes), mean and difference maps, similarity between frames and, with a model, the chains that move or come and go.
+Usually followed by: `extract_volume`, `select_particles`.
+
+### `cryodrgn_analyze` — cryoDRGN analysis
+cryoDRGN · GPU. In: latent: latent. Out: latent: latent, kmeans: volume_series, pc1: volume_series, pc2: volume_series, particles: particles.
+
+Analyses a trained cryoDRGN model again: another epoch (an earlier one when the last looks overtrained), more clusters (to find rare states), longer trajectories, flipped hand... Gives the same explorer, volumes and diagnostics as the training.
+Usually followed by: `select_particles`, `cryodrgn_trajectory`, `cryodrgn_landscape`, `series_analysis`.
+
+### `cryodrgn_continue` — cryoDRGN continue training
+cryoDRGN · GPU. In: latent: latent. Out: latent: latent, kmeans: volume_series, pc1: volume_series, pc2: volume_series, particles: particles, reconstruction: map.
+
+Trains a cryoDRGN model for more epochs from its last checkpoint (same network, same particles), then analyses it again: for a training that has not converged yet (see the convergence check).
+Usually followed by: `cryodrgn_convergence`, `select_particles`, `cryodrgn_landscape`.
+
+### `cryodrgn_convergence` — cryoDRGN convergence check
+cryoDRGN · GPU. In: latent: latent. Out: rep_1: volume_series.
+
+Tells whether a cryoDRGN training has converged (Kinman et al. 2023): the losses, how far the particles still move in the latent space from one epoch to the next, whether their neighbours stay the same, and how the volumes of representative particles change across epochs. Gives the epoch from which the results are stable, or advises to train longer.
+Usually followed by: `cryodrgn_continue`, `cryodrgn_analyze`, `select_particles`, `cryodrgn_landscape`.
+
+### `cryodrgn_backproject` — cryoDRGN input check (backprojection)
+cryoDRGN · GPU. In: particles: particles. Out: backprojection: map, particles_prepared: particles.
+
+Checks that cryoDRGN reads the particles correctly before a long training (Kinman et al. 2023): the poses and CTF are converted, the images downsampled, and the first particles backprojected into a map to compare with the consensus refinement (same shape, positive density, signal in the half-set FSC). The prepared particles are reused by the trainings that follow.
+Usually followed by: `cryodrgn_train`.
+
+### `cryodrgn_landscape` — cryoDRGN landscape analysis
+cryoDRGN · GPU. In: latent: latent, mask?: mask. Out: latent: latent, states: volume_series, vol_pc1: volume_series, vol_pc2: volume_series.
+
+Maps the conformational landscape from the volumes rather than from the latent space (cryodrgn analyze_landscape): many volumes are generated across the latent space, compared by PCA inside a mask, and grouped into states by hierarchical clustering. Results: the state volumes, trajectories along the main volume components, and the particles of each state, ready to select.
+Usually followed by: `select_particles`, `series_analysis`, `extract_volume`, `cryodrgn_trajectory`.
+
+### `cryodrgn_train` — cryoDRGN training
+cryoDRGN · GPU. In: particles: particles. Out: latent: latent, kmeans: volume_series, pc1: volume_series, pc2: volume_series, particles_prepared: particles, backprojection: map.
+
+Heterogeneous reconstruction with cryoDRGN: a neural network learns a latent space of the conformations and compositions in the particles (poses of the consensus refinement). The inputs are checked first, the losses followed live, then the latent space is analysed: interactive explorer (colour by defocus, views...), cluster volumes with junk warnings, trajectories along the main components, and advice on what to do next.
+Usually followed by: `cryodrgn_convergence`, `select_particles`, `cryodrgn_continue`, `cryodrgn_analyze`, `cryodrgn_landscape`, `cryodrgn_trajectory`, `series_analysis`.
+
+### `cryodrgn_trajectory` — cryoDRGN trajectory
+cryoDRGN · GPU. In: latent: latent. Out: trajectory: volume_series.
+
+Volumes along a path in the cryoDRGN latent space between chosen clusters or particles: through the particles (a path the data support, cryodrgn graph_traversal) or in a straight line. A movie of the transition, to play in the 3D viewer.
+Usually followed by: `series_analysis`, `extract_volume`.
+
+### `cryodrgn_volumes` — cryoDRGN volumes at particles
+cryoDRGN · GPU. In: latent: latent. Out: volume: map, volumes: volume_series.
+
+Generates the volumes of chosen particles (from their latent coordinates), or of a region drawn with the lasso of the latent explorer: the volume at its centre, or several volumes spread over it. To look at a part of the latent space that the clusters do not show.
+Usually followed by: `series_analysis`, `extract_volume`.
+
+### `cryodrgn_abinit` — cryoDRGN-AI ab initio reconstruction
+cryoDRGN · GPU. In: particles: particles, reference?: map. Out: latent: latent, kmeans: volume_series, pc1: volume_series, pc2: volume_series, reconstruction: map, particles: particles, validation: map, validation_half_maps: half_maps, reconstructions: volume_series, particles_prepared: particles, backprojection: map.
+
+Heterogeneous reconstruction without consensus poses (cryoDRGN-AI, cryodrgn abinit): the pose and the latent coordinates of every particle are learnt together, from the images and their CTF. Free from the bias of a consensus refinement and robust to junk, it can start right after a 2D classification. Live progress per phase, pose stability, comparison with the consensus poses (hand, frame, pose difference per particle), validation backprojection, particles written back with their learned poses, and the same latent space tools as the cryoDRGN trainings.
+Usually followed by: `cryodrgn_convergence`, `select_particles`, `cryodrgn_continue`, `cryodrgn_analyze`, `cryodrgn_landscape`, `cryodrgn_trajectory`, `cryodrgn_train`, `series_analysis`.
+
+## Model building
+
+### `colabfold_predict` — AlphaFold2 prediction (ColabFold)
+ColabFold (local) · GPU. In: sequence: sequence. Out: model: model.
+
+Predict starting models with a local ColabFold installation (AlphaFold2). Records can be predicted separately or as one complex (with copies for homo-oligomers). The MSAs come from the ColabFold server unless single-sequence mode is chosen (confidential sequences).
+Usually followed by: `phenix_process_predicted_model`, `fit_in_map`, `chimerax_fitmap`.
+
+### `boltz_predict` — Complex prediction (Boltz-2)
+Boltz-2 · GPU. In: sequence: sequence. Out: model: model.
+
+Predict a starting model of the whole complex — proteins, RNA/DNA and ligands (CCD code or SMILES) — with a local Boltz-2 installation (open AlphaFold3-class model), then fit it into the map.
+Usually followed by: `phenix_process_predicted_model`, `fit_in_map`, `chimerax_fitmap`, `phenix_dock_in_map`.
+
+### `cryoatom_build` — CryoAtom2 build
+CryoAtom2 · GPU. In: map: map, sequence?: sequence, mask?: mask, backbone?: model. Out: model: model, model_raw: model, sequence: sequence.
+
+Automated building of proteins, RNA/DNA and their complexes (CryoAtom2, Su et al. 2025). With a sequence: sequence-guided building. Without: residue types are assigned from the density; give a sequence database (e.g. the UniProt proteome of your organism) to identify the chains, then rebuild with the 'Identified sequences' output. A mask restricts building to one region.
+Usually followed by: `phenix_real_space_refine`, `isolde_session`, `mapmodel_validation`.
+
+### `phenix_dock_in_map` — Dock in map (Phenix)
+Phenix. In: model: model, map: map. Out: model: model.
+
+Global search for the position of a model (or domains) in the map (phenix.dock_in_map).
+Usually followed by: `phenix_real_space_refine`, `merge_models`.
+
+### `fit_in_map` — Fit in map (rigid body)
+built-in. In: model?: model, moving_map?: map/mask, map?: map. Out: model: model, map: map, mask: mask.
+
+Rigid-body placement of a model, a map or a mask in a map, as ChimeraX's fitmap (no ChimeraX needed): from the position set by hand in the 3D viewer (Move), a local optimisation of the average map value at the atoms, or of the overlap / correlation with the model's simulated map at a resolution, or a search from random placements. Writes the placed model, or the map resampled on the target's grid.
+Usually followed by: `phenix_real_space_refine`, `servalcat_refine`, `isolde_session`, `mapmodel_validation`, `merge_models`.
+
+### `modelangelo_hmm_search` — Identify chains (ModelAngelo HMM search)
+ModelAngelo. In: model: model. Out: sequence: sequence, report: report.
+
+Identify unknown proteins (or RNA/DNA) in the map: the HMM profiles written by 'ModelAngelo build' without a sequence are searched against a sequence database (model_angelo hmm_search). The best hits become a sequence output to rebuild the model with ModelAngelo or CryoAtom2.
+Usually followed by: `cryoatom_build`, `modelangelo_build`.
+
+### `phenix_elbow` — Ligand restraints (eLBOW)
+Phenix. In: none. Out: restraints: restraints, ligand: model.
+
+Geometry restraints (CIF) and starting coordinates for a ligand from its CCD code or SMILES (phenix.elbow). Connect the restraints to real-space refinement or Servalcat.
+Usually followed by: `phenix_real_space_refine`, `servalcat_refine`, `merge_models`.
+
+### `modelangelo_build` — ModelAngelo build
+ModelAngelo · GPU. In: map: map, sequence?: sequence, mask?: mask. Out: model: model, model_raw: model.
+
+Automated model building (Jamali et al. 2024). With a sequence: 'build' (protein, RNA and DNA FASTA are passed separately). Without: 'build_no_seq', which also writes HMM profiles to search sequence databases for unknown proteins. Use the best sharpened / post-processed map.
+Usually followed by: `phenix_real_space_refine`, `isolde_session`, `mapmodel_validation`, `modelangelo_hmm_search`.
+
+### `phenix_process_predicted_model` — Process predicted model (Phenix)
+Phenix. In: model: model. Out: model: model.
+
+Trim low-confidence residues of an AlphaFold/ColabFold model, convert pLDDT to B-factors and optionally split into compact domains for docking (phenix.process_predicted_model).
+Usually followed by: `fit_in_map`, `chimerax_fitmap`, `phenix_dock_in_map`.
+
+### `chimerax_fitmap` — Rigid-body fit (ChimeraX)
+UCSF ChimeraX (+ ISOLDE). In: model: model, map: map. Out: model: model.
+
+Rigid-body fit of a model into the map with ChimeraX 'fitmap' using a simulated map at the map resolution. Local optimisation from the current position, or a global search.
+Usually followed by: `phenix_real_space_refine`, `isolde_session`, `merge_models`.
+
+## Interactive
+
+### `coot_session` — Coot session
+Coot · interactive: a person works in it. In: model: model, map: map, map2?: map, diff_map?: map. Out: model: model.
+
+Interactive model building and real-space refinement in Coot. Save coordinates in the job folder (File > Save Coordinates) then finish the job.
+Usually followed by: `phenix_real_space_refine`.
+
+### `isolde_session` — ISOLDE session
+UCSF ChimeraX (+ ISOLDE) · interactive: a person works in it. In: model: model, map: map, map2?: map, diff_map?: map. Out: model: model.
+
+Interactive, physics-based rebuilding in ISOLDE (molecular dynamics flexible fitting in ChimeraX). The model and maps are loaded and associated automatically; save the result in the job folder (e.g. 'save isolde_model.cif models #1') then finish the job.
+Usually followed by: `phenix_real_space_refine`, `servalcat_refine`.
+
+## Refinement
+
+### `phenix_douse` — Add waters (phenix.douse)
+Phenix. In: model: model, map: map. Out: model: model.
+
+Place ordered water molecules in the map around the model (phenix.douse). Useful for maps better than about 2.5-3 Å; refine and inspect the waters afterwards.
+Usually followed by: `phenix_real_space_refine`, `servalcat_refine`.
+
+### `phenix_real_space_refine` — Real-space refinement (Phenix)
+Phenix. In: model: model, map: map, restraints?: restraints. Out: model: model.
+
+phenix.real_space_refine: global minimisation with secondary-structure, Ramachandran and rotamer restraints, morphing, simulated annealing and ADP refinement against the map.
+Usually followed by: `mapmodel_validation`, `phenix_validation_cryoem`, `isolde_session`, `predeposition_check`.
+
+### `servalcat_refine` — Refinement (Servalcat)
+Servalcat. In: model: model, half_maps?: half_maps, map?: map, mask?: mask, restraints?: restraints. Out: model: model, fofc: map, model_expanded: model.
+
+servalcat refine_spa_norefmac: reciprocal-space refinement against unsharpened half maps with a Gaussian likelihood target and Servalcat's own engine (no REFMAC needed), atomic B-factors, sharpened Fo and Fo-Fc difference maps (Yamashita et al. 2021).
+Usually followed by: `mapmodel_validation`, `coot_session`, `phenix_douse`.
+
+## Validation
+
+### `phenix_validation_cryoem` — Comprehensive validation (Phenix)
+Phenix. In: model: model, map: map. Out: report: report.
+
+phenix.validation_cryoem: MolProbity geometry, model-map correlation (CC_mask, CC_box...), map-model FSC and per-residue fit, as reported in wwPDB/EMDB validation.
+Usually followed by: `predeposition_check`, `isolde_session`.
+
+### `phenix_emringer` — EMRinger
+Phenix. In: model: model, map: map. Out: report: report.
+
+Side-chain density-based validation of model-to-map fit (Barad et al. 2015). Meaningful below ~4.5 Å.
+Usually followed by: `isolde_session`.
+
+### `mapmodel_validation` — Map-model validation (Q-score, FSC)
+built-in. In: model: model, map: map, fsc?: fsc. Out: report: report.
+
+Built-in map-model metrics, no external program needed: per-atom/residue Q-scores (after Pintilie et al. 2020) compared with the value expected at this resolution, map-model FSC, CC_mask/CC_box and atom inclusion at the suggested contour level.
+Usually followed by: `isolde_session`, `checkmysequence`, `predeposition_check`.
+
+### `phenix_molprobity` — MolProbity geometry
+Phenix. In: model: model. Out: report: report.
+
+All-atom contacts, Ramachandran, rotamers and covalent geometry (phenix.molprobity).
+Usually followed by: `coot_session`, `isolde_session`.
+
+### `checkmysequence` — Sequence register check (checkMySequence)
+checkMySequence. In: model: model, map: map, sequence: sequence. Out: report: report.
+
+Finds sequence-register shifts, chains matching no input sequence, sequence mismatches and numbering issues in a model built into a cryo-EM map (Chojnowski 2022): errors that geometry validation misses.
+Usually followed by: `isolde_session`, `coot_session`, `wwpdb_validation`.
+
+### `wwpdb_validation` — wwPDB validation report (OneDep)
+wwPDB validation client (OneDep API). In: model: model, map: map. Out: report: report.
+
+Official wwPDB validation report (PDF and XML) from the OneDep validation web service: the report journals and reviewers receive. The model and the primary map are uploaded to the wwPDB server (note: the onedep_api client does not check the server's certificate).
+Usually followed by: `deposition_package`.
+
+## Deposition
+
+### `deposition_package` — Deposition package
+built-in. In: model: model, map: map, half_maps: half_maps, mask?: mask, fsc?: fsc, checklist?: report, sequence?: sequence. Out: package: files.
+
+Assemble everything for wwPDB OneDep: model as mmCIF (entities set up), primary map, half maps, mask, EMDB FSC XML, validation reports, a deposition checklist with the suggested contour level, a draft methods paragraph with citations and a draft 'Table 1' built from the job history.
+
+### `predeposition_check` — Pre-deposition checks
+built-in. In: model: model, map: map, half_maps?: half_maps, mask?: mask, sequence?: sequence. Out: report: report.
+
+Automated checklist before submitting to the wwPDB/EMDB: map/half-map/mask consistency, model inside the map, fit at the suggested contour, chain IDs, unknown residues, occupancies, B-factors, severe clashes, chain breaks and agreement with the deposited sequence.
+Usually followed by: `deposition_package`, `wwpdb_validation`.
+
+## Utilities
+
+### `custom_command` — Custom command
+Shell (custom commands) · GPU optional · administrators only, not for agents. In: map?: map, map2?: map, half_maps?: half_maps, model?: model, mask?: mask, sequence?: sequence. Out: map: map, model: model.
+
+Run any program on CryoPlug data (bash script template). Placeholders: {map} {map2} {half_map_a} {half_map_b} {model} {mask} {sequence} {job_dir} {resolution} {pixel_size} {gpus}. Files matching the output patterns are registered as outputs.
+
+### `merge_models` — Merge models
+built-in. In: model_a: model, model_b: model, model_c?: model, model_d?: model. Out: model: model.
+
+Combine chains from several models (e.g. docked domains or subunits) into one; clashing chain IDs are renamed.
+Usually followed by: `phenix_real_space_refine`, `isolde_session`.
+
+### `model_tools` — Model operations
+built-in. In: model: model. Out: model: model.
+
+Built-in model editing with gemmi: convert PDB/mmCIF, remove hydrogens/waters/ligands/alternative conformations, select or rename chains, reset B-factors and occupancies.
+Usually followed by: `phenix_real_space_refine`.
+
+### `chimerax_render` — Render images (ChimeraX)
+UCSF ChimeraX (+ ISOLDE). In: map?: map, model?: model. Out: images: files.
+
+Offscreen ChimeraX rendering of the map and/or model from three orthogonal views (figures, reports).

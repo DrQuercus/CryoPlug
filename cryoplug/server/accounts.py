@@ -1,5 +1,6 @@
-"""Accounts API: the logged-in user (Settings › My account) and, for administrators, the users and the
-access settings (Settings › Users, Settings › Access).  Also the permission helpers used by the other routes."""
+"""Accounts API: the logged-in user (Settings › My account, and the API tokens of Settings › AI agents) and, for
+administrators, the users and the access settings (Settings › Users, Settings › Access).  Also the permission
+helpers used by the other routes."""
 from __future__ import annotations
 
 from collections import Counter
@@ -10,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from cryoplug.manager import Manager
 from cryoplug.server.auth import OWNER, Auth, client_ip, is_loopback
-from cryoplug.users import SETTINGS, UserError, normalize_username, public, verify_password
+from cryoplug.users import SETTINGS, TOKEN_DAYS, UserError, normalize_username, public, verify_password
 
 
 # ------------------------------------------------------------------ permissions
@@ -122,6 +123,24 @@ def install(app: FastAPI, manager: Manager, auth: Auth) -> None:
     def end_other_sessions(request: Request) -> dict[str, Any]:
         users.end_other_sessions(account(request))
         return {"ok": True}
+
+    # API tokens of scripts and AI agents (Settings › AI agents), sent as "Authorization: Bearer <token>".
+    @app.get("/api/me/tokens")
+    def my_tokens(request: Request) -> list[dict[str, Any]]:
+        return users.tokens(account(request))
+
+    @app.post("/api/me/tokens")
+    def create_token(request: Request, body: dict = Body(default={})) -> dict[str, Any]:
+        user = account(request)
+        if user.get("token_label"):  # an agent must not mint itself new credentials
+            raise HTTPException(403, "API tokens are created in the web interface or with `cryoplug user token`")
+        token, info = users.new_token(user, (body or {}).get("label"), (body or {}).get("days") or TOKEN_DAYS,
+                                      client_ip(request), request.headers.get("user-agent", ""))
+        return {**info, "token": token}
+
+    @app.delete("/api/me/tokens/{token_id}")
+    def revoke_token(token_id: str, request: Request) -> dict[str, Any]:
+        return users.revoke_token(account(request), token_id)
 
     # --------------------------------------------------------- users (admin)
     @app.get("/api/users")

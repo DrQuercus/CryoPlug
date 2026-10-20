@@ -19,6 +19,9 @@ local :
 | Validation | MolProbity, EMRinger, Phenix `validation_cryoem`, **checkMySequence** (erreurs de registre de séquence), **rapport officiel wwPDB** (service de validation OneDep) | + **Q-score**, FSC carte-modèle, CC_mask, inclusion d'atomes intégrés (sans logiciel externe) |
 | Dépôt | — | **Checklist pré-dépôt** automatique et **paquet OneDep** : mmCIF, cartes, FSC XML, niveau de contour recommandé, brouillon de *Méthodes* avec citations et de « Table 1 » |
 
+> 🤖 **Avec une IA** : Claude Code, Codex, Claude Desktop ou un modèle local (LM Studio, Open WebUI…) pilotent
+> CryoPlug par le protocole MCP, guidés par des skills cryo-EM — voir [§6](#6-piloter-cryoplug-avec-une-ia-mcp-et-skills).
+
 ![Jobs d'un projet](docs/images/jobs.png)
 
 | Constructeur de job (pré-rempli, glisser-déposer) | Résolution directionnelle (3D FSC) |
@@ -103,9 +106,10 @@ local :
 3. [Utilisation](#3-utilisation)
 4. [Ressources : lanes, GPU, cluster SLURM et suivi en direct](#4-ressources--lanes-gpu-cluster-slurm-et-suivi-en-direct)
 5. [Comptes utilisateurs, accès réseau et sécurité](#5-comptes-utilisateurs-accès-réseau-et-sécurité)
-6. [Référence des jobs](#6-référence-des-jobs)
-7. [Architecture et ajout d'un nouveau logiciel](#7-architecture-et-ajout-dun-nouveau-logiciel)
-8. [Tests](#8-tests)
+6. [Piloter CryoPlug avec une IA (MCP et skills)](#6-piloter-cryoplug-avec-une-ia-mcp-et-skills)
+7. [Référence des jobs](#7-référence-des-jobs)
+8. [Architecture et ajout d'un nouveau logiciel](#8-architecture-et-ajout-dun-nouveau-logiciel)
+9. [Tests](#9-tests)
 
 ---
 
@@ -690,13 +694,135 @@ qu'un compte existe), toute requête doit donc être authentifiée :
   scripts s'authentifient avec `curl -u nom:motdepasse …`.
 - **Sans compte** : cookie de session signé, ou `Authorization: Bearer <jeton>` pour les scripts
   (`curl -H "Authorization: Bearer $(cat ~/.cryoplug/access_token)" …`).
+- **Jetons API** (scripts, assistants IA) : propres à un compte, créés dans *Settings › AI agents* ou avec
+  `cryoplug user token <nom>`, envoyés en `Authorization: Bearer`. Seule leur empreinte est stockée ; ils sont
+  révoqués un par un, par un nouveau mot de passe ou par la désactivation du compte, et ne peuvent ni gérer les
+  comptes, les jetons et les réglages, ni changer le mot de passe.
 - Les requêtes qui modifient quelque chose doivent venir de la page CryoPlug elle-même (contrôle de
   l'origine), la page ne peut pas être intégrée dans un autre site, et en mode local sans connexion seuls les
   noms `localhost` / `127.0.0.1` sont acceptés : une page web malveillante ouverte dans le même navigateur ne
   peut pas piloter CryoPlug. Sur un poste partagé sans comptes, `auth = "always"` impose aussi le jeton en
   local.
 
-## 6. Référence des jobs
+## 6. Piloter CryoPlug avec une IA (MCP et skills)
+
+Un assistant IA — **Claude Code**, **Codex**, **Claude Desktop**, ou un modèle local dans **LM Studio**, **Open
+WebUI**, **Goose**, **Jan**… — peut utiliser CryoPlug comme vous : lister les projets, choisir les jobs, les créer et
+les mettre en file, suivre leur avancement, lire les rapports (chiffres, tableaux, courbes résumées avec leurs
+seuils, images) et proposer la suite. Deux briques :
+
+- **le serveur MCP** (*Model Context Protocol*, le standard ouvert qui relie les assistants à des outils) :
+  `cryoplug mcp`, lancé par le client (stdio), ou l'adresse `http://<serveur>:39500/mcp` du serveur CryoPlug
+  (*Streamable HTTP*), pour les clients qui se connectent à une URL. 25 outils, des ressources (le guide, les
+  skills) et des prompts prêts à l'emploi ;
+- **les skills** (format ouvert *Agent Skills* : un dossier par skill avec son `SKILL.md`) : la méthode de travail et
+  les règles de décision cryo-EM — quelle carte pour quoi, valeurs de référence de validation, protocoles cryoDRGN
+  et RELION, dépannage.
+
+![Settings › AI agents](docs/images/ai_agents.png)
+
+### Brancher un assistant
+
+Le plus simple : **Settings › AI agents** dans l'interface donne les commandes à copier (avec votre jeton), et
+`cryoplug ai setup` sur le serveur les affiche. Par exemple :
+
+```bash
+# Claude Code, sur la machine du serveur
+claude mcp add cryoplug -- cryoplug mcp
+cryoplug ai skills --install claude      # skills dans ~/.claude/skills
+
+# Codex
+codex mcp add cryoplug -- cryoplug mcp
+cryoplug ai skills --install agents      # ~/.agents/skills (Codex et autres clients du format Agent Skills)
+
+# Vérifier la connexion comme le fera l'assistant
+cryoplug ai check
+```
+
+Claude Desktop, LM Studio (*Program › Install › Edit mcp.json*), Cursor, Gemini CLI, Jan… prennent le même bloc
+JSON (les applications de bureau ignorent le PATH du shell : mettez le chemin complet donné par `which cryoplug`) :
+
+```json
+{"mcpServers": {"cryoplug": {"command": "/chemin/vers/cryoplug", "args": ["mcp"],
+                             "env": {"CRYOPLUG_TOKEN": "<jeton API>"}}}}
+```
+
+Open WebUI : *Settings › Admin › Integrations › External Tool Servers*, type **MCP (Streamable HTTP)**, URL
+`http://<serveur>:39500/mcp`, authentification **Bearer** avec le jeton (si Open WebUI tourne dans Docker, l'adresse
+doit être joignable depuis le conteneur). Claude Code accepte aussi cette adresse :
+`claude mcp add --transport http cryoplug http://<serveur>:39500/mcp --header "Authorization: Bearer <jeton>"`.
+
+### Identité et droits de l'assistant
+
+| Protection de CryoPlug | L'assistant utilise |
+|---|---|
+| Comptes utilisateurs | un **jeton API** de votre compte (*Settings › AI agents › Create a token*, ou `cryoplug user token <nom>`), passé en `CRYOPLUG_TOKEN` (ou en `Authorization: Bearer` pour `/mcp`) |
+| Jeton d'accès | sur la machine du serveur, `cryoplug mcp` le lit seul dans `data_dir/access_token` (même compte Unix) ; ailleurs, `CRYOPLUG_TOKEN` = le jeton affiché par `cryoplug url` |
+| Mot de passe partagé | lu dans la configuration de la machine ; ailleurs, `CRYOPLUG_TOKEN` = le mot de passe |
+| Local, sans connexion | rien (localhost seulement) |
+
+Depuis un autre ordinateur : installez-y CryoPlug (`pip install git+https://github.com/DrQuercus/CryoPlug.git`) et
+ajoutez `CRYOPLUG_URL=http://<serveur>:39500` (ou ouvrez un tunnel SSH). Les identifiants locaux ne sont jamais
+envoyés à une autre adresse que celle de la configuration.
+
+L'assistant agit avec les droits de son jeton : mêmes projets et mêmes dossiers que le compte. Garde-fous :
+
+- il ne peut **ni supprimer** de projet ou de job, **ni gérer** les comptes, les jetons et les réglages (le serveur
+  le refuse aux jetons API), ni lancer de **commande arbitraire** (*Custom command*, *Extra arguments*, commandes
+  ChimeraX), sauf `cryoplug mcp --allow-commands` pour un administrateur ;
+- `kill_job` et `clear_job` (jobs en échec seulement) sont déclarés destructifs : les clients demandent confirmation ;
+- les skills lui demandent de vous consulter avant les jobs GPU longs, les envois hors du serveur (rapport wwPDB,
+  serveur MSA de ColabFold), et de ne jamais inventer un résultat.
+
+Un jeton se révoque dans *Settings › AI agents* ou avec `cryoplug user token <nom> --revoke <id>`.
+
+### Les outils
+
+| Outils | Rôle |
+|---|---|
+| `server_status` | point de départ : compte, lanes et GPU, file d'attente, logiciels installés, projets, skills |
+| `list_projects`, `get_project`, `create_project` | les projets ; un job par ligne (statut, entrées, sorties, résultats clés) |
+| `list_job_types`, `describe_job_type` | ce que CryoPlug sait faire ; entrées, paramètres et défauts, conseils, jobs suivants |
+| `find_outputs`, `create_job`, `update_job`, `queue_job`, `clone_job` | brancher les sorties (`"J3.map_sharp"`, ou `"J3"` : la bonne sortie est choisie), créer, modifier, mettre en file |
+| `get_job`, `get_job_log`, `get_job_images`, `wait_for_jobs` | résultats (métriques, tableaux, courbes résumées et seuils franchis), journal, images, attente avec progression |
+| `kill_job`, `clear_job` | arrêter un job ; remettre en préparation un job en échec |
+| `list_workflows`, `apply_workflow` | les chaînes complètes prêtes à l'emploi |
+| `browse_server_files`, `list_job_files`, `read_project_file`, `map_info` | trouver les données, lire les fichiers texte, en-tête d'une carte |
+| `list_skills`, `read_skill` | les skills, pour les clients qui ne les chargent pas eux-mêmes |
+
+Sans client MCP, les mêmes outils en ligne de commande : `cryoplug ai call get_project project=P1`,
+`cryoplug ai call create_job project=P1 type=map_fsc 'inputs={"half_maps": "J1"}' queue=true` ;
+`cryoplug ai tools` les liste.
+
+### Les skills
+
+| Skill | Contenu |
+|---|---|
+| `cryoplug` | méthode de travail et règles, concepts, quelle carte pour quoi, syntaxe des jobs, workflows ; index des 66 types de jobs (généré) |
+| `cryoplug-map-quality` | FSC, anisotropie, résolution locale, main ; LocScale, spIsoNet, modification de densité, cartes « réseau » |
+| `cryoplug-masks-and-fitting` | masques (densité, atomes, molmap, densité proche du modèle), placement de corps rigide, cartes composites |
+| `cryoplug-model-building` | stratégie selon la résolution, de novo, chaînes inconnues, modèles prédits, ligands |
+| `cryoplug-refinement-validation` | affinement, ISOLDE/Coot, valeurs de référence et signaux d'alerte, dépôt |
+| `cryoplug-heterogeneity` | 3DVA, protocole cryoDRGN, cryoDRGN-AI, sélection et validation des états |
+| `cryoplug-relion-focused` | raffinement local et classification focalisée avec RELION |
+| `cryoplug-troubleshooting` | diagnostiquer et corriger un job en échec ou bloqué |
+
+Elles sont dans `cryoplug/skills/` ; le serveur MCP les offre aussi comme ressources (`cryoplug://skills/…`) et par
+`read_skill`. Les prompts MCP (`review_project`, `assess_map`, `build_model`, `troubleshoot_job`,
+`prepare_deposition`) apparaissent comme commandes dans les clients qui les gèrent (`/mcp__cryoplug__assess_map`
+dans Claude Code).
+
+### Avec un modèle local
+
+Pour garder des données non publiées sur place : un modèle qui appelle les outils de façon fiable (par exemple
+Qwen 3, Mistral Small, Llama ou gpt-oss), dans LM Studio, Open WebUI avec Ollama, Goose ou Jan. Les réponses des
+outils sont du texte compact écrit pour des modèles modestes ; prévoyez un contexte d'au moins 32 000 tokens (la
+description des 25 outils en occupe environ 5 000). Pour un petit modèle, `cryoplug mcp --tools basic` n'offre que
+les 12 outils essentiels ; `--tools read` fait un assistant qui consulte sans rien changer (pour `/mcp` :
+`http://<serveur>:39500/mcp?tools=basic`). Protocole : MCP 2025-11-25 et révisions antérieures ; les clients de la
+révision 2026-07-28 reviennent automatiquement à 2025-11-25.
+
+## 7. Référence des jobs
 
 La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes) est dans
 [docs/JOBS.md](docs/JOBS.md), générée depuis `cryoplug/jobhelp.py` par `cryoplug docs-jobs`.
@@ -721,7 +847,7 @@ comme 3DFSC) sur un hémisphère de directions, lissées sur 3 coquilles ; le ra
 signale une orientation préférentielle. Le Q-score suit la méthode de Pintilie et al. (2020) (σ = 0,6 Å, coquilles de 0 à 2 Å, points plus
 proches de l'atome que de ses voisins) ; il est comparé à la valeur attendue à la résolution de la carte.
 
-## 7. Architecture et ajout d'un nouveau logiciel
+## 8. Architecture et ajout d'un nouveau logiciel
 
 ```
 cryoplug/
@@ -741,6 +867,8 @@ cryoplug/
   analysis.py      Q-score, FSC carte-modèle, CC, inclusion d'atomes
   modelio.py       modèles et séquences (gemmi)
   workflows.py     modèles de pipelines
+  agent/           pour les assistants IA : client HTTP, outils, serveur MCP (stdio et /mcp), skills
+  skills/          les skills (SKILL.md), installées par `cryoplug ai skills --install`
   web/             interface (HTML/CSS/JS sans étape de build)
 ```
 
@@ -772,7 +900,7 @@ class MyTool(JobType):
 L'interface (formulaire, entrées, glisser-déposer, graphe) est générée automatiquement à partir de ces
 déclarations.
 
-## 8. Tests
+## 9. Tests
 
 ```bash
 pip install ".[test]"
@@ -787,4 +915,5 @@ session ISOLDE, échec / arrêt de jobs, workflows, API HTTP, concurrence API/pl
 (connexion, jeton, mot de passe, requêtes d'autres origines), zone carte-modèle du visualiseur (comparée à un
 calcul exhaustif) et ressources (lanes modifiées en direct, GPU choisis ou automatiques, script SLURM,
 moniteur avec un faux `nvidia-smi`, vue des partitions avec de faux `sinfo` / `squeue`, ce que voit chaque
-utilisateur).
+utilisateur) et assistants IA (jetons API, outils de bout en bout, protocole MCP en stdio et en HTTP, format des
+skills, index des jobs à jour).

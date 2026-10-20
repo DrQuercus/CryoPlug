@@ -30,7 +30,7 @@ cryoplug = "cryoplug.cli:main"
 include = ["cryoplug*"]
 
 [tool.setuptools.package-data]
-cryoplug = ["web/*", "web/**/*"]
+cryoplug = ["web/*", "web/**/*", "skills/*", "skills/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

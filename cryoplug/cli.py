@@ -1,4 +1,5 @@
-"""Command-line interface: ``cryoplug init | start | url | user | tools | fetch-viewer | status | jobtypes | service | worker``."""
+"""Command-line interface: ``cryoplug init | start | url | user | tools | fetch-viewer | status | jobtypes | mcp | ai |
+service | worker``."""
 from __future__ import annotations
 
 import argparse
@@ -172,6 +173,29 @@ def cmd_user(args: argparse.Namespace) -> None:
         elif args.action == "delete":
             users.delete(args.name, args.transfer_to or "")
             print(f"Deleted '{args.name}'" + (f"; projects given to {args.transfer_to}" if args.transfer_to else ""))
+        elif args.action == "token":
+            if not users.exist():
+                sys.exit("No user accounts: scripts and AI agents use the access token (read by `cryoplug mcp` on this "
+                         "machine, shown by `cryoplug url`) or the [server] password.")
+            user = users.require(args.name)
+            if args.list:
+                tokens = users.tokens(user)
+                if not tokens:
+                    print(f"'{user['username']}' has no API token.")
+                for t in tokens:
+                    print(f"{t['id']}  {t['label']:<30} created {when(t['created_at'])}, last used {when(t['last_used_at'])}, "
+                          f"expires {when(t['expires_at'])}")
+            elif args.revoke:
+                gone = users.revoke_token(user, args.revoke)
+                print(f"Revoked the API token {gone['id']} ({gone['label']}) of '{user['username']}'.")
+            else:
+                token, info = users.new_token(user, args.label or "AI agent", args.days, agent="cryoplug user token")
+                print(token)  # alone on stdout: export CRYOPLUG_TOKEN=$(cryoplug user token NAME)
+                print(f"API token '{info['label']}' of '{user['username']}' (id {info['id']}), valid until "
+                      f"{when(info['expires_at'])}. It is shown only once: give it to the AI client as CRYOPLUG_TOKEN.\n"
+                      f"It acts as {user['username']} (same projects and folders); revoke it with "
+                      f"`cryoplug user token {user['username']} --revoke {info['id']}` or in Settings > AI agents.",
+                      file=sys.stderr)
     except UserError as exc:
         sys.exit(str(exc))
 
@@ -263,6 +287,142 @@ def cmd_docs_jobs(args: argparse.Namespace) -> None:
         print(f"Wrote {args.out}")
 
 
+# ------------------------------------------------------------------ AI agents
+def cmd_mcp(args: argparse.Namespace) -> None:
+    from cryoplug.agent.mcp import stdio_main
+
+    stdio_main(args.config, args.url, args.token, allow_commands=args.allow_commands, tools=args.tools)
+
+
+def _agent_command() -> list[str]:
+    """How an AI client starts the MCP server: the absolute path, as desktop applications ignore the shell PATH."""
+    exe = shutil.which("cryoplug")
+    return [str(Path(exe).resolve()), "mcp"] if exe else [sys.executable, "-m", "cryoplug", "mcp"]
+
+
+def cmd_ai(args: argparse.Namespace) -> None:
+    if args.action == "skills":
+        _ai_skills(args)
+    elif args.action == "setup":
+        _ai_setup(args)
+    elif args.action == "tools":
+        from cryoplug.agent.tools import TOOLS
+
+        for t in TOOLS.values():
+            kind = "read-only" if t.read_only else "destructive" if t.destructive else "changes"
+            print(f"{t.name:<22} [{kind}] {t.description}")
+    elif args.action in ("call", "check"):
+        _ai_call(args)
+
+
+def _ai_skills(args: argparse.Namespace) -> None:
+    from cryoplug.agent import skills as sk
+
+    if args.write_reference:
+        print(f"Wrote {sk.write_job_index()}")
+        return
+    if args.install:
+        dest = sk.DESTINATIONS.get(args.install, (args.install, ""))[0]
+        try:
+            written = sk.install(dest, args.names or None, force=args.force)
+        except (FileExistsError, KeyError) as exc:
+            sys.exit(str(exc).strip("'\""))
+        for path in written:
+            print(f"Installed {path}")
+        print("Restart the AI client to load them.")
+        return
+    for skill in sk.all_skills():
+        print(f"{skill.name}\n  {skill.description}\n  {skill.path}")
+    print("\nInstall them: cryoplug ai skills --install claude   (Claude Code: ~/.claude/skills)")
+    print("               cryoplug ai skills --install agents   (Codex and other Agent Skills clients: ~/.agents/skills)")
+    print("               cryoplug ai skills --install DIR      (any folder, e.g. a project's .claude/skills)")
+
+
+def _ai_setup(args: argparse.Namespace) -> None:
+    import json
+
+    from cryoplug.agent.client import local_url
+    from cryoplug.db import Database
+    from cryoplug.server.auth import auth_mode
+
+    cfg = _server_config(args)
+    mode = auth_mode(cfg, cfg.db_path.exists() and Database(cfg.db_path).has_users())
+    command = _agent_command()
+    token = args.token or ("<API token>" if mode == "users" else "")
+    env = {"CRYOPLUG_TOKEN": token} if token else {}
+    if args.url:
+        env["CRYOPLUG_URL"] = args.url
+    url = (args.url or local_url(cfg)).rstrip("/")
+    print(f"CryoPlug server: {url} (protection: {mode or 'none, localhost only'})")
+    if mode == "users":
+        print("With user accounts, the AI acts as one account through an API token: create it in Settings > AI agents,")
+        print("or here with `cryoplug user token <name>`, and put it in place of <API token> below.")
+    elif mode in ("token", "password"):
+        print(f"`{' '.join(command)}` reads the {'access token' if mode == 'token' else 'password'} of this server by itself "
+              "when the AI client runs on this machine as this Unix account; elsewhere, set CRYOPLUG_URL and CRYOPLUG_TOKEN.")
+    envflags = "".join(f" --env {k}={v}" for k, v in env.items())
+    print("\n# Claude Code")
+    print(f"claude mcp add cryoplug{envflags} -- {' '.join(command)}")
+    print("cryoplug ai skills --install claude")
+    print("\n# Codex (~/.codex/config.toml)")
+    print("[mcp_servers.cryoplug]")
+    print(f"command = {json.dumps(command[0])}")
+    print(f"args = {json.dumps(command[1:])}")
+    if env:
+        print("env = { " + ", ".join(f"{k} = {json.dumps(v)}" for k, v in env.items()) + " }")
+    print("# then: cryoplug ai skills --install agents")
+    print("\n# Claude Desktop, LM Studio (mcp.json), Cursor, Gemini CLI (settings.json), Goose, Jan...")
+    entry: dict = {"command": command[0], "args": command[1:]}
+    if env:
+        entry["env"] = env
+    print(json.dumps({"mcpServers": {"cryoplug": entry}}, indent=2))
+    print("\n# Clients that connect to a URL (Open WebUI: Admin > Settings > Integrations > MCP (Streamable HTTP))")
+    print(f"URL: {url}/mcp" + (f"   Authorization: Bearer {token or '<access token or password>'}" if mode else "   (no authentication)"))
+    if mode is None:
+        print("Note: without login, CryoPlug answers only on localhost; a client in a container needs a login mode.")
+    print("\nSmall local model: `cryoplug mcp --tools basic` (12 tools); an assistant that changes nothing: --tools read")
+    print("(for the URL: /mcp?tools=basic). Test the connection: cryoplug ai check")
+
+
+def _ai_call(args: argparse.Namespace) -> None:
+    import json
+
+    from cryoplug.agent import tools as toolmod
+    from cryoplug.agent.client import AgentError, Client, connection
+
+    try:
+        session = toolmod.Session(Client(connection(args.config, args.url, args.token)), allow_commands=args.allow_commands)
+    except AgentError as exc:
+        sys.exit(str(exc))
+    name = "server_status" if args.action == "check" else args.tool
+    arguments: dict = {}
+    for item in getattr(args, "arguments", None) or []:
+        if item.lstrip().startswith("{"):
+            try:
+                arguments.update(json.loads(item))
+            except ValueError as exc:
+                sys.exit(f"Invalid JSON arguments: {exc}")
+            continue
+        key, sep, value = item.partition("=")
+        if not sep:
+            sys.exit(f"Arguments are key=value (or a JSON object), not {item!r}")
+        try:
+            arguments[key] = json.loads(value)
+        except ValueError:
+            arguments[key] = value
+    reply = toolmod.call(session, name, arguments)
+    print(reply.text)
+    if reply.images:
+        folder = Path(args.images or ".")
+        folder.mkdir(parents=True, exist_ok=True)
+        for i, (mime, data) in enumerate(reply.images, 1):
+            path = folder / f"{name}_{i}.{mime.split('/')[-1].replace('jpeg', 'jpg')}"
+            path.write_bytes(data)
+            print(f"[image saved: {path}]")
+    if reply.error:
+        sys.exit(1)
+
+
 def cmd_service(args: argparse.Namespace) -> None:
     exe = shutil.which("cryoplug") or f"{sys.executable} -m cryoplug"
     cfg = args.config or str(DEFAULT_CONFIG_PATH.expanduser())
@@ -336,6 +496,12 @@ def main(argv: list[str] | None = None) -> None:
     up = usub.add_parser("delete", help="Delete an account")
     up.add_argument("name")
     up.add_argument("--transfer-to", metavar="USER", help="Give the user's projects to this account")
+    up = usub.add_parser("token", help="API token of an account, for scripts and AI agents (printed once)")
+    up.add_argument("name")
+    up.add_argument("--label", help="What it is for (default: AI agent)")
+    up.add_argument("--days", type=int, default=365, help="Validity in days (default: 365)")
+    up.add_argument("--list", action="store_true", help="List the account's API tokens instead")
+    up.add_argument("--revoke", metavar="ID", help="Revoke the API token with this id (from --list)")
     p.set_defaults(func=cmd_user)
 
     p = sub.add_parser("tools", help="Detect the external programs")
@@ -362,6 +528,40 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("service", help="Print a systemd unit file")
     p.set_defaults(func=cmd_service)
+
+    def connection_options(q: argparse.ArgumentParser) -> None:
+        q.add_argument("--url", help="CryoPlug server (default: $CRYOPLUG_URL, else the server of the configuration)")
+        q.add_argument("--token", help="Credential (default: $CRYOPLUG_TOKEN, else found for the local server)")
+        q.add_argument("--allow-commands", action="store_true",
+                       help="Let the agent use custom commands and extra program arguments (administrators)")
+
+    p = sub.add_parser("mcp", help="MCP server for AI agents, over stdio (started by the AI client)")
+    connection_options(p)
+    p.add_argument("--tools", default="all", metavar="PROFILE",
+                   help="all (default), basic (12 tools, for small local models), read (change nothing) or tool names")
+    p.set_defaults(func=cmd_mcp)
+
+    p = sub.add_parser("ai", help="AI agents: connect a client, install the skills, call a tool")
+    asub = p.add_subparsers(dest="action", required=True)
+    ap = asub.add_parser("setup", help="How to connect Claude Code, Codex, Claude Desktop, LM Studio, Open WebUI...")
+    ap.add_argument("--url", help="Address of the server as seen by the AI client (another machine)")
+    ap.add_argument("--token", help="API token to write in the snippets")
+    ap.add_argument("--host", help=argparse.SUPPRESS)
+    ap.add_argument("--port", type=int, help=argparse.SUPPRESS)
+    ap = asub.add_parser("skills", help="List the agent skills, or install them for an AI client")
+    ap.add_argument("--install", metavar="WHERE", help="claude (~/.claude/skills), agents (~/.agents/skills) or a folder")
+    ap.add_argument("--force", action="store_true", help="Replace skills already installed")
+    ap.add_argument("--write-reference", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("names", nargs="*", help="Only these skills")
+    asub.add_parser("tools", help="List the tools offered to agents")
+    ap = asub.add_parser("check", help="Test the connection as an agent would (server_status)")
+    connection_options(ap)
+    ap = asub.add_parser("call", help="Call an agent tool from the shell, e.g. cryoplug ai call get_project project=P1")
+    ap.add_argument("tool")
+    ap.add_argument("arguments", nargs="*", help="key=value (values in JSON: 3, true, \"J3.map\") or a JSON object")
+    ap.add_argument("--images", metavar="DIR", help="Folder for the images a tool returns (default: here)")
+    connection_options(ap)
+    p.set_defaults(func=cmd_ai)
 
     p = sub.add_parser("worker", help=argparse.SUPPRESS)
     p.add_argument("job_dir")

@@ -167,6 +167,28 @@ terminal affiche des liens `http://<serveur>:39500/?token=…` qui vous connecte
 SSH (`ssh -N -L 39500:localhost:39500 utilisateur@serveur`, puis `http://localhost:39500` sur le portable).
 Le port ouvert, préférez HTTPS. Détails, pare-feu et HTTPS : **Help → Installation & commandes**.
 
+### Travailler avec un assistant IA
+
+Un assistant IA (Claude Code, Codex, Claude Desktop, ou un modèle local dans LM Studio, Open WebUI…) peut piloter
+CryoPlug à votre place : il lit vos projets, crée et met en file les jobs, suit leur avancement, lit les rapports et
+propose la suite. Il s'appuie sur des **skills**, des fiches de méthode qui reprennent ce guide (quelle carte pour
+quoi, valeurs de référence, protocoles cryoDRGN et RELION, dépannage). **Settings › AI agents** donne les commandes
+pour le brancher et, avec des comptes, crée le **jeton API** qui le fait agir en votre nom (détails : README,
+section *Piloter CryoPlug avec une IA*).
+
+Ce qu'on peut lui demander, par exemple :
+
+- « Fais le point sur le projet P3 : qu'est-ce qui a été fait, quels résultats, qu'est-ce qui manque ? »
+- « Évalue la carte de J1 : résolution, anisotropie, résolution locale, et quelle carte utiliser pour construire. »
+- « Importe le job CryoSPARC /data/CS-x/J245 avec la séquence de /data/seq.fasta et prépare la construction de novo. »
+- « Pourquoi J14 a échoué ? Propose une correction. »
+- « Prépare le dépôt du modèle de J22 avec la carte de J1. »
+
+Il travaille avec vos droits (vos projets, vos dossiers), ne peut ni supprimer de job ni gérer les comptes, et vous
+demande votre accord avant les jobs GPU longs ou l'envoi de données hors du serveur. Gardez la main : relisez ses
+propositions, vérifiez dans le visualiseur 3D ce qu'il ne voit pas, et jugez vous-même les résultats avant de
+conclure ou de déposer. Il cite les jobs (P3/J14) et les chiffres des rapports : vous retrouvez tout dans l'interface.
+
 ---
 
 ## 2. Quelle carte pour quoi ?

@@ -9,6 +9,9 @@ CryoPlug is protected in one of three ways:
   the network (or ``[server] auth = "always"``) without accounts or password: the start-up banner (and
   ``cryoplug url``) prints links that log in directly.
 
+Scripts and AI agents send ``Authorization: Bearer`` with the shared password, the access token or, with user
+accounts, an API token of their account (see :mod:`cryoplug.users`); ``curl -u name:password`` also works.
+
 Without any of them the server only answers on localhost.  Requests that change something must come from
 the CryoPlug page itself (Origin check), and without a login only loopback host names are accepted, so that a
 web page opened in the same browser cannot drive the API (CSRF, DNS rebinding).
@@ -45,6 +48,9 @@ PUBLIC_PATHS = {"/login", "/logout", "/favicon.svg", "/css/app.css"}
 # All an account that must choose a new password can reach, besides the page itself.
 PASSWORD_CHANGE_PATHS = {"/api/info", "/api/me", "/api/me/password"}
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Changes refused to API tokens (scripts, AI agents): accounts, passwords, tokens and server settings stay in the
+# hands of people, in the web interface or with `cryoplug user` on the server.
+TOKEN_REFUSED = ("/api/users", "/api/me/password", "/api/me/tokens", "/api/settings", "/api/lanes")
 WILDCARD_HOSTS = {"", "0.0.0.0", "::"}
 
 # Whoever opens CryoPlug without accounts (localhost, shared password or access token) owns the server.
@@ -225,6 +231,8 @@ class Auth:
         scheme = scheme.lower()
         if mode == "users":
             user = self.users.session_user(cookie) if cookie else None
+            if user is None and scheme == "bearer":  # API tokens: scripts, AI agents (cryoplug mcp)
+                user = self.users.session_user(value.strip())
             if user is None and scheme == "basic":  # scripts: curl -u name:password
                 user = self._basic_user(request, value)
             return user
@@ -343,6 +351,9 @@ def install(app: FastAPI, config: Config, users: Users,
         path = request.url.path
         if user.get("must_change_password") and path.startswith("/api/") and path not in PASSWORD_CHANGE_PATHS:
             return user, "password"
+        if user.get("token_label") and request.method in UNSAFE_METHODS and any(
+                path == p or path.startswith(p + "/") for p in TOKEN_REFUSED):
+            return user, "token"
         if gate is not None and not gate(user, request):
             return user, "hidden"
         return user, ""
@@ -368,6 +379,9 @@ def install(app: FastAPI, config: Config, users: Users,
                 return JSONResponse({"detail": "Choose a new password first", "code": "password_change"}, status_code=403)
             if refusal == "hidden":
                 return JSONResponse({"detail": "Not found"}, status_code=404)
+            if refusal == "token":
+                return JSONResponse({"detail": "Not allowed with an API token: accounts, tokens and settings are changed "
+                                               "in the web interface"}, status_code=403)
             return await call_next(request)
         rest = [(k, v) for k, v in request.query_params.multi_items() if k != "token"]
         here = request.url.path + (f"?{urlencode(rest)}" if rest else "")
@@ -378,7 +392,8 @@ def install(app: FastAPI, config: Config, users: Users,
             await asyncio.sleep(1)
         if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
             return RedirectResponse(f"/login?{urlencode({'next': here})}", status_code=303)
-        return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        # The protection mode (shown by the login page anyway) tells scripts and AI agents which credential to use.
+        return JSONResponse({"detail": "Authentication required", "auth": mode}, status_code=401)
 
     # Added last, so it wraps every answer (also the refusals above): no framing by other sites, no MIME sniffing.
     @app.middleware("http")

@@ -8,6 +8,10 @@ and the projects shared with them; administrators see everything.
 
 Jobs still run under the Unix account that started CryoPlug, as CryoSPARC jobs run as the cryosparc
 user: the folder restrictions apply to what can be chosen in CryoPlug, not to the programs themselves.
+
+Scripts and AI agents use **API tokens** instead of a password: long-lived sessions with a label, sent as
+``Authorization: Bearer <token>``, created in Settings › AI agents or with ``cryoplug user token`` and revoked
+there.  They act as their account (same projects and folders) and end with its password or when it is disabled.
 """
 from __future__ import annotations
 
@@ -35,6 +39,10 @@ SETTINGS = {
     "min_password_length": (8, 6, 64),
 }
 SETTING_LABELS = {"session_days": "Session duration (days)", "min_password_length": "Minimum password length"}
+
+TOKEN_PREFIX = "cpt_"  # recognisable in configuration files (and by secret scanners)
+TOKEN_DAYS = 365       # default validity of an API token
+TOKEN_MAX_DAYS = 3650
 
 # scrypt is memory-hard (32 MiB per hash here): guessing passwords from a stolen database is slow.
 SCRYPT_N, SCRYPT_R, SCRYPT_P = 2 ** 15, 8, 1
@@ -449,6 +457,7 @@ class Users:
         if now - (session["last_seen_at"] or 0) > 60:
             self.db.touch_session(key, now)
         user["session"] = key
+        user["token_label"] = session.get("label") or ""  # set: an API token, not a browser
         return user
 
     def end_session(self, token: str | None) -> None:
@@ -461,4 +470,36 @@ class Users:
                 for s in self.db.list_sessions(user["id"])]
 
     def end_other_sessions(self, user: dict[str, Any]) -> None:
-        self.db.delete_user_sessions(user["id"], keep=user.get("session"))
+        """Logs out the other browsers; the API tokens stay (revoked one by one)."""
+        self.db.delete_user_sessions(user["id"], keep=user.get("session"), browsers_only=True)
+
+    # ------------------------------------------------------------- API tokens
+    def new_token(self, user: dict[str, Any], label: Any = "", days: Any = TOKEN_DAYS, ip: str = "",
+                  agent: str = "") -> tuple[str, dict[str, Any]]:
+        """A long-lived token for scripts and AI agents (``Authorization: Bearer``), shown once: only its hash is
+        stored.  Returns (token, its description as in :meth:`tokens`)."""
+        label = " ".join(str(label or "").split())[:80] or "API token"
+        try:
+            days = int(days)
+        except (TypeError, ValueError):
+            raise UserError("Validity: a number of days") from None
+        if not 1 <= days <= TOKEN_MAX_DAYS:
+            raise UserError(f"Validity: between 1 and {TOKEN_MAX_DAYS} days")
+        token = TOKEN_PREFIX + secrets.token_urlsafe(32)
+        key = _token_hash(token)
+        self.db.add_session(key, user["id"], time.time() + days * 86400, ip[:64], agent[:300], label=label)
+        self.db.purge_sessions()
+        return token, next(t for t in self.tokens(user) if t["id"] == key[:12])
+
+    def tokens(self, user: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"id": s["token_hash"][:12], "label": s["label"], "created_at": s["created_at"], "last_used_at": s["last_seen_at"],
+                 "expires_at": s["expires_at"], "current": s["token_hash"] == user.get("session")}
+                for s in sorted(self.db.list_sessions(user["id"], tokens=True), key=lambda s: s["created_at"] or 0)]
+
+    def revoke_token(self, user: dict[str, Any], token_id: Any) -> dict[str, Any]:
+        token_id = str(token_id or "").strip()
+        found = [s for s in self.db.list_sessions(user["id"], tokens=True) if token_id and s["token_hash"].startswith(token_id)]
+        if len(found) != 1:
+            raise UserError(f"No API token '{token_id}' for {user['username']}")
+        self.db.delete_session(found[0]["token_hash"])
+        return {"id": found[0]["token_hash"][:12], "label": found[0]["label"]}

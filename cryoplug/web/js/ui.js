@@ -109,6 +109,7 @@ const ICONS = {
   logout: 'M14 4h4.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H14M10 16l-4-4 4-4M6 12h10',
   pulse: 'M3 12h4l2.5-6 4 12 2.5-6H21',
   cpu: 'M7 7h10v10H7zM10 10h4v4h-4zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4',
+  bot: 'M8 8h8a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-5a3 3 0 0 1 3-3zM12 4.5V8M12 4.5h.01M9.5 12.5v1M14.5 12.5v1M10 16.5h4M3 13v2M21 13v2',
   gpu: 'M3 7h18v10H3zM7 17v3M11 17v3M15 17v3M8 12a2 2 0 1 0 4 0 2 2 0 0 0-4 0M15 10h3M15 14h3',
   memory: 'M4 8h16v8H4zM8 8v8M12 8v8M16 8v8M6 16v3M18 16v3',
   disk: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3v12c0 1.7-3.6 3-8 3s-8-1.3-8-3zM4 6c0 1.7 3.6 3 8 3s8-1.3 8-3M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
@@ -275,7 +276,8 @@ export function showError(err) {
 export function fmtTime(ts) {
   if (!ts) return '';
   const d = new Date(ts * 1000);
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const year = d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}; // e.g. when an API token ends
+  return d.toLocaleString(undefined, { ...year, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 export function fmtDuration(sec) {
