@@ -9,14 +9,13 @@ import { renderResources, stopResources } from './resources.js';
 import { renderPasswordChange, renderSettings } from './settings.js';
 import { treeKey } from './tree.js';
 import { builderHref, loadStatic, navigate, onJobsChanged, refreshJobs, state } from './state.js';
-import { avatar, clear, guard, h, lastInput, modal, showError, toast } from './ui.js';
+import { avatar, clear, guard, h, lastInput, modal, showError, tickTimes, toast } from './ui.js';
 
 const content = document.getElementById('content');
 const panel = document.getElementById('panel');
 const crumbs = document.getElementById('crumbs');
 const topRight = document.getElementById('topbar-right');
-let dragging = false;
-let jobsSignature = '';
+let jobsSignature = ''; // the job list the cards show
 let cardsScroll = 0; // scroll position of the job cards while a job is opened in their place
 
 // ------------------------------------------------------------------ theme
@@ -37,8 +36,25 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
 window.addEventListener('error', (e) => showError(e.error || e.message));
 window.addEventListener('unhandledrejection', (e) => showError(e.reason));
 
-document.addEventListener('dragstart', () => { dragging = true; });
-document.addEventListener('dragend', () => { dragging = false; });
+// A drag from the page (an output chip, a job card on its way to the builder): the cards are not drawn again under it,
+// that would take away what is dragged. Its dragend does not always reach the document: there is none after a drag
+// cancelled as it starts (a 3D link of the tree), and it goes nowhere when what is dragged has been replaced meanwhile
+// (the details of a job that changed). So a drag that has given no sign of life for a second is over.
+const drag = { on: false, seen: 0 };
+const dragging = () => drag.on && performance.now() - drag.seen < 1000;
+document.addEventListener('dragstart', (e) => {
+  if (e.defaultPrevented) return; // no drag
+  drag.on = true;
+  drag.seen = performance.now();
+});
+for (const type of ['drag', 'dragover']) document.addEventListener(type, () => { drag.seen = performance.now(); }, true);
+for (const type of ['dragend', 'drop']) {
+  document.addEventListener(type, () => {
+    if (!drag.on) return;
+    drag.on = false;
+    setTimeout(() => { if (state.project) showJobs(state.jobs); }); // what changed during the drag, once the drop is done
+  }, true);
+}
 document.addEventListener('cryoplug-builder-type', () => renderJobs()); // output chips, cards dragged to the builder
 
 // ------------------------------------------------------------------ scroll after a reload
@@ -251,14 +267,17 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ------------------------------------------------------------------ polling
-onJobsChanged((jobs) => {
-  const sig = JSON.stringify(jobs.map((j) => [j.uid, j.status, j.progress, j.message, j.title, j.outputs.length, j.highlights, j.error]));
-  if (sig === jobsSignature) return;
+// The cards (or the tree), the builder's inputs and the job details follow any change of the job list; under a drag,
+// once it is over.
+function showJobs(jobs) {
+  const sig = JSON.stringify(jobs);
+  if (sig === jobsSignature || dragging()) return;
   jobsSignature = sig;
-  if (!dragging) renderJobs();
+  renderJobs();
   refreshBuilderInputs();
   if (detailUid()) refreshDetail();
-});
+}
+onJobsChanged(showJobs);
 
 let tick = 0;
 async function poll() {
@@ -266,7 +285,7 @@ async function poll() {
   try {
     if (state.route.page === 'project' && state.project) {
       await refreshJobs();
-      if (detailUid() && detailIsLive()) await refreshDetail();
+      if (detailUid() && detailIsLive() && !dragging()) await refreshDetail();
     }
     if (tick % 2 === 0) {
       const q = await api.queue();
@@ -320,6 +339,8 @@ async function start() {
   await route();
   restoreScroll();
   setInterval(poll, 2500);
+  setInterval(tickTimes, 1000); // "5 min ago", the run time of running jobs
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); }); // timers slow down in a hidden tab
 }
 
 start();

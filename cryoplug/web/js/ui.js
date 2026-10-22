@@ -315,6 +315,29 @@ export function ago(ts) {
   return `${Math.floor(d / 86400)} d ago`;
 }
 
+// "5 min ago" and the run time of a running job, kept true between two drawings of what shows them (tickTimes).
+export function liveAgo(ts) {
+  return h('span', { dataset: { since: ts } }, ago(ts));
+}
+
+export function liveDuration(job) {
+  const text = jobDuration(job);
+  return text && !job.ended_at && ['launched', 'running'].includes(job.status) ? h('span', { dataset: { run: job.started_at } }, text) : text;
+}
+
+// Called every second by app.js; only the texts that changed are touched.
+export function tickTimes() {
+  const now = Date.now() / 1000;
+  for (const el of document.querySelectorAll('[data-since]')) {
+    const text = ago(Number(el.dataset.since));
+    if (el.textContent !== text) el.textContent = text;
+  }
+  for (const el of document.querySelectorAll('[data-run]')) {
+    const text = fmtDuration(now - Number(el.dataset.run));
+    if (el.textContent !== text) el.textContent = text;
+  }
+}
+
 // A long path shortened to its last folders ("…/projects/CP-demo"), for display only.
 export function shortPath(path, max = 44) {
   if (!path || path.length <= max) return path || '';

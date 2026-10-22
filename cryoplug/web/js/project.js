@@ -6,7 +6,7 @@ import { importFromComputer } from './importer.js';
 import { builderHref, jobHref, navigate, refreshJobs, state, typeTitle } from './state.js';
 import { renderTree } from './tree.js';
 import {
-  ACTIVE, ago, btn, clear, confirmDialog, fmtTime, guard, h, icon, jobDuration, modal, popupMenu, runAction, statusChip, toast,
+  ACTIVE, ago, btn, clear, confirmDialog, fmtTime, guard, h, icon, liveAgo, liveDuration, modal, popupMenu, runAction, statusChip, toast,
 } from './ui.js';
 
 const STATUSES = ['building', 'queued', 'launched', 'running', 'waiting', 'completed', 'failed', 'killed'];
@@ -274,9 +274,9 @@ function cardFoot(job) {
   const when = job.ended_at || job.started_at || job.created_at;
   const tip = [`Created ${fmtTime(job.created_at)}`, job.started_at ? `started ${fmtTime(job.started_at)}` : '',
     job.ended_at ? `ended ${fmtTime(job.ended_at)}` : '', job.lane ? `lane ${job.lane}` : ''].filter(Boolean).join(' · ');
-  const dur = jobDuration(job);
+  const dur = liveDuration(job);
   return h('div', { class: 'card-foot', title: tip },
-    h('span', {}, ago(when)),
+    liveAgo(when),
     h('span', {}, dur ? h('span', { class: 'dur' }, icon('clock'), dur) : null, state.info.lanes.length > 1 && job.lane ? ` · ${job.lane}` : ''));
 }
 

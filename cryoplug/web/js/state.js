@@ -57,9 +57,18 @@ export function setJobtypes(jobtypes) {
   state.types = Object.fromEntries(jobtypes.map((t) => [t.name, t]));
 }
 
+let jobsAsked = 0; // requests for the job list, numbered
+let jobsShown = 0; // the request whose answer is in state.jobs
+
 export async function refreshJobs() {
   if (!state.project) return;
-  const jobs = await api.jobs(state.project.uid);
+  const puid = state.project.uid;
+  const n = ++jobsAsked;
+  const jobs = await api.jobs(puid);
+  // an answer overtaken by a newer one (a poll sent just before an action, answered after the refresh that follows
+  // the action) would bring back the old state; one for the project left meanwhile, the wrong jobs
+  if (n < jobsShown || state.project?.uid !== puid) return;
+  jobsShown = n;
   state.jobs = jobs;
   state.jobsByUid = Object.fromEntries(jobs.map((j) => [j.uid, j]));
   for (const fn of state.listeners) {

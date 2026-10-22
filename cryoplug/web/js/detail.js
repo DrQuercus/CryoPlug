@@ -9,7 +9,7 @@ import { latentExplorer } from './latent.js';
 import { heatmap, lineChart } from './plots.js';
 import { builderHref, jobHref, navigate, refreshJobs, restricted, state, typeTitle } from './state.js';
 import {
-  ACTIVE, ago, btn, clear, confirmDialog, copyText, fmtSize, fmtTime, guard, h, icon, jobDuration, LIVE, popupMenu,
+  ACTIVE, ago, btn, clear, confirmDialog, copyText, fmtSize, fmtTime, guard, h, icon, jobDuration, LIVE, liveAgo, liveDuration, popupMenu,
   statusChip, statusMark, toast,
 } from './ui.js';
 
@@ -151,14 +151,15 @@ function renderHeaderOnly() {
   }, icon('more')));
 
   const page = D.mode === 'page';
-  const when = job.ended_at ? `${job.status === 'completed' ? 'finished' : job.status} ${ago(job.ended_at)}` : job.started_at ? `started ${ago(job.started_at)}` : `created ${ago(job.created_at)}`;
+  const [verb, at] = job.ended_at ? [job.status === 'completed' ? 'finished' : job.status, job.ended_at]
+    : job.started_at ? ['started', job.started_at] : ['created', job.created_at];
   clear(headEl,
     h('div', { class: 'panel-title' },
       page ? btn('Jobs', () => navigate(closeHref()), { cls: 'small', ic: 'back', title: 'Back to the job cards (the builder stays open)' }) : null,
       h('span', { class: 'uid' }, job.uid), titleEl, statusChip(job.status),
       page ? null : h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => navigate(closeHref()) }, icon('close'))),
-    h('div', { class: 'panel-sub muted small' }, h('span', {}, typeTitle(job.type)), h('span', {}, when),
-      jobDuration(job) ? h('span', { title: 'Run time' }, icon('clock'), jobDuration(job)) : null, job.lane ? h('span', {}, `lane ${job.lane}`) : null,
+    h('div', { class: 'panel-sub muted small' }, h('span', {}, typeTitle(job.type)), h('span', {}, `${verb} `, liveAgo(at)),
+      jobDuration(job) ? h('span', { title: 'Run time' }, icon('clock'), liveDuration(job)) : null, job.lane ? h('span', {}, `lane ${job.lane}`) : null,
       (job.gpus || []).length ? h('span', { title: 'GPUs given to the job' }, icon('gpu'), `GPU ${job.gpus.join(', ')}`) : null,
       job.created_by && state.info.auth === 'users' ? h('span', { title: 'Created by' }, icon('user'), job.created_by) : null),
     h('div', { class: 'actions-bar' }, actions),

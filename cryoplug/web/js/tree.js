@@ -414,6 +414,7 @@ export function renderTree(area, o) {
     if (focused) m.els.get(focused)?.focus({ preventScroll: true });
   }
   m.o = o;
+  m.jobs = scoped.jobs; // the same jobs and links (same key), as they are now: status, progress, outputs...
   m.scope = scoped.scope;
   area.querySelector(':scope > .selbar')?.remove();
   if (o.bar) area.prepend(o.bar);
