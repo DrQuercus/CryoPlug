@@ -4,7 +4,8 @@ import { computeSection, cpuParams, initCompute, requestedBody } from './compute
 import { browseFiles } from './filebrowser.js';
 import { CATEGORY_FR, helpDetails, helpModal } from './help.js';
 import { compatibleOutputs, navigate, refreshJobs, restricted, state, typeTitle } from './state.js';
-import { btn, clear, guard, h, icon, toast } from './ui.js';
+import { btn, clear, guard, h, icon, popupMenu, toast } from './ui.js';
+import { draggingFiles, filesFromDrop, pickFiles, uploadForField } from './upload.js';
 
 const panel = () => document.getElementById('panel');
 
@@ -295,16 +296,42 @@ export function paramField(prm, values, idPrefix = 'p') {
   const locked = prm.admin_only && restricted();
   if (locked) input.disabled = true;
   if (prm.unit) controls.push(h('span', { class: 'unit' }, prm.unit));
-  if (prm.type === 'path') {
-    controls.push(btn('Browse', async () => {
-      const kind = prm.path_kind === 'dir' ? 'dir' : 'file';
-      const start = input.value || '';
-      const chosen = await browseFiles({ start, kind, title: `Select ${prm.label.toLowerCase()}` });
-      if (chosen) { input.value = chosen; set(chosen); }
-    }, { cls: 'small', ic: 'folder' }));
-  }
-  return h('div', { class: 'field' }, label, h('div', { class: 'row' }, controls), help,
+  const row = h('div', { class: 'row' }, controls);
+  if (!locked && (prm.type === 'path' || (prm.type === 'str' && prm.path_kind === 'files'))) fileControls(prm, input, set, row);
+  return h('div', { class: 'field' }, label, row, help,
     locked ? h('div', { class: 'help' }, icon('lock'), ' Administrators only: it can run code on the server.') : null);
+}
+
+// A file field: Browse (on the server) and, in a project, Upload (from this computer; or drop files on the field).
+function fileControls(prm, input, set, row) {
+  const kind = prm.type !== 'path' ? 'files' : prm.path_kind === 'dir' ? 'dir' : prm.path_kind === 'any' ? 'any' : 'file';
+  const apply = (value) => { input.value = value; set(value); };
+  row.appendChild(btn('Browse', async () => {
+    const parts = input.value.split(';').map((x) => x.trim()).filter(Boolean);
+    const chosen = await browseFiles({ start: (kind === 'files' ? parts[parts.length - 1] : input.value) || '', kind: kind === 'dir' ? 'dir' : 'file',
+      title: `Select ${prm.label.toLowerCase()}`, project: state.project });
+    if (chosen) apply(kind === 'files' ? [...parts, chosen].join('; ') : chosen);
+  }, { cls: 'small', ic: 'folder', title: 'Choose a file on the server' }));
+  if (!state.project) return;
+  const upload = async (items) => {
+    const value = await uploadForField(state.project.uid, kind, items, input.value);
+    if (value) apply(value);
+  };
+  row.appendChild(btn('Upload', (e) => {
+    if (kind !== 'any') { pickFiles({ multiple: kind === 'files', directory: kind === 'dir' }).then(upload); return; }
+    popupMenu(e.currentTarget, [
+      { label: 'Files…', ic: 'file', action: async () => upload(await pickFiles({ multiple: true })) },
+      { label: 'A folder…', ic: 'folder', action: async () => upload(await pickFiles({ directory: true })) },
+    ]);
+  }, { cls: 'small', ic: 'upload', title: 'Send from this computer to the project, then use it here (or drop it on the field)' }));
+  row.addEventListener('dragover', (e) => { if (draggingFiles(e)) { e.preventDefault(); row.classList.add('file-target'); } });
+  row.addEventListener('dragleave', () => row.classList.remove('file-target'));
+  row.addEventListener('drop', async (e) => {
+    if (!draggingFiles(e)) return;
+    e.preventDefault();
+    row.classList.remove('file-target');
+    upload(await filesFromDrop(e.dataTransfer));
+  });
 }
 
 function renderTypePicker(p) {

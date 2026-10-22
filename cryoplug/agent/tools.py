@@ -17,11 +17,13 @@ import base64
 import difflib
 import fnmatch
 import json
+import os
 import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from cryoplug.agent.client import AgentError, ApiError
@@ -60,6 +62,7 @@ class Tool:
     read_only: bool = True
     destructive: bool = False
     idempotent: bool = True
+    local_only: bool = False  # reads files of the agent's computer: only where the tool runs there (cryoplug mcp)
 
     def definition(self) -> dict[str, Any]:
         """The MCP description of the tool (tools/list)."""
@@ -78,10 +81,10 @@ TOOLS: dict[str, Tool] = {}
 
 def tool(name: str, title: str, description: str, properties: dict[str, dict[str, Any]] | None = None,
          required: tuple[str, ...] = (), *, read_only: bool = True, destructive: bool = False,
-         idempotent: bool | None = None) -> Callable:
+         idempotent: bool | None = None, local_only: bool = False) -> Callable:
     def register(fn: Callable) -> Callable:
         TOOLS[name] = Tool(name, title, " ".join(description.split()), properties or {}, required, fn, read_only,
-                           destructive, read_only if idempotent is None else idempotent)
+                           destructive, read_only if idempotent is None else idempotent, local_only)
         return fn
     return register
 
@@ -201,11 +204,14 @@ class Args:
 
 
 class Session:
-    """What the tools of one agent connection share: the client of the server and cached answers."""
+    """What the tools of one agent connection share: the client of the server and cached answers.
+    ``local_files``: the tools run on the agent's computer (``cryoplug mcp``, ``cryoplug ai call``), so that its files
+    can be uploaded; never inside the server (``/mcp``), where they would be the server's files."""
 
-    def __init__(self, client: Any, allow_commands: bool = False):
+    def __init__(self, client: Any, allow_commands: bool = False, local_files: bool = False):
         self.client = client
         self.allow_commands = allow_commands
+        self.local_files = local_files
         self._jobtypes: dict[str, dict[str, Any]] | None = None
         self._programs: dict[str, dict[str, Any]] | None = None
 
@@ -1318,6 +1324,118 @@ def browse_server_files(s: Session, a: Args) -> str:
     return "\n".join(lines)
 
 
+MAP_FILE = re.compile(r"\.(mrc|map|ccp4)(\.gz)?$", re.I)  # not .mrcs: particle stacks
+MODEL_FILE = re.compile(r"\.(pdb|cif|mmcif|ent)(\.gz)?$", re.I)
+SEQUENCE_FILE = re.compile(r"\.(fasta|fa|faa|fas|fna|seq)$", re.I)
+MAP_ROLES = ("half_map_a", "half_map_b", "map", "map_sharp", "mask")
+
+
+def map_role(name: str) -> str:
+    """What a map is, from its file name (CryoSPARC, RELION, EMDB names), as the web interface guesses it."""
+    n = MAP_FILE.sub("", name.lower())
+    if re.search(r"half[_-]?(map[_-]?)?(a|1)([^a-z0-9]|$)", n):
+        return "half_map_a"
+    if re.search(r"half[_-]?(map[_-]?)?(b|2)([^a-z0-9]|$)", n):
+        return "half_map_b"
+    if re.search(r"(mask|msk)(?!ed)", n):  # EMDB: emd_1234_msk_1.map; RELION's postprocess_masked is a map
+        return "mask"
+    if re.search(r"sharp|postprocess|post_process|(^|[^a-z0-9])pp([^a-z0-9]|$)", n):
+        return "map_sharp"
+    return "map"
+
+
+def import_suggestions(files: list[str], folder: str = "") -> list[tuple[str, dict[str, Any], str]]:
+    """The import jobs for uploaded files (server paths), guessed from their names: (job type, params, note);
+    ``folder``: they were sent as this folder (a CryoSPARC job folder, a series of volumes)."""
+    names = [f.rsplit("/", 1)[-1] for f in files]
+    maps = [f for f in files if MAP_FILE.search(f)]
+    if folder and ("job.json" in names or any(re.match(r"J\d+_\d+_volume_map", n, re.I) for n in names)):
+        return [("import_cryosparc", {"job_dir": folder}, "a CryoSPARC job folder")]
+    if folder and len(maps) >= 2 and all(map_role(m) == "map" for m in maps):
+        return [("import_volume_series", {"path": folder}, f"{len(maps)} volumes")]
+    out: list[tuple[str, dict[str, Any], str]] = []
+    roles: dict[str, str] = {}
+    for m in maps:
+        role = map_role(m.rsplit("/", 1)[-1])
+        if role in roles:
+            out.append(("import_maps", {"map_sharp": m}, ""))
+        else:
+            roles[role] = m
+    if list(roles) == ["map"]:  # a single map: the one to look at and build into
+        roles = {"map_sharp": roles["map"]}
+    if roles:
+        half = ("half_map_a" in roles) != ("half_map_b" in roles)
+        out.insert(0, ("import_maps", {r: roles[r] for r in MAP_ROLES if r in roles}, "add the other half map" if half else ""))
+    for f in files:
+        if MODEL_FILE.search(f):
+            out.append(("import_model", {"source": "file", "path": f}, ""))
+        elif SEQUENCE_FILE.search(f):
+            out.append(("import_sequence", {"path": f}, ""))
+        elif f.lower().endswith(".zip"):
+            out.append(("import_volume_series", {"path": f}, "a ZIP of volumes"))
+        elif f.lower().endswith((".cs", ".star")):
+            out.append(("import_particles", {"path": f}, "metadata only: the particle images must be on the server, "
+                        "give their folder as datadir"))
+    return out
+
+
+@tool("upload_file", "Upload a file from this computer", """
+Send a file or a whole folder from the computer this agent runs on into the uploads folder of a project on the
+CryoPlug server (in chunks; an interrupted upload resumes, a file already there is not sent again). Answers its path
+on the server and the create_job call importing it (import_maps, import_model, import_cryosparc...). Not needed when
+the server can read the file already (browse_server_files): give that path to the import job.""",
+      {"project": PROJECT, "path": _string("File or folder on this computer (absolute, or ~/...).")},
+      ("project", "path"), read_only=False, idempotent=True, local_only=True)
+def upload_file(s: Session, a: Args) -> str:
+    from cryoplug.agent import client as transfer
+
+    if not s.local_files:
+        raise ToolError("upload_file reads files of the agent's computer: it works with `cryoplug mcp` (or `cryoplug "
+                        "upload`) run there, not through the server's /mcp address. Files already on the server: "
+                        "give their path to the import job (browse_server_files finds them).")
+    text = a.str("path")
+    if not text:
+        raise ToolError("Give the path of the file or folder on this computer")
+    path = Path(os.path.expanduser(text))
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if not path.exists():
+        raise ToolError(f"No file or folder {path} on this computer")
+    p = s.project(a.str("project"))
+    started = time.time()
+
+    def progress(sent: int, total: int) -> None:
+        if a.cancelled():
+            raise ToolError(f"Upload of {path.name} stopped at {size(sent)} of {size(total)}: call upload_file again "
+                            "to resume it")
+        a.progress(sent, total, f"{path.name}: {size(sent)} of {size(total)}")
+
+    try:
+        if path.is_dir():
+            res = transfer.upload_folder(s.client, p["uid"], path, progress)
+            files = [e["path"] for e in s.get(f"/api/projects/{p['uid']}/uploads")["files"]
+                     if e["rel"].startswith(f"{res['folder']}/")]
+            lines = [f"Uploaded the folder {path} ({res['files']} files, {size(res['size'])}) to {p['uid']}: {res['path']}"]
+            suggestions = import_suggestions(files, res["path"])
+        else:
+            res = transfer.upload_file(s.client, p["uid"], path, progress=progress)
+            lines = [f"{'Already uploaded' if res.get('reused') else 'Uploaded'} {path.name} ({size(res['size'])}) to "
+                     f"{p['uid']}: {res['path']}"]
+            suggestions = import_suggestions([res["path"]])
+    except OSError as exc:  # unreadable here
+        raise ToolError(f"Cannot read {exc.filename or path}: {exc.strerror or exc}") from None
+    seconds = time.time() - started
+    if seconds > 5:
+        lines[0] += f" in {duration(seconds)}"
+    if suggestions:
+        lines.append("To import it:" if len(suggestions) == 1 else "To import them:")
+        lines += [f"  create_job project={p['uid']} type={jtype} params={json.dumps(params)} queue=true"
+                  + (f"  ({note})" if note else "") for jtype, params, note in suggestions]
+    else:
+        lines.append("Give this path to the job parameter that needs the file (describe_job_type shows them).")
+    return "\n".join(lines)
+
+
 @tool("list_job_files", "List a job's files", """
 The files in a job's folder (or a subfolder), with their paths relative to the project, for read_project_file.""",
       {"project": PROJECT, "job": JOB, "subfolder": _string("Subfolder of the job folder (default: the folder itself).")},
@@ -1454,20 +1572,25 @@ BASIC = ("server_status", "list_projects", "get_project", "list_job_types", "des
          "create_job", "queue_job", "get_job", "get_job_log", "wait_for_jobs", "read_skill")
 
 
-def select_tools(spec: str | None) -> list[str]:
-    """The tool names of a profile (``all``, ``basic``, ``read``) or of a comma-separated list."""
+def select_tools(spec: str | None, local_files: bool = True) -> list[str]:
+    """The tool names of a profile (``all``, ``basic``, ``read``) or of a comma-separated list; without
+    ``local_files`` (the server's /mcp), not the tools reading files of the agent's computer."""
+    offered = [n for n, t in TOOLS.items() if local_files or not t.local_only]
     spec = (spec or "all").strip().lower()
     if spec == "all":
-        return list(TOOLS)
+        return offered
     if spec == "basic":
         return list(BASIC)
     if spec in ("read", "read-only", "readonly"):
-        return [n for n, t in TOOLS.items() if t.read_only]
+        return [n for n in offered if TOOLS[n].read_only]
     names = [n.strip() for n in spec.split(",") if n.strip()]
     unknown = [n for n in names if n not in TOOLS]
     if unknown or not names:
         raise ValueError(f"Unknown tool(s) {', '.join(unknown) or spec!r}: use all, basic, read or names among "
-                         f"{', '.join(TOOLS)}")
+                         f"{', '.join(offered)}")
+    elsewhere = [n for n in names if n not in offered]
+    if elsewhere:
+        raise ValueError(f"{', '.join(elsewhere)} read(s) files of the agent's computer: use `cryoplug mcp` there")
     return names
 
 

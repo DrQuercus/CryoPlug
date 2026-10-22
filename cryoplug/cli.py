@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
+import shlex
 import shutil
 import sys
 import tarfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -310,7 +313,7 @@ def cmd_ai(args: argparse.Namespace) -> None:
 
         for t in TOOLS.values():
             kind = "read-only" if t.read_only else "destructive" if t.destructive else "changes"
-            print(f"{t.name:<22} [{kind}] {t.description}")
+            print(f"{t.name:<22} [{kind}{', cryoplug mcp only' if t.local_only else ''}] {t.description}")
     elif args.action in ("call", "check"):
         _ai_call(args)
 
@@ -339,8 +342,6 @@ def _ai_skills(args: argparse.Namespace) -> None:
 
 
 def _ai_setup(args: argparse.Namespace) -> None:
-    import json
-
     from cryoplug.agent.client import local_url
     from cryoplug.db import Database
     from cryoplug.server.auth import auth_mode
@@ -385,13 +386,12 @@ def _ai_setup(args: argparse.Namespace) -> None:
 
 
 def _ai_call(args: argparse.Namespace) -> None:
-    import json
-
     from cryoplug.agent import tools as toolmod
     from cryoplug.agent.client import AgentError, Client, connection
 
     try:
-        session = toolmod.Session(Client(connection(args.config, args.url, args.token)), allow_commands=args.allow_commands)
+        session = toolmod.Session(Client(connection(args.config, args.url, args.token)), allow_commands=args.allow_commands,
+                                  local_files=True)
     except AgentError as exc:
         sys.exit(str(exc))
     name = "server_status" if args.action == "check" else args.tool
@@ -421,6 +421,53 @@ def _ai_call(args: argparse.Namespace) -> None:
             print(f"[image saved: {path}]")
     if reply.error:
         sys.exit(1)
+
+
+def cmd_upload(args: argparse.Namespace) -> None:
+    """``cryoplug upload P1 FILE...``: send files or folders of this computer into the uploads folder of a project."""
+    from cryoplug.agent import tools as toolmod
+    from cryoplug.agent.client import AgentError, Client, connection, upload_file, upload_folder
+
+    paths = [Path(p).expanduser() for p in args.paths]
+    missing = [str(p) for p in paths if not p.exists()]
+    if missing:
+        sys.exit(f"Not found: {', '.join(missing)}")
+    try:
+        session = toolmod.Session(Client(connection(args.config, args.url, args.token)), local_files=True)
+        project = session.project(args.project)
+    except AgentError as exc:
+        sys.exit(str(exc))
+    tty = sys.stderr.isatty()
+    for path in paths:
+        started = time.time()
+
+        def progress(sent: int, total: int, name: str = path.name, started: float = started) -> None:
+            if tty:
+                rate = sent / max(time.time() - started, 1e-3)
+                print(f"\r  {name}: {sent / 2**20:,.0f} / {total / 2**20:,.0f} MB ({rate / 2**20:,.0f} MB/s)  ",
+                      end="", file=sys.stderr, flush=True)
+
+        try:
+            if path.is_dir():
+                res = upload_folder(session.client, project["uid"], path, progress)
+                files = [e["path"] for e in session.get(f"/api/projects/{project['uid']}/uploads")["files"]
+                         if e["rel"].startswith(f"{res['folder']}/")]
+                line = f"{path}/ -> {res['path']} ({res['files']} files, {toolmod.size(res['size'])})"
+                suggestions = toolmod.import_suggestions(files, res["path"])
+            else:
+                res = upload_file(session.client, project["uid"], path, progress=progress)
+                line = f"{path} -> {res['path']}" + (" (already there)" if res.get("reused") else "")
+                suggestions = toolmod.import_suggestions([res["path"]])
+        except (AgentError, OSError) as exc:
+            if tty:
+                print(file=sys.stderr)
+            sys.exit(f"{path}: {exc}")
+        if tty:
+            print("\r\033[K", end="", file=sys.stderr)
+        print(line)
+        for jtype, params, note in suggestions:  # in the shell, as an agent would create the job
+            print(f"  import: cryoplug ai call create_job project={project['uid']} type={jtype} "
+                  f"{shlex.quote('params=' + json.dumps(params))} queue=true" + (f"   # {note}" if note else ""))
 
 
 def cmd_service(args: argparse.Namespace) -> None:
@@ -562,6 +609,13 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--images", metavar="DIR", help="Folder for the images a tool returns (default: here)")
     connection_options(ap)
     p.set_defaults(func=cmd_ai)
+
+    p = sub.add_parser("upload", help="Send files or folders of this computer to a project (its uploads folder)")
+    p.add_argument("project", help="Project id (P1) or title")
+    p.add_argument("paths", nargs="+", metavar="PATH", help="Files or folders (a folder keeps its inner paths)")
+    p.add_argument("--url", help="CryoPlug server (default: $CRYOPLUG_URL, else the server of the configuration)")
+    p.add_argument("--token", help="Credential (default: $CRYOPLUG_TOKEN, else found for the local server)")
+    p.set_defaults(func=cmd_upload)
 
     p = sub.add_parser("worker", help=argparse.SUPPRESS)
     p.add_argument("job_dir")

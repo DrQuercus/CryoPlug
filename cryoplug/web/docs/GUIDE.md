@@ -65,6 +65,22 @@ Statuts d'un job :
 Pour essayer sans données : `cryoplug demo-data ~/cryoplug_demo`, puis importez
 `~/cryoplug_demo/CS-demo/J42` (jeu synthétique).
 
+### Importer depuis votre ordinateur
+
+Vos cartes sont sur votre portable et pas sur le serveur ? Sur le projet, cliquez **Upload** (ou glissez les
+fichiers et dossiers sur la page). CryoPlug les envoie dans le dossier `uploads/` du projet, reconnaît demi-cartes,
+cartes, masques, modèles, séquences, dossiers de job CryoSPARC et séries de volumes d'après leur nom, puis propose
+les jobs d'import à créer (et à lancer) d'un clic. Vérifiez les rôles proposés : un nom ambigu peut tromper la
+reconnaissance. Dans ce cas, ouvrez le job dans le constructeur pour corriger.
+
+- Dans un job, le bouton **Upload** à côté de *Browse* envoie le fichier (ou le dossier) du champ.
+- Un envoi interrompu reprend où il s'était arrêté quand vous renvoyez le même fichier, et un fichier déjà envoyé
+  n'est pas renvoyé : pas de doublon.
+- Les imports font un lien vers les fichiers envoyés, sans copie de plus. Les fichiers `.cs` et `.star` ne
+  contiennent pas les images des particules, qui doivent être sur le serveur pour *Import particles*.
+- Pour de très gros envois, ou depuis un script : `cryoplug upload P1 fichiers…` (README, section *Importer depuis
+  votre ordinateur*).
+
 ### Sélection et raccourcis
 
 Le bouton **⋯** d'une carte (ou un **clic droit**) réunit les actions du job : ouvrir, *Continue with…*,
@@ -181,6 +197,8 @@ Ce qu'on peut lui demander, par exemple :
 - « Fais le point sur le projet P3 : qu'est-ce qui a été fait, quels résultats, qu'est-ce qui manque ? »
 - « Évalue la carte de J1 : résolution, anisotropie, résolution locale, et quelle carte utiliser pour construire. »
 - « Importe le job CryoSPARC /data/CS-x/J245 avec la séquence de /data/seq.fasta et prépare la construction de novo. »
+- « Envoie les demi-cartes de ~/Téléchargements/emd_12345 dans le projet P2 et importe-les. » (assistant lancé sur
+  votre ordinateur avec `cryoplug mcp`)
 - « Pourquoi J14 a échoué ? Propose une correction. »
 - « Prépare le dépôt du modèle de J22 avec la carte de J1. »
 

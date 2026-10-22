@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from cryoplug import __version__
 from cryoplug.agent.http import install as install_mcp
@@ -25,6 +26,7 @@ from cryoplug.scheduler import Scheduler
 from cryoplug.server.accounts import author, can_access, can_manage, current_user, install as install_accounts, is_admin, require_admin
 from cryoplug.server.auth import install as install_auth, is_loopback
 from cryoplug.server.mapview import MapViews, map_header, map_response
+from cryoplug.uploads import CHUNK_MAX, CHUNK_SIZE, OffsetMismatch, UploadError, Uploads
 from cryoplug.users import UserError, Users, path_allowed
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -257,11 +259,17 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
 
     # --------------------------------------------------------- filesystem
     @app.get("/api/fs")
-    def browse(request: Request, path: str = Query(""), show_hidden: bool = False) -> dict[str, Any]:
+    def browse(request: Request, path: str = Query(""), show_hidden: bool = False, project: str = "") -> dict[str, Any]:
         user = current_user(request)
         mine = users.roots(user)
+        extra: list[Path] = []
+        if project:  # from a project: its folder too (the files uploaded into it), for its members
+            proj = manager.db.get_project(project)
+            if proj and can_access(user, proj):
+                extra.append(Path(proj["dir"]).resolve())
         if mine is None:
             folders = [Path(r).resolve() for r in config.browse_roots]
+            folders += [e for e in extra if not path_allowed(e, folders)]
             start = Path.home() if path_allowed(Path.home(), folders) else folders[0]
         else:
             try:  # a new user's projects folder appears with their first project: make it now, to browse
@@ -269,6 +277,7 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
             except OSError:
                 pass
             folders = [r.resolve() for r in mine]
+            folders += [e for e in extra if not path_allowed(e, folders)]
             start = next((r for r in folders if r.is_dir()), None)
             if start is None:
                 raise HTTPException(404, "None of your folders exists: ask an administrator (Settings › Users)")
@@ -422,6 +431,57 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     @app.post("/api/projects/{puid}/jobs/{juid}/interactive/finish")
     def finish(puid: str, juid: str, body: dict = Body(default={})) -> dict[str, Any]:
         return manager.finish_interactive(puid, juid, (body or {}).get("path"))
+
+    # ------------------------------------------------------------ uploads
+    # Files sent from the user's computer, by chunks, into <project>/uploads (see cryoplug.uploads).
+    @app.get("/api/projects/{puid}/uploads")
+    def list_uploads(puid: str) -> dict[str, Any]:
+        up = Uploads(manager.project_dir(puid))
+        return {"folder": str(up.root), "chunk_size": CHUNK_SIZE, "files": up.list()}
+
+    @app.post("/api/projects/{puid}/uploads")
+    def start_upload(puid: str, request: Request, body: dict = Body(...)) -> dict[str, Any]:
+        """Announce a file (name, size, fingerprint, folder): where it goes and from which byte to send it. With
+        ``reserve_folder``: a subfolder of its own for a folder being uploaded."""
+        up = Uploads(manager.project_dir(puid))
+        try:
+            if body.get("reserve_folder"):
+                rel = up.reserve_folder(body["reserve_folder"], str(body.get("fingerprint") or ""), body.get("folder") or "")
+                return {"folder": rel, "path": str(up.root / rel)}
+            started = up.start(body.get("name"), body.get("size"), body.get("folder") or "", body.get("fingerprint") or "",
+                               author(current_user(request)))
+        except UploadError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {**started, "chunk_size": CHUNK_SIZE}
+
+    @app.put("/api/projects/{puid}/uploads")
+    async def upload_chunk(puid: str, request: Request, rel: str, offset: int) -> Response:
+        """A chunk of the file ``rel`` starting at byte ``offset`` (raw body). 409 with the right offset when the
+        upload stands elsewhere (a chunk lost or sent twice)."""
+        if int(request.headers.get("content-length") or 0) > CHUNK_MAX:
+            raise HTTPException(413, f"Chunks of at most {CHUNK_MAX // 2**20} MB")
+        up = Uploads(manager.project_dir(puid))
+        pieces, total = [], 0
+        async for piece in request.stream():
+            total += len(piece)
+            if total > CHUNK_MAX:
+                raise HTTPException(413, f"Chunks of at most {CHUNK_MAX // 2**20} MB")
+            pieces.append(piece)
+        try:
+            done = await run_in_threadpool(up.write, rel, offset, b"".join(pieces), author(current_user(request)))
+        except OffsetMismatch as exc:
+            return JSONResponse({"detail": str(exc), "offset": exc.offset}, status_code=409)
+        except UploadError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return JSONResponse(done)
+
+    @app.delete("/api/projects/{puid}/uploads")
+    def cancel_upload(puid: str, rel: str) -> dict[str, Any]:
+        try:
+            Uploads(manager.project_dir(puid)).cancel(rel)
+        except UploadError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {"ok": True}
 
     # -------------------------------------------------------------- files
     @app.get("/api/projects/{puid}/file")

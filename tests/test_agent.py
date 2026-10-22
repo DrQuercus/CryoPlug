@@ -36,9 +36,12 @@ class ApiAdapter:
         self.url = BASE
         self.headers = {"Authorization": f"Bearer {token}"} if token else {}
 
-    def request(self, method, path, params=None, body=None, raw=False, timeout=None, max_bytes=None):
+    def request(self, method, path, params=None, body=None, raw=False, timeout=None, max_bytes=None, data=None):
         query = {k: (str(v).lower() if isinstance(v, bool) else v) for k, v in (params or {}).items() if v is not None}
-        r = self.client.request(method, path, params=query, json=body, headers=self.headers)
+        if data is not None:  # a chunk of a file
+            r = self.client.request(method, path, params=query, content=data, headers=self.headers)
+        else:
+            r = self.client.request(method, path, params=query, json=body, headers=self.headers)
         if r.status_code >= 400:
             raise api_error(r.status_code, r.content, r.reason_phrase, path)
         if raw:
@@ -436,6 +439,69 @@ def test_mcp_over_http(manager):
         # A browser page of another site cannot drive it (Origin check)
         evil = dict(headers, Origin="http://evil.example")
         assert client.post("/mcp", headers=evil, json={"jsonrpc": "2.0", "id": 7, "method": "ping"}).status_code == 403
+
+
+# ------------------------------------------------------------------ files of the agent's computer
+def test_import_suggestions_from_file_names():
+    guess = toolmod.import_suggestions
+    assert [toolmod.map_role(n) for n in ("J12_005_volume_map_half_A.mrc", "run_half2_class001_unfil.mrc",
+                                          "emd_1234_half_map_1.map", "emd_1234_msk_1.map", "postprocess_masked.mrc",
+                                          "J12_005_volume_mask_fsc_auto.mrc", "map_pp.mrc", "J12_005_volume_map.mrc")] == [
+        "half_map_a", "half_map_b", "half_map_a", "mask", "map_sharp", "mask", "map_sharp", "map"]
+    assert guess(["/u/emd_1234.map"]) == [("import_maps", {"map_sharp": "/u/emd_1234.map"}, "")]
+    maps = guess(["/u/run_half1_class001_unfil.mrc", "/u/run_half2_class001_unfil.mrc", "/u/mask.mrc", "/u/model.cif",
+                  "/u/seq.fasta", "/u/particles.star", "/u/stack.mrcs", "/u/notes.txt"])
+    assert maps[0] == ("import_maps", {"half_map_a": "/u/run_half1_class001_unfil.mrc",
+                                       "half_map_b": "/u/run_half2_class001_unfil.mrc", "mask": "/u/mask.mrc"}, "")
+    assert [m[0] for m in maps[1:]] == ["import_model", "import_sequence", "import_particles"]
+    assert guess(["/u/J9/job.json", "/u/J9/J9_002_volume_map.mrc"], "/u/J9")[0][:2] == ("import_cryosparc", {"job_dir": "/u/J9"})
+    assert guess(["/u/s/frame_000.mrc", "/u/s/frame_001.mrc"], "/u/s")[0][:2] == ("import_volume_series", {"path": "/u/s"})
+    assert guess(["/u/half_A.mrc"])[0][2] == "add the other half map"
+
+
+def test_upload_tool_and_command(app_client, manager, synthetic, tmp_path, monkeypatch, capsys):
+    app, client = app_client
+    local = toolmod.Session(ApiAdapter(client), local_files=True)  # cryoplug mcp, on the computer with the files
+    assert "Created P1" in call(local, "create_project", title="From my computer").text
+    half_a = synthetic["half_a"]
+    sent = call(local, "upload_file", project="P1", path=str(half_a))
+    uploaded = manager.project_dir("P1") / "uploads" / half_a.name
+    assert not sent.error and uploaded.read_bytes() == half_a.read_bytes(), sent.text
+    assert f'create_job project=P1 type=import_maps params={{"half_map_a": "{uploaded}"}} queue=true' in sent.text
+    assert call(local, "upload_file", project="P1", path=str(half_a)).text.startswith("Already uploaded")
+    assert "No file or folder" in call(local, "upload_file", project="P1", path=str(tmp_path / "nope.mrc")).text
+    # A CryoSPARC job folder: kept whole, then imported (hard links of the uploads)
+    folder = call(local, "upload_file", project="P1", path=str(synthetic["cryosparc_job"]))
+    job_dir = manager.project_dir("P1") / "uploads" / "J12"
+    assert not folder.error and "6 files" in folder.text and f'"job_dir": "{job_dir}"' in folder.text, folder.text
+    assert (job_dir / "J12_005_volume_map_half_B.mrc").read_bytes() == synthetic["half_b"].read_bytes()
+    made = call(local, "create_job", project="P1", type="import_cryosparc", params={"job_dir": str(job_dir)}, queue=True)
+    run_until_done(manager, "P1", ["J1"])
+    detail = client.get("/api/projects/P1/jobs/J1").json()
+    assert detail["status"] == "completed", (made.text, detail.get("error"))
+    # Inside the server (/mcp), "this computer" would be the server: refused, and not offered
+    remote = toolmod.Session(ApiAdapter(client))
+    refused = call(remote, "upload_file", project="P1", path="/etc/passwd")
+    assert refused.error and "cryoplug mcp" in refused.text
+    assert "upload_file" not in toolmod.select_tools("all", local_files=False)
+    with pytest.raises(ValueError, match="agent's computer"):
+        toolmod.select_tools("upload_file", local_files=False)
+    listed = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()["result"]["tools"]
+    assert "upload_file" not in {t["name"] for t in listed} and "browse_server_files" in {t["name"] for t in listed}
+    over_http = client.post("/mcp", json={"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+        "name": "upload_file", "arguments": {"project": "P1", "path": "/etc/passwd"}}}).json()
+    assert over_http["error"]["code"] == mcpmod.INVALID_PARAMS
+    assert next(t for t in client.get("/api/agent").json()["tools"] if t["name"] == "upload_file")["local"] is True
+    # The same from the shell: cryoplug upload
+    monkeypatch.setattr("cryoplug.agent.client.connection", lambda *a, **k: None)
+    monkeypatch.setattr("cryoplug.agent.client.Client", lambda conn: ApiAdapter(client))
+    cli_main(["upload", "P1", str(synthetic["model"]), str(synthetic["fasta"])])
+    out = capsys.readouterr().out
+    assert f"-> {manager.project_dir('P1') / 'uploads' / 'helix.pdb'}" in out
+    assert "import: cryoplug ai call create_job project=P1 type=import_model 'params={\"source\": \"file\"" in out
+    assert "type=import_sequence" in out
+    with pytest.raises(SystemExit, match="Not found"):
+        cli_main(["upload", "P1", str(tmp_path / "nope.pdb")])
 
 
 # ------------------------------------------------------------------ skills

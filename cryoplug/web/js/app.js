@@ -2,6 +2,7 @@
 import { api } from './api.js';
 import { closeBuilder, openBuilder, refreshBuilderInputs, renderBuilder } from './builder.js';
 import { closeDetail, detailIsLive, detailMode, detailUid, openDetail, refreshDetail } from './detail.js';
+import { installFileDrop } from './importer.js';
 import { renderHelp, renderProjects, renderTools } from './pages.js';
 import { clearSelection, renderJobs, renderProject, selectAllShown } from './project.js';
 import { renderResources, stopResources } from './resources.js';
@@ -315,6 +316,7 @@ async function start() {
     return;
   }
   window.addEventListener('hashchange', () => { route().catch((e) => guard(Promise.reject(e))); });
+  installFileDrop(); // files dragged from the computer onto a project: import them
   await route();
   restoreScroll();
   setInterval(poll, 2500);

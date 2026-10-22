@@ -266,6 +266,36 @@ Les fichiers de particules `.cs` des versions récentes de CryoSPARC (format com
 6. **View 3D** (dans les sorties d'un job, ou bouton **3D** au survol d'une carte de job) ouvre le
    visualiseur décrit ci-dessous.
 
+### Importer depuis votre ordinateur
+
+Les données n'ont pas besoin d'être déjà sur le serveur : le navigateur peut les y envoyer.
+
+- **Sur un projet** : bouton **Upload** de la barre d'outils, ou **glissez des fichiers ou des dossiers n'importe où
+  sur la page**. CryoPlug les envoie, **reconnaît ce qu'ils sont** d'après leur nom (noms CryoSPARC, RELION et
+  EMDB) et propose les jobs d'import : demi-cartes, cartes non affinée et affinée, masque (*Import maps*), modèle
+  PDB/mmCIF, séquence FASTA, dossier de job CryoSPARC (*Import from CryoSPARC*), série de volumes (dossier ou ZIP).
+  Cochez, ouvrez au besoin un job dans le constructeur pour le modifier, puis *Create the jobs* ou *Create and
+  queue*.
+- **Dans le constructeur de job** : chaque champ de fichier a un bouton **Upload** à côté de *Browse*, et on peut y
+  déposer un fichier ; un champ de dossier (le dossier du job CryoSPARC, par exemple) prend un dossier entier.
+- **Dans le navigateur de fichiers** (*Browse*) : bouton **Upload from this computer** (on peut aussi déposer sur la
+  liste), et le raccourci *Uploads of this project*.
+
+![Import depuis l'ordinateur : les jobs proposés](docs/images/upload.png)
+
+Les fichiers vont dans le dossier `uploads/` du projet. Ils partent par morceaux de 16 Mo, avec la progression, le
+débit et le temps restant ; *Cancel* arrête l'envoi. Un transfert interrompu (réseau coupé, page fermée, serveur
+redémarré) **reprend là où il s'était arrêté** quand on renvoie le même fichier. Un fichier déjà envoyé n'est pas
+renvoyé ; un autre fichier du même nom en reçoit un nouveau (`map-2.mrc`). Un dossier garde ses noms et
+sous-dossiers, sans les fichiers cachés (`.DS_Store`, fichiers `._*` de macOS). L'espace libre du serveur est
+vérifié avant l'envoi. Les jobs d'import font un **lien physique** (*hard link*) vers les fichiers envoyés, sans
+deuxième copie sur le disque. Avec des comptes, seuls le propriétaire du projet, ses membres et les administrateurs
+peuvent y envoyer des fichiers.
+
+En ligne de commande, depuis une autre machine où CryoPlug est installé : `cryoplug upload P1 carte.mrc
+~/data/J245` (avec `--url` et `--token`, ou `CRYOPLUG_URL` et `CRYOPLUG_TOKEN`, comme pour les assistants IA,
+section 6). La commande affiche les jobs d'import à créer.
+
 ### Actions, sélection multiple et raccourcis (comme CryoSPARC)
 
 - Le bouton **⋯** d'une carte de job (ou un **clic droit**) ouvre son menu : ouvrir, *Continue with…*,
@@ -713,7 +743,7 @@ seuils, images) et proposer la suite. Deux briques :
 
 - **le serveur MCP** (*Model Context Protocol*, le standard ouvert qui relie les assistants à des outils) :
   `cryoplug mcp`, lancé par le client (stdio), ou l'adresse `http://<serveur>:39500/mcp` du serveur CryoPlug
-  (*Streamable HTTP*), pour les clients qui se connectent à une URL. 25 outils, des ressources (le guide, les
+  (*Streamable HTTP*), pour les clients qui se connectent à une URL. 26 outils, des ressources (le guide, les
   skills) et des prompts prêts à l'emploi ;
 - **les skills** (format ouvert *Agent Skills* : un dossier par skill avec son `SKILL.md`) : la méthode de travail et
   les règles de décision cryo-EM — quelle carte pour quoi, valeurs de référence de validation, protocoles cryoDRGN
@@ -788,11 +818,17 @@ Un jeton se révoque dans *Settings › AI agents* ou avec `cryoplug user token 
 | `kill_job`, `clear_job` | arrêter un job ; remettre en préparation un job en échec |
 | `list_workflows`, `apply_workflow` | les chaînes complètes prêtes à l'emploi |
 | `browse_server_files`, `list_job_files`, `read_project_file`, `map_info` | trouver les données, lire les fichiers texte, en-tête d'une carte |
+| `upload_file` | envoyer un fichier ou un dossier de l'ordinateur de l'assistant dans le projet (reprise, pas de doublon) ; répond le job d'import à créer |
 | `list_skills`, `read_skill` | les skills, pour les clients qui ne les chargent pas eux-mêmes |
 
 Sans client MCP, les mêmes outils en ligne de commande : `cryoplug ai call get_project project=P1`,
 `cryoplug ai call create_job project=P1 type=map_fsc 'inputs={"half_maps": "J1"}' queue=true` ;
 `cryoplug ai tools` les liste.
+
+`upload_file` lit les fichiers de l'ordinateur où tourne `cryoplug mcp` : un assistant sur votre portable peut
+envoyer vos cartes à un serveur distant. Il n'est pas offert par l'adresse `/mcp`, où « l'ordinateur de
+l'assistant » serait le serveur lui-même. Sur la machine du serveur, l'assistant n'en a pas besoin : il donne
+directement le chemin aux jobs d'import, s'il est dans les dossiers du compte (`browse_server_files`).
 
 ### Les skills
 
@@ -817,7 +853,7 @@ dans Claude Code).
 Pour garder des données non publiées sur place : un modèle qui appelle les outils de façon fiable (par exemple
 Qwen 3, Mistral Small, Llama ou gpt-oss), dans LM Studio, Open WebUI avec Ollama, Goose ou Jan. Les réponses des
 outils sont du texte compact écrit pour des modèles modestes ; prévoyez un contexte d'au moins 32 000 tokens (la
-description des 25 outils en occupe environ 5 000). Pour un petit modèle, `cryoplug mcp --tools basic` n'offre que
+description des 26 outils en occupe environ 5 500). Pour un petit modèle, `cryoplug mcp --tools basic` n'offre que
 les 12 outils essentiels ; `--tools read` fait un assistant qui consulte sans rien changer (pour `/mcp` :
 `http://<serveur>:39500/mcp?tools=basic`). Protocole : MCP 2025-11-25 et révisions antérieures ; les clients de la
 révision 2026-07-28 reviennent automatiquement à 2025-11-25.

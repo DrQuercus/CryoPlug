@@ -49,7 +49,11 @@ export const api = {
   hardware: () => request('GET', '/api/hardware'),
   testLane: (lane) => request('POST', '/api/lanes/test', { lane }),
   previewLane: (lane) => request('POST', '/api/lanes/preview', { lane }),
-  fs: (path, hidden = false) => request('GET', `/api/fs?path=${enc(path || '')}&show_hidden=${hidden}`),
+  fs: (path, hidden = false, project = '') => request('GET', `/api/fs?path=${enc(path || '')}&show_hidden=${hidden}`
+    + (project ? `&project=${enc(project)}` : '')),
+  uploads: (p) => request('GET', `/api/projects/${p}/uploads`),
+  startUpload: (p, body) => request('POST', `/api/projects/${p}/uploads`, body),
+  cancelUpload: (p, rel) => request('DELETE', `/api/projects/${p}/uploads?rel=${enc(rel)}`),
 
   me: () => request('GET', '/api/me'),
   updateMe: (body) => request('PATCH', '/api/me', body),

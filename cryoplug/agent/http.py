@@ -80,12 +80,16 @@ class AsgiClient:
         self.url = str(request.base_url).rstrip("/")
 
     def request(self, method: str, path: str, params: dict[str, Any] | None = None, body: Any = None,
-                raw: bool = False, timeout: float | None = None, max_bytes: int | None = None) -> Any:
+                raw: bool = False, timeout: float | None = None, max_bytes: int | None = None,
+                data: bytes | None = None) -> Any:
         query = {k: (str(v).lower() if isinstance(v, bool) else v) for k, v in (params or {}).items() if v is not None}
-        data = b"" if body is None else json.dumps(body).encode()
         headers = list(self.headers)
-        if body is not None:
+        if data is not None:
+            headers.append((b"content-type", b"application/octet-stream"))
+        elif body is not None:
+            data = json.dumps(body).encode()
             headers.append((b"content-type", b"application/json"))
+        data = data or b""
         headers.append((b"content-length", str(len(data)).encode()))
         scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1",
                  "method": method, "scheme": self.scheme, "path": path, "raw_path": path.encode(),
@@ -112,7 +116,7 @@ def agent_overview(app: FastAPI) -> dict[str, Any]:
         "command_path": str(Path(exe).resolve()) if exe else "",
         "protocol_versions": list(PROTOCOL_VERSIONS),
         "tools": [{"name": t.name, "title": t.title, "description": t.description,
-                   "kind": "read" if t.read_only else "destructive" if t.destructive else "write"}
+                   "kind": "read" if t.read_only else "destructive" if t.destructive else "write", "local": t.local_only}
                   for t in toolmod.TOOLS.values()],
         "skills": [{"name": sk.name, "description": sk.description} for sk in all_skills()],
     }
@@ -135,8 +139,8 @@ def install(app: FastAPI) -> None:
         if version and version not in PROTOCOL_VERSIONS:
             return JSONResponse(_error(None, INVALID_REQUEST, f"Unsupported MCP protocol version {version} "
                                                               f"(supported: {', '.join(PROTOCOL_VERSIONS)})"), status_code=400)
-        try:  # /mcp?tools=basic (small local models) or ?tools=read (look, change nothing)
-            names = toolmod.select_tools(request.query_params.get("tools"))
+        try:  # /mcp?tools=basic (small local models) or ?tools=read (look, change nothing); never upload_file here
+            names = toolmod.select_tools(request.query_params.get("tools"), local_files=False)
         except ValueError as exc:
             return JSONResponse(_error(None, INVALID_REQUEST, str(exc)), status_code=400)
         server = Server(lambda: toolmod.Session(AsgiClient(app, request)), tools=names)

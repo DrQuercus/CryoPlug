@@ -38,7 +38,8 @@ RELION focused refinement). The data may be unpublished and the GPUs shared: act
 How to work:
 1. Call server_status first, then read the skill "cryoplug" (read_skill) before planning; other skills cover each
    task (list_skills).
-2. Find the data with get_project / find_outputs (or browse_server_files to import new data).
+2. Find the data with get_project / find_outputs (or browse_server_files to import new data from the server;
+   upload_file, when offered, sends files of the person's computer).
 3. Check a job type with describe_job_type, then create_job (queue=true runs it). Inputs are written "J3.map_sharp"
    (job.output) or just "J3" (its matching output is chosen); parameters left out keep their defaults, and
    resolution 0 means taken from the inputs.
@@ -139,7 +140,7 @@ class Server:
     def __init__(self, session_factory: Callable[[], toolmod.Session], name: str = "cryoplug",
                  tools: list[str] | None = None):
         self.session_factory = session_factory
-        self.tools = tools or list(toolmod.TOOLS)  # the tools offered (see tools.select_tools)
+        self.tools = list(toolmod.TOOLS) if tools is None else tools  # the tools offered (see tools.select_tools)
         self._session: toolmod.Session | None = None
         self._lock = threading.Lock()
         self.name = name
@@ -356,7 +357,7 @@ def stdio_main(config_path: str | None = None, url: str | None = None, token: st
         sys.exit(f"cryoplug mcp: {exc}")
 
     def factory() -> toolmod.Session:
-        return toolmod.Session(Client(connection(config_path, url, token)), allow_commands=allow_commands)
+        return toolmod.Session(Client(connection(config_path, url, token)), allow_commands=allow_commands, local_files=True)
 
     try:
         conn = connection(config_path, url, token)

@@ -33,7 +33,7 @@ def _transfer(ctx: JobContext, src: str | Path, mode: str, name: str | None = No
         dst.symlink_to(src.resolve())
     else:
         ctx.log(f"Copying {src} -> {dst.name}")
-        shutil.copy2(src, dst)
+        ctx.copy_in(src, dst)
     return dst
 
 

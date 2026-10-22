@@ -326,11 +326,17 @@ class Manager:
                         raise ManagerError(f"{label}: {v} is outside your folders "
                                            "(an administrator can add its folder to yours in Settings › Users)")
 
+    def with_project(self, puid: str, roots: list[Path] | None) -> list[Path] | None:
+        """A user's folders and the folder of the project they work in (the files uploaded into it, from their
+        computer, are theirs to use there)."""
+        return None if roots is None else [*roots, self.project_dir(puid)]
+
     def create_job(self, puid: str, job_type: str, params: dict | None = None, inputs: dict | None = None,
                    title: str | None = None, lane: str | None = None, notes: str = "", created_by: str = "",
                    roots: list[Path] | None = None, inherited: dict[str, Any] | None = None,
                    requested: dict[str, Any] | None = None) -> dict[str, Any]:
         self.project(puid)
+        roots = self.with_project(puid, roots)
         try:
             jt = get_job_type(job_type)
         except KeyError as exc:
@@ -355,6 +361,7 @@ class Manager:
     def update_job(self, puid: str, juid: str, roots: list[Path] | None = None, **fields: Any) -> dict[str, Any]:
         with self.lock:
             job = self.job(puid, juid)
+            roots = self.with_project(puid, roots)
             jt = get_job_type(job["type"])
             updates: dict[str, Any] = {}
             if "notes" in fields:
@@ -417,6 +424,7 @@ class Manager:
     def queue_job(self, puid: str, juid: str, lane: str | None = None, roots: list[Path] | None = None) -> dict[str, Any]:
         with self.lock:
             job = self.job(puid, juid)
+            roots = self.with_project(puid, roots)
             if job["status"] != "building":
                 raise ManagerError(f"Only jobs in building state can be queued (status: {job['status']})")
             problems = self.queue_problems(job)

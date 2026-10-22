@@ -854,6 +854,23 @@ class JobContext:
                 moved.append(target)
         return moved
 
+    def copy_in(self, src: str | Path, dst: str | Path) -> Path:
+        """Copy a file into the job; a file uploaded into this project (``uploads/``) is hard-linked instead:
+        instant and without a second copy on disk, and the job keeps it if the upload is deleted."""
+        import shutil
+
+        from cryoplug.uploads import UPLOADS_DIR
+        src, dst = Path(src), Path(dst)
+        real = src.resolve()
+        if (self.project_dir / UPLOADS_DIR).resolve() in real.parents:
+            try:
+                os.link(real, dst)
+                return dst
+            except OSError:  # another file system, or no hard links there
+                pass
+        shutil.copy2(src, dst)
+        return dst
+
     def link_input(self, src: str | Path, name: str | None = None) -> Path:
         """Symlink (or copy as fallback) an input file into the job directory."""
         src = Path(src)

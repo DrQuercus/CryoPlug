@@ -2,6 +2,7 @@
 import { api } from './api.js';
 import { openBuilder, paramField } from './builder.js';
 import { detailMode, detailUid, jobMenuItems, jobViewItems, viewerUrl } from './detail.js';
+import { importFromComputer } from './importer.js';
 import { builderHref, jobHref, navigate, refreshJobs, state, typeTitle } from './state.js';
 import { renderTree } from './tree.js';
 import {
@@ -36,6 +37,8 @@ export function renderProject(content) {
       btn('New job', () => { openBuilder(); navigate(`#/p/${p.uid}/new`); }, { cls: 'primary', ic: 'plus', title: 'New job (N)' }),
       h('button', { class: 'btn', type: 'button', title: 'Create a chain of linked jobs from a template', onclick: () => workflowDialog() },
         icon('flow'), h('span', { class: 'lbl' }, 'Workflows')),
+      h('button', { class: 'btn', type: 'button', title: 'Upload maps, models, sequences or folders from this computer and import them '
+        + '(or drop them on the page)', onclick: () => importFromComputer() }, icon('upload'), h('span', { class: 'lbl' }, 'Upload')),
       h('span', { class: 'toolbar-gap' }), search, statusSel, catSel),
     p.description ? h('p', { class: 'project-desc' }, p.description) : null,
     h('div', { id: 'jobs-area' }));
@@ -76,7 +79,9 @@ export function renderJobs() {
       h('p', {}, 'Start by importing your CryoSPARC refinement (half maps, sharpened map, mask), or create a whole pipeline from a workflow template.'),
       h('div', { class: 'row', style: { justifyContent: 'center' } },
         btn('Import from CryoSPARC', () => { openBuilder({ type: 'import_cryosparc' }); navigate(`#/p/${state.project.uid}/new`); }, { cls: 'primary', ic: 'plus' }),
-        btn('Use a workflow', () => workflowDialog(), { ic: 'flow' }))));
+        btn('Upload from this computer', () => importFromComputer(), { ic: 'upload' }),
+        btn('Use a workflow', () => workflowDialog(), { ic: 'flow' })),
+      h('p', { class: 'muted small' }, 'Or drop maps, models, sequences or a CryoSPARC job folder from your computer on this page.')));
     return;
   }
   const jobs = filtered();

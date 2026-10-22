@@ -15,7 +15,8 @@ through tools, with the rights of your credential. The data are often unpublishe
 - **MCP tools** (preferred): `server_status`, `list_projects`, `get_project`, `create_project`, `list_job_types`,
   `describe_job_type`, `find_outputs`, `create_job`, `update_job`, `queue_job`, `get_job`, `get_job_log`,
   `get_job_images`, `wait_for_jobs`, `clone_job`, `kill_job`, `clear_job`, `list_workflows`, `apply_workflow`,
-  `browse_server_files`, `list_job_files`, `read_project_file`, `map_info`, `list_skills`, `read_skill`.
+  `browse_server_files`, `upload_file`, `list_job_files`, `read_project_file`, `map_info`, `list_skills`,
+  `read_skill`.
 - **Shell** (no MCP client): the same tools with `cryoplug ai call TOOL key=value ...`, values in JSON when they are
   not plain text, for example:
   `cryoplug ai call create_job project=P1 type=map_fsc 'inputs={"half_maps": "J1"}' queue=true`.
@@ -69,6 +70,10 @@ through tools, with the rights of your credential. The data are often unpublishe
   them if useful, then hand over. Jobs cannot be deleted from the agent tools; leave clean-up to people.
 - With user accounts you see only your projects and folders; data to import must be in folders your account may
   read (`browse_server_files` shows them).
+- Data on the person's computer and not on the server: `upload_file` (offered when `cryoplug mcp` runs on that
+  computer) sends a file or a folder into the project's uploads folder and answers the `create_job` call that
+  imports it; check the guessed roles (half maps, mask, sharpened map) against the file names before queueing. In
+  the shell: `cryoplug upload P1 FILE_OR_FOLDER...`. Data already on the server need no upload: give the path.
 
 ## Which map for what
 

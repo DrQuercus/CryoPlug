@@ -283,9 +283,11 @@ async function renderAgents(body) {
   info.tools.forEach((t) => { (kinds[t.kind] = kinds[t.kind] || []).push(t); });
   const toolsBox = h('div', { class: 'box settings-box' },
     Object.entries(TOOL_KIND).filter(([k]) => kinds[k]).map(([k, title]) => h('div', { class: 'kv' }, h('div', { class: 'k' }, title),
-      h('div', { class: 'v' }, kinds[k].map((t) => h('code', { class: 'tool-chip', title: t.description }, t.name))))),
+      h('div', { class: 'v' }, kinds[k].map((t) => h('code', { class: 'tool-chip', title: t.description }, t.name, t.local ? '*' : ''))))),
     h('div', { class: 'kv' }, h('div', { class: 'k' }, 'Skills'),
-      h('div', { class: 'v' }, info.skills.map((sk) => h('code', { class: 'tool-chip', title: sk.description }, sk.name)))));
+      h('div', { class: 'v' }, info.skills.map((sk) => h('code', { class: 'tool-chip', title: sk.description }, sk.name)))),
+    info.tools.some((t) => t.local) ? h('p', { class: 'muted small', style: { marginBottom: 0 } },
+      '* With ', h('code', {}, 'cryoplug mcp'), ' only: sends files of the computer the assistant runs on to a project.') : null);
 
   clear(body, h('div', { class: 'settings-grid' },
     h('div', {}, section('Connect an AI assistant', how)),

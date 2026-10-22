@@ -199,7 +199,7 @@ class ImportVolumeSeries(JobType):
             elif ctx.params["link_mode"] == "symlink":
                 dst.symlink_to(src.resolve())
             else:
-                shutil.copy2(src, dst)
+                ctx.copy_in(src, dst)
             out.append(dst)
         return out
 
