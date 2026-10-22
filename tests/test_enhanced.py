@@ -13,6 +13,7 @@ from conftest import SEQUENCE, build_helix, log_of, run_until_done
 
 from cryoplug import modelsearch as ms
 from cryoplug.jobs.enhanced import auto_settings, consensus_hits, parse_bfactors
+from cryoplug.manager import ManagerError
 from cryoplug.mrc import MapVolume, model_map
 
 
@@ -145,3 +146,47 @@ def test_wrong_hand_detected(manager, synthetic, monkeypatch):
     sharp = next(o for o in manager.job(puid, imp)["outputs"] if o["name"] == "map_sharp")
     original = MapVolume.read(manager.project_dir(puid) / sharp["path"])
     assert np.allclose(mirrored.data, original.data[::-1])
+
+
+def test_map_model_cycles(manager, synthetic):
+    """LocScale hybrid with the part of the best model fitted to the density, CryoAtom2 again in the new map, while
+    the score improves; Phenix model-based sharpening and DeepEMhancer give one map each; a missing program is left
+    out. The fake CryoAtom2 builds 60% of the chain with the standard settings, everything in an improved map."""
+    puid, imp = _project(manager, synthetic)
+    job = _run(manager, puid, {"settings": "standard", "runs": 1, "combine": False, "check_hand": "never",
+                               "improve_map": ["locscale_hybrid", "phenix_model_sharpening", "deepemhancer", "emready"],
+                               "improve_rounds": 3},
+               {"map": {"job": imp, "output": "map_sharp"}, "half_maps": {"job": imp, "output": "half_maps"}})
+    log = log_of(manager, puid, job["uid"])
+    job_dir = manager.job_dir(puid, job["uid"])
+    n = len(build_helix()[0][0])
+    first = int(n * 0.6)
+    assert f"LocScale hybrid, cycle 1: sharpening with the {first} fitted residues" in log
+    assert "-mc " in log and "--complete_model" in log and "-hm " in log
+    fitted = gemmi.read_structure(str(job_dir / "improve" / "locscale_hybrid_1" / "model_fitted.cif"))
+    assert sum(len(ch) for ch in fitted[0]) == first and {a.b_iso for ch in fitted[0] for r in ch for a in r} == {40.0}
+    # Cycle 2 sharpens with the complete model and builds the same: no better, so no cycle 3
+    assert f"LocScale hybrid, cycle 2: sharpening with the {n} fitted residues" in log
+    assert "LocScale hybrid map, cycle 2: best run" in log and not (job_dir / "improve" / "locscale_hybrid_3").exists()
+    assert (job_dir / "improve" / "phenix_model_sharpening_1" / "sharpened_map.mrc").is_symlink()  # .ccp4 read as .mrc
+    assert (job_dir / "improve" / "phenix_model_sharpening_1" / "sharpened_map.ccp4").exists()
+    assert (job_dir / "improve" / "deepemhancer" / "deepemhancer_tightTarget.mrc").exists()
+    assert "EMReady2 left out" in log  # not installed: the job goes on
+    outs = {o["name"]: o for o in job["outputs"]}
+    assert outs["map_improved"]["path"].endswith("improve/locscale_hybrid_1/locscale_hybrid.mrc")
+    assert {h["label"]: h["value"] for h in job["highlights"]}["Best run"] == "Standard · LocScale hybrid ⟳1"
+    maps = [r[1] for r in _section(job_dir, "Runs compared")["rows"]]
+    assert maps == ["experimental", "LocScale hybrid ⟳1", "LocScale hybrid ⟳2", "Phenix model-based sharpening ⟳1",
+                    "DeepEMhancer"]
+    assert "Map improvement tried: LocScale hybrid" in _section(job_dir, "Summary")["text"]
+
+
+def test_map_improvement_choices(manager, synthetic):
+    puid, imp = _project(manager, synthetic)
+    with pytest.raises(ManagerError, match="not among"):
+        manager.create_job(puid, "cryoatom_enhanced", {"improve_map": ["sharpen_it"]}, {"map": {"job": imp, "output": "map_sharp"}})
+    job = manager.create_job(puid, "cryoatom_enhanced", {"improve_map": "emmernet, phenix_density_modification"},
+                             {"map": {"job": imp, "output": "map_sharp"}})
+    assert job["params"]["improve_map"] == ["emmernet", "phenix_density_modification"]
+    with pytest.raises(ManagerError, match="needs the half maps"):
+        manager.queue_job(puid, job["uid"])

@@ -163,6 +163,25 @@ def score_model(st: gemmi.Structure, vol: MapVolume, resolution: float) -> dict[
     }
 
 
+def reliable_part(st: gemmi.Structure, per_residue: dict[tuple[str, int], float], cutoff: float,
+                  b_iso: float = 40.0) -> gemmi.Structure:
+    """The residues fitted to the density (mean Q-score at ``cutoff`` or above), every atom with the B-factor ``b_iso``:
+    what model-based sharpening is given in the map-model cycles of CryoAtom2 enhanced. LocScale asks for "all parts of
+    the atomic model that can be reliably placed", and CryoAtom2 writes confidence scores, not B-factors, in that
+    column (LocScale refines them again from this uniform start)."""
+    out = st.clone()
+    for chain in out[0]:
+        for i in range(len(chain) - 1, -1, -1):  # from the end: the indices of the residues before stay valid
+            if per_residue.get((chain.name, i), -1.0) < cutoff:
+                del chain[i]
+        for res in chain:
+            for atom in res:
+                atom.b_iso = b_iso
+    out.remove_empty_chains()
+    out.setup_entities()
+    return out
+
+
 def wrong_hand_suspected(score: dict[str, Any]) -> bool:
     """Most residues in short disconnected pieces: what CryoAtom2 builds in a map of the wrong hand."""
     return score["residues"] >= 20 and score["short_fraction"] > 0.5

@@ -40,6 +40,12 @@ description: Build atomic models into cryo-EM maps with CryoPlug - choose the st
    filled from the other runs, identifies chains with `protein_db`/`na_db` until no new sequence appears, and checks
    the hand. It costs runs × one CryoAtom2 build of GPU time (`max_runs` caps it): ask before launching. Its "Runs
    compared" table tells which setting works for this map; "probably in the WRONG HAND" means flipping the map first.
+   Map-model cycles: connect `half_maps` and give `improve_map` a list, e.g. `improve_map=["locscale_hybrid"]`.
+   locscale_hybrid (recommended for partial models; needs REFMAC5 in LocScale's environment), locscale_model_based and
+   phenix_model_sharpening sharpen with the fitted part of the best model and rebuild while the score against the
+   experimental map improves (`improve_rounds` cycles at most); emmernet, locscale_model_free, deepemhancer, emready and
+   phenix_density_modification add one map each. The best model's map is the `map_improved` output; the experimental
+   map stays the deposited primary map.
 4. Continue with refinement and validation (`cryoplug-refinement-validation`). Workflows `denovo_modelangelo` and
    `denovo_cryoatom` create the whole chain up to the deposition package.
 

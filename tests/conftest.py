@@ -170,8 +170,9 @@ fi
 exit 0
 """)
     # With a config (-c): the Cα threshold sets how much is built (0.5 or less: everything, else the first 60%, or the
-    # last 60% in a map re-sharpened with a negative B-factor); with $CRYOPLUG_FAKE_WRONG_HAND the map is mirrored: short
-    # misplaced pieces, unless the map is the job's mirrored copy (other_hand), where the model is mirrored to fit it.
+    # last 60% in a map re-sharpened with a negative B-factor); everything in a map improved by CryoAtom2 enhanced (its
+    # improve/ folder); with $CRYOPLUG_FAKE_WRONG_HAND the map is mirrored: short misplaced pieces, unless the map is the
+    # job's mirrored copy (other_hand), where the model is mirrored to fit it.
     _script(d / "cryoatom", f"""
 # cryoatom build -v map [-ps p.fasta] [-pf db] [-c config.json] -o out -d 0
 echo "fake CryoAtom2 $@"
@@ -191,7 +192,7 @@ chain = st[0][0]
 n = len(chain)
 keep = range(n)
 wrong_hand = bool(os.environ.get("CRYOPLUG_FAKE_WRONG_HAND")) and "other_hand" not in map_path
-if cfg_path and not wrong_hand:
+if cfg_path and not wrong_hand and "/improve/" not in map_path:
     threshold = json.load(open(cfg_path)).get("RUNet_args", {{}}).get("ca_threshold", 0.6)
     if threshold > 0.5:
         k = int(n * 0.6)
@@ -330,6 +331,24 @@ Final:
 EOF
 """)
     _script(d / "phenix.version", "echo 'Phenix fake 1.21'\n")
+    _script(d / "phenix.resolve_cryo_em", """
+echo "fake phenix.resolve_cryo_em $@"
+first=""
+for a in "$@"; do case "$a" in
+  resolution=*|nproc=*|seq_file=*|solvent_content=*) ;;
+  *=*) echo "Sorry: Some PHIL parameters are not recognized by phenix.resolve_cryo_em."; exit 1;;
+  *) [ -z "$first" ] && first="$a";;
+esac; done
+cp "$(readlink -f "$first")" denmod_map.ccp4
+""")
+    _script(d / "deepemhancer", """
+# deepemhancer -i half1 [-i2 half2] -o out -p network -b batch -g gpus
+echo "fake deepemhancer $@"
+in=""; out=""
+while [ $# -gt 0 ]; do case "$1" in -i) in="$2"; shift;; -o) out="$2"; shift;; -i2|-p|-b|-g|--deepLearningModelPath) shift;;
+  *) echo "deepemhancer: error: unrecognized arguments: $1" >&2; exit 2;; esac; shift; done
+cp "$(readlink -f "$in")" "$out"
+""")
     # Phenix 2 replaced auto_sharpen and local_aniso_sharpen with map_sharpening: they only run with --force
     for name, out in (("auto_sharpen", "sharpened_map.ccp4"), ("local_aniso_sharpen", "local_aniso_sharpened_map.ccp4")):
         _script(d / f"phenix.{name}", f"""
@@ -519,7 +538,7 @@ def manager(tmp_path, fakebin) -> Manager:
         lanes=[LaneConfig(name="local", type="local", max_jobs=4, gpus=[0, 1])],
         tools={k: ToolConfig(name=k, bin_dir=str(fakebin))
                for k in ("modelangelo", "phenix", "locscale", "cryoatom", "boltz", "spisonet", "checkmysequence", "onedep",
-                         "cryodrgn", "relion", "colabfold", "servalcat")},
+                         "cryodrgn", "relion", "colabfold", "servalcat", "deepemhancer")},
     )
     m = Manager(cfg)
     m.check_tools()

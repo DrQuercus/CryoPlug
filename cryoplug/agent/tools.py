@@ -754,7 +754,8 @@ def describe_job_type(s: Session, a: Args) -> str:
         for p in params:
             spec = [p["type"]]
             if p.get("choices"):
-                spec.append("one of " + " | ".join(map(str, p["choices"])))
+                spec.append(("a list of any of " if p["type"] == "multichoice" else "one of ")
+                            + " | ".join(map(str, p["choices"])))
             if p.get("min") is not None or p.get("max") is not None:
                 spec.append(f"{'' if p.get('min') is None else value_text(p['min'])}..{'' if p.get('max') is None else value_text(p['max'])}")
             if p.get("unit"):

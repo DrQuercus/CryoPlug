@@ -771,6 +771,13 @@ chaînes avec une base de séquences, et vérifie la main quand le modèle sort 
 - branchez toujours la carte **expérimentale** en « Map » : une carte de réseau de neurones en référence
   noterait les modèles contre une densité déjà interprétée.
 
+**Boucle carte–modèle.** Sur une carte dont la résolution varie beaucoup, branchez les **demi-cartes** et cochez
+**LocScale hybrid** dans *Improve the map and build again*. Les parties du meilleur modèle bien ajustées affûtent
+localement la carte, CryoAtom2 reconstruit dedans, et le cycle recommence tant que le modèle s'améliore contre la carte
+expérimentale. Cochez aussi d'autres méthodes (EMmerNet, DeepEMhancer, EMReady2, Phenix…) pour les comparer : le
+tableau dit dans quelle carte le meilleur modèle a été construit. La carte améliorée aide à interpréter, mais la carte
+déposée comme carte principale reste la carte expérimentale.
+
 Le meilleur modèle reste un modèle brut : affinez-le (real-space refine, ISOLDE) avant de le valider.
 
 **Dans le visualiseur 3D** (*View 3D*, ou bouton **3D** au survol d'une carte de job), pour juger

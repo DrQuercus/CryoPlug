@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import time
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 from cryoplug.jobs import register
@@ -23,13 +26,15 @@ MAP_PATTERNS = ["*.ccp4", "*.mrc", "*.map"]
 MAP_SUFFIXES = (".ccp4", ".mrc", ".map")
 
 
-def pick_new_map(ctx: JobContext, since: float, preferred: list[str], exclude: tuple[str, ...] = ()) -> Path:
-    """Locate the map written by an external program in the job directory (or next to its inputs)."""
+def pick_new_map(ctx: JobContext, since: float, preferred: list[str], exclude: tuple[str, ...] = (),
+                 root: Path | None = None) -> Path:
+    """Locate the map written by an external program in the job directory (or ``root`` inside it, or next to its
+    inputs)."""
     def candidates() -> list[Path]:  # ``exclude`` applies to the path inside the job folder (e.g. processing_files/)
-        return [p for p in ctx.find_new_files(MAP_PATTERNS, since)
+        return [p for p in ctx.find_new_files(MAP_PATTERNS, since, root)
                 if not p.is_symlink() and not p.name.startswith("thumb_") and not any(x in ctx.rel(p) for x in exclude)]
     found = candidates()
-    if not found and ctx.rescue_stray_files(preferred, since, suffixes=MAP_SUFFIXES):
+    if not found and ctx.rescue_stray_files(preferred, since, suffixes=MAP_SUFFIXES, dest=root):
         found = candidates()
     for name in preferred:
         for p in found:
@@ -58,22 +63,60 @@ def locscale_symmetry(ctx: JobContext) -> str:
     return sym
 
 
-def stage_maps(ctx: JobContext, hm, full, copy_first: bool = False) -> list[str]:
-    """Input maps linked into the job folder, so that what LocScale writes next to its inputs lands here.
-    ``copy_first``: the first map is copied instead (model-based LocScale rewrites it in place to reset its origin,
-    which would change the original file through a link)."""
-    import shutil
-    sources = [(hm.files[0], "half_map_1.mrc"), (hm.files[1], "half_map_2.mrc")] if hm else [(full.path, "input_map.mrc")]
+@dataclass
+class MapSources:
+    """What a map enhancement program reads: unfiltered half maps (preferred) or one full map, and optionally a mask,
+    a sequence (FASTA file), a model, the resolution and the point group. Built from a job's inputs by
+    :func:`sources_from`, or by any job that runs these programs itself (CryoAtom2 enhanced)."""
+    half_maps: list[str] | None = None
+    full_map: str | None = None
+    mask: str | None = None
+    sequence: str | None = None
+    model: str | None = None
+    resolution: float | None = None
+    symmetry: str = "C1"
+
+    @property
+    def source(self) -> str:
+        """The map whose origin the result takes back."""
+        return self.half_maps[0] if self.half_maps else str(self.full_map)
+
+
+def sources_from(ctx: JobContext) -> MapSources:
+    hm, full, mask, seq, model = (ctx.input(n) for n in ("half_maps", "map", "mask", "sequence", "model"))
+    try:
+        resolution: float | None = ctx.resolution()
+    except JobError:
+        resolution = None
+    return MapSources(half_maps=list(hm.files[:2]) if hm else None, full_map=full.path if full else None,
+                      mask=mask.path if mask else None, sequence=seq.files[0] if seq else None,
+                      model=model.path if model else None, resolution=resolution)
+
+
+def _folder(ctx: JobContext, folder: Path | None) -> Path:
+    folder = Path(folder) if folder else ctx.job_dir
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def stage_maps(ctx: JobContext, src: MapSources, folder: Path | None = None, copy_first: bool = False) -> list[str]:
+    """Input maps linked into the job folder (or ``folder`` inside it), so that what LocScale writes next to its
+    inputs lands there. ``copy_first``: the first map is copied instead (model-based LocScale rewrites it in place to
+    reset its origin, which would change the original file through a link)."""
+    folder = _folder(ctx, folder)
+    sources = ([(src.half_maps[0], "half_map_1.mrc"), (src.half_maps[1], "half_map_2.mrc")] if src.half_maps
+               else [(str(src.full_map), "input_map.mrc")])
     out = []
-    for i, (src, name) in enumerate(sources):
+    for i, (path, name) in enumerate(sources):
+        rel = str((folder / name).relative_to(ctx.job_dir))
         if copy_first and i == 0:
-            dst = ctx.path(name)
+            dst = folder / name
             if dst.exists() or dst.is_symlink():
                 dst.unlink()
-            shutil.copy2(src, dst)
+            shutil.copy2(path, dst)
             out.append(str(dst))
         else:
-            out.append(str(ctx.link_input(src, name)))
+            out.append(str(ctx.link_input(path, rel)))
     return out
 
 
@@ -125,20 +168,30 @@ class PhenixResolveCryoEM(JobType):
     outputs = [OutputDef("map", "map", "Density-modified map")]
 
     def run(self, ctx: JobContext) -> None:
-        hm = ctx.require("half_maps")
-        res = ctx.resolution()
-        args = [ctx.program("phenix", "phenix.resolve_cryo_em"), hm.files[0], hm.files[1],
-                f"resolution={res}", f"nproc={ctx.params['nproc']}"]
-        seq = ctx.input("sequence")
-        if seq:
-            args.append(f"seq_file={seq.files[0]}")
-        elif ctx.params["solvent_content"] > 0:
-            args.append(f"solvent_content={ctx.params['solvent_content']}")
-        args += ctx.split_extra()
-        start = time.time()
-        ctx.run(args, tool="phenix")
-        out = pick_new_map(ctx, start, ["denmod_map.ccp4", "*denmod*"])
+        ctx.require("half_maps")
+        src = sources_from(ctx)
+        src.resolution = ctx.resolution()
+        out = run_resolve_cryo_em(ctx, src, nproc=int(ctx.params["nproc"]), solvent_content=ctx.params["solvent_content"],
+                                  extra=ctx.split_extra())
         ctx.add_output("map", "map", out, "Density-modified map", inherit=["half_maps"])
+
+
+def run_resolve_cryo_em(ctx: JobContext, src: MapSources, folder: Path | None = None, nproc: int = 8,
+                        solvent_content: float = 0.0, extra: Iterable[str] = ()) -> Path:
+    """phenix.resolve_cryo_em on the half maps (with the sequence when there is one): the density-modified map."""
+    folder = _folder(ctx, folder)
+    if not src.half_maps:
+        raise JobError("Density modification needs the two half maps")
+    args = [ctx.program("phenix", "phenix.resolve_cryo_em"), src.half_maps[0], src.half_maps[1],
+            f"resolution={src.resolution}", f"nproc={nproc}"]
+    if src.sequence:
+        args.append(f"seq_file={src.sequence}")
+    elif solvent_content > 0:
+        args.append(f"solvent_content={solvent_content}")
+    args += list(extra)
+    start = time.time()
+    ctx.run(args, tool="phenix", cwd=folder)
+    return pick_new_map(ctx, start, ["denmod_map.ccp4", "*denmod*"], root=folder)
 
 
 @register
@@ -204,39 +257,55 @@ class PhenixMapSharpening(JobType):
         return ["Shell scaling needs half maps, or a map and a fitted model"]
 
     def run(self, ctx: JobContext) -> None:
-        if not ctx.has_program("phenix", "phenix.map_sharpening") and os.path.isabs(ctx.executable("phenix")):
-            raise JobError("phenix.map_sharpening was not found next to the other Phenix programs (Phenix 1.20 or later "
-                           "needed): use 'Auto-sharpen (Phenix)' with an older Phenix")
         p = ctx.params
-        hm, m, model, seq = ctx.input("half_maps"), ctx.input("map"), ctx.input("model"), ctx.input("sequence")
-        args = [ctx.program("phenix", "phenix.map_sharpening")]
-        if p["method"] == "b-factor":
-            args += [m.path if m else hm.files[0], "sharpening_method=b-factor"]  # type: ignore[union-attr]
-            if not m:
-                ctx.warn("B-factor sharpening of half map A: connect the full map to sharpen it instead")
-        elif hm:
-            args += [hm.files[0], hm.files[1]]
-        else:
-            args += [m.path, model.path]  # type: ignore[union-attr]
+        src = sources_from(ctx)
         try:
-            args.append(f"resolution={ctx.resolution(slots=['half_maps', 'map', 'model']):.3f}")
+            src.resolution = ctx.resolution(slots=["half_maps", "map", "model"])
         except JobError:
             if p["method"] == "b-factor":
                 raise
-        if seq:
-            args.append(f"seq_file={seq.files[0]}")
-        if p["method"] == "shell":
-            if not p["anisotropic"]:
-                args.append("anisotropic_sharpen=False")
-            if p["local"]:
-                args.append("local_sharpen=True")
-        args += ctx.split_extra()
-        start = time.time()
-        ctx.run(args, tool="phenix")
-        out = pick_new_map(ctx, start, ["sharpened_map.ccp4", "*sharpened*"])
-        restore_origin(ctx, out, hm.files[0] if hm else m.path)  # type: ignore[union-attr]
+            src.resolution = None
+        if p["method"] == "b-factor" and not src.full_map:
+            ctx.warn("B-factor sharpening of half map A: connect the full map to sharpen it instead")
+        out = run_map_sharpening(ctx, src, method=p["method"], anisotropic=p["anisotropic"], local=p["local"],
+                                 use_model=not src.half_maps, extra=ctx.split_extra())
         label = {"shell": "Shell-scaled map" + (" (local)" if p["local"] else ""), "b-factor": "B-factor sharpened map"}
         ctx.add_output("map", "map", out, label[p["method"]], inherit=["half_maps", "map"])
+
+
+def run_map_sharpening(ctx: JobContext, src: MapSources, folder: Path | None = None, method: str = "shell",
+                       anisotropic: bool = True, local: bool = False, use_model: bool = False,
+                       extra: Iterable[str] = ()) -> Path:
+    """phenix.map_sharpening: shell scaling from the half maps, or from a map and a fitted model (``use_model``, as the
+    map-model cycle of CryoAtom2 enhanced does), or B-factor sharpening of one map."""
+    folder = _folder(ctx, folder)
+    if not ctx.has_program("phenix", "phenix.map_sharpening") and os.path.isabs(ctx.executable("phenix")):
+        raise JobError("phenix.map_sharpening was not found next to the other Phenix programs (Phenix 1.20 or later "
+                       "needed): use 'Auto-sharpen (Phenix)' with an older Phenix")
+    args = [ctx.program("phenix", "phenix.map_sharpening")]
+    if method == "b-factor":
+        args += [src.full_map or src.half_maps[0], "sharpening_method=b-factor"]  # type: ignore[index]
+    elif use_model and src.model and src.full_map:
+        args += [src.full_map, src.model]
+    elif src.half_maps:
+        args += [src.half_maps[0], src.half_maps[1]]
+    else:
+        raise JobError("Shell scaling needs half maps, or a map and a fitted model")
+    if src.resolution:
+        args.append(f"resolution={src.resolution:.3f}")
+    if src.sequence:
+        args.append(f"seq_file={src.sequence}")
+    if method == "shell":
+        if not anisotropic:
+            args.append("anisotropic_sharpen=False")
+        if local:
+            args.append("local_sharpen=True")
+    args += list(extra)
+    start = time.time()
+    ctx.run(args, tool="phenix", cwd=folder)
+    out = pick_new_map(ctx, start, ["sharpened_map.ccp4", "*sharpened*"], root=folder)
+    restore_origin(ctx, out, src.full_map if (use_model or not src.half_maps) and src.full_map else src.source)
+    return out
 
 
 @register
@@ -318,51 +387,66 @@ class LocScale(JobType):
 
     def run(self, ctx: JobContext) -> None:
         mode = ctx.params["mode"]
-        args: list[str] = [ctx.executable("locscale")]
-        hm, full = ctx.input("half_maps"), ctx.input("map")
-        if not hm and not full:
+        src = sources_from(ctx)
+        if not src.half_maps and not src.full_map:
             raise JobError("No input map")
-        maps = stage_maps(ctx, hm, full, copy_first=mode == "model_based")
-        args += ["-hm", *maps] if hm else ["-em", maps[0]]
         if mode in ("model_based", "hybrid"):
-            args += ["-mc", ctx.require("model").path]
-            if mode == "hybrid":
-                args.append("--complete_model")
-        elif mode == "model_free_pseudomodel":
-            args.append("--build_using_pseudomodel")
-        mask = ctx.input("mask")
-        if mask:
-            args += ["-ma", mask.path]
-        try:
-            args += ["-res", f"{ctx.resolution():.3f}"]
-        except JobError:
-            if mode in ("model_based", "hybrid"):
-                raise
-        sym = locscale_symmetry(ctx)
-        if sym != "C1" and mode == "model_free":
-            # LocScale 2.4 symmetrises the EMmerNet variance map, which the model-free mode does not compute: it stops
-            ctx.warn(f"Symmetry {sym} not applied: model-free LocScale 2.4 fails when symmetrising (no Monte-Carlo "
-                     "variance map). Use the EMmerNet job (Monte-Carlo on) for a symmetrised map.")
-        elif sym != "C1":
-            args += ["-sym", sym]
-        # Absolute paths: LocScale resolves relative ones against the folder of the input maps, which is
-        # another job's folder (the map and the processing files would land there).
-        out = ctx.path(f"locscale_{mode}.mrc")
-        args += ["-o", str(out), "-v", "-op", str(ctx.path("processing_files"))]
-        if mode == "model_free":
-            args += ["-gpus", *ctx.physical_gpus(ctx.params.get("gpu_ids", ""))]
-        nproc = int(ctx.params["nproc"])
-        if ctx.params["use_mpi"] and nproc > 1:
-            args = ["mpirun", "-np", str(nproc), *args, "-mpi"]
-        elif nproc > 1:
-            args += ["-np", str(nproc)]
-        args += ctx.split_extra()
-        start = time.time()
-        ctx.run(args, tool="locscale")
-        if not out.exists():
-            out = pick_new_map(ctx, start, [out.name, "locscale*.mrc"], exclude=("processing_files", "half_map", "input_map"))
-        restore_origin(ctx, out, (hm.files[0] if hm else full.path))
+            ctx.require("model")
+            if src.resolution is None:
+                ctx.resolution()  # the error that says to set it
+        src.symmetry = locscale_symmetry(ctx)
+        out = run_locscale(ctx, src, mode, nproc=int(ctx.params["nproc"]), use_mpi=ctx.params["use_mpi"],
+                           gpus=ctx.physical_gpus(ctx.params.get("gpu_ids", "")), extra=ctx.split_extra())
         ctx.add_output("map", "map", out, f"LocScale ({mode.replace('_', ' ')})", inherit=["half_maps", "map"])
+
+
+def run_locscale(ctx: JobContext, src: MapSources, mode: str, folder: Path | None = None, nproc: int = 4,
+                 use_mpi: bool = False, gpus: list[str] | None = None, extra: Iterable[str] = ()) -> Path:
+    """LocScale 2 in one of its modes (model_free, model_free_pseudomodel, model_based, hybrid). The model-based and
+    hybrid modes need the model (their ADPs are refined with REFMAC5) and the resolution."""
+    folder = _folder(ctx, folder)
+    args: list[str] = [ctx.executable("locscale")]
+    maps = stage_maps(ctx, src, folder, copy_first=mode == "model_based")
+    args += ["-hm", *maps] if src.half_maps else ["-em", maps[0]]
+    if mode in ("model_based", "hybrid"):
+        if not src.model:
+            raise JobError(f"LocScale {mode.replace('_', '-')} needs a model")
+        args += ["-mc", src.model]
+        if mode == "hybrid":
+            args.append("--complete_model")
+    elif mode == "model_free_pseudomodel":
+        args.append("--build_using_pseudomodel")
+    if src.mask:
+        args += ["-ma", src.mask]
+    if src.resolution:
+        args += ["-res", f"{src.resolution:.3f}"]
+    elif mode in ("model_based", "hybrid"):
+        raise JobError("Resolution is unknown: LocScale needs it to refine the model's B-factors")
+    sym = src.symmetry or "C1"
+    if sym != "C1" and mode == "model_free":
+        # LocScale 2.4 symmetrises the EMmerNet variance map, which the model-free mode does not compute: it stops
+        ctx.warn(f"Symmetry {sym} not applied: model-free LocScale 2.4 fails when symmetrising (no Monte-Carlo "
+                 "variance map). Use the EMmerNet job (Monte-Carlo on) for a symmetrised map.")
+    elif sym != "C1":
+        args += ["-sym", sym]
+    # Absolute paths: LocScale resolves relative ones against the folder of the input maps, which is
+    # another job's folder (the map and the processing files would land there).
+    out = folder / f"locscale_{mode}.mrc"
+    args += ["-o", str(out), "-v", "-op", str(folder / "processing_files")]
+    if mode == "model_free":
+        args += ["-gpus", *(gpus or ctx.physical_gpus())]
+    if use_mpi and nproc > 1:
+        args = ["mpirun", "-np", str(nproc), *args, "-mpi"]
+    elif nproc > 1:
+        args += ["-np", str(nproc)]
+    args += list(extra)
+    start = time.time()
+    ctx.run(args, tool="locscale", cwd=folder)
+    if not out.exists():
+        out = pick_new_map(ctx, start, [out.name, "locscale*.mrc"], exclude=("processing_files", "half_map", "input_map"),
+                           root=folder)
+    restore_origin(ctx, out, src.source)
+    return out
 
 
 @register
@@ -393,45 +477,63 @@ class EMmerNet(JobType):
         return _halves_or_map(params, connected)
 
     def run(self, ctx: JobContext) -> None:
-        args: list[str] = [ctx.executable("locscale"), "feature_enhance"]
-        hm, full = ctx.input("half_maps"), ctx.input("map")
-        # linked here: EMmerNet writes its LocScale map and the pVDDT map next to its input maps
-        maps = stage_maps(ctx, hm, full)
-        args += ["-hm", *maps] if hm else ["-em", maps[0]]
-        mask = ctx.input("mask")
-        if mask:
-            args += ["-ma", mask.path]
-        sym = locscale_symmetry(ctx)
-        if sym != "C1":
-            args += ["-sym", sym]
-        if not ctx.params["monte_carlo"] and sym != "C1":
-            ctx.warn(f"Monte-Carlo kept on: LocScale 2.4 cannot symmetrise ({sym}) without the Monte-Carlo variance map")
-        elif not ctx.params["monte_carlo"]:
-            args.append("-no_mc")
-        # absolute paths, as for LocScale (relative ones are resolved against the input map's folder)
-        out = ctx.path("feature_enhanced.mrc")
-        args += ["-bs", str(ctx.params["batch_size"]), "-gpus", *ctx.physical_gpus(ctx.params.get("gpu_ids", "")),
-                 "-o", str(out), "-v", "-op", str(ctx.path("processing_files")), *ctx.split_extra()]
-        start = time.time()
-        ctx.run(args, tool="locscale")
-        if not out.exists():
-            out = pick_new_map(ctx, start, [out.name, "feature_enhanced*.mrc"],
-                               exclude=("_variance", "_baseline", "pVDDT", "processing_files", "half_map", "input_map"))
-        source = hm.files[0] if hm else full.path
-        restore_origin(ctx, out, source)
-        ctx.add_output("map", "map", out, "EMmerNet feature-enhanced map", inherit=["half_maps", "map"])
-        new = [p for p in ctx.find_new_files(["*.mrc"], start) if "processing_files" not in ctx.rel(p) and p != out and not p.is_symlink()]
-        pvddt = next((p for p in new if "pvddt" in p.name.lower()), None)
-        variance = next((p for p in new if "_variance" in p.name.lower()), None)
-        if pvddt:  # -100 (unreliable) to 100: the authors ask to read the enhanced map with it
-            ctx.add_output("confidence", "map", pvddt, "pVDDT confidence map (-100 to 100)", inherit=["half_maps", "map"],
+        src = sources_from(ctx)
+        src.symmetry = locscale_symmetry(ctx)
+        res = run_emmernet(ctx, src, monte_carlo=ctx.params["monte_carlo"], batch_size=int(ctx.params["batch_size"]),
+                           gpus=ctx.physical_gpus(ctx.params.get("gpu_ids", "")), extra=ctx.split_extra())
+        ctx.add_output("map", "map", res["map"], "EMmerNet feature-enhanced map", inherit=["half_maps", "map"])
+        if res.get("pvddt"):  # -100 (unreliable) to 100: the authors ask to read the enhanced map with it
+            ctx.add_output("confidence", "map", res["pvddt"], "pVDDT confidence map (-100 to 100)", inherit=["half_maps", "map"],
                            meta={"display_range": [-100, 100], "kind": "pVDDT"})
-        elif variance:
-            ctx.add_output("confidence", "map", variance, "EMmerNet uncertainty (variance) map", inherit=["half_maps", "map"])
-        final = next((p for p in new if p not in (pvddt, variance) and ("baseline" in p.name.lower() or "locscale" in p.name.lower())), None)
-        if final:
-            restore_origin(ctx, final, source)
-            ctx.add_output("map_locscale", "map", final, "LocScale map with the EMmerNet reference", inherit=["half_maps", "map"])
+        elif res.get("variance"):
+            ctx.add_output("confidence", "map", res["variance"], "EMmerNet uncertainty (variance) map", inherit=["half_maps", "map"])
+        if res.get("locscale"):
+            ctx.add_output("map_locscale", "map", res["locscale"], "LocScale map with the EMmerNet reference",
+                           inherit=["half_maps", "map"])
+
+
+def run_emmernet(ctx: JobContext, src: MapSources, folder: Path | None = None, monte_carlo: bool = True,
+                 batch_size: int = 8, gpus: list[str] | None = None, extra: Iterable[str] = ()) -> dict[str, Path]:
+    """EMmerNet feature enhancement (locscale feature_enhance): {"map", and when written "pvddt" or "variance" (the
+    confidence) and "locscale" (the LocScale map with the EMmerNet reference)}."""
+    folder = _folder(ctx, folder)
+    args: list[str] = [ctx.executable("locscale"), "feature_enhance"]
+    # linked here: EMmerNet writes its LocScale map and the pVDDT map next to its input maps
+    maps = stage_maps(ctx, src, folder)
+    args += ["-hm", *maps] if src.half_maps else ["-em", maps[0]]
+    if src.mask:
+        args += ["-ma", src.mask]
+    sym = src.symmetry or "C1"
+    if sym != "C1":
+        args += ["-sym", sym]
+    if not monte_carlo and sym != "C1":
+        ctx.warn(f"Monte-Carlo kept on: LocScale 2.4 cannot symmetrise ({sym}) without the Monte-Carlo variance map")
+    elif not monte_carlo:
+        args.append("-no_mc")
+    # absolute paths, as for LocScale (relative ones are resolved against the input map's folder)
+    out = folder / "feature_enhanced.mrc"
+    args += ["-bs", str(batch_size), "-gpus", *(gpus or ctx.physical_gpus()), "-o", str(out), "-v", "-op",
+             str(folder / "processing_files"), *extra]
+    start = time.time()
+    ctx.run(args, tool="locscale", cwd=folder)
+    if not out.exists():
+        out = pick_new_map(ctx, start, [out.name, "feature_enhanced*.mrc"],
+                           exclude=("_variance", "_baseline", "pVDDT", "processing_files", "half_map", "input_map"), root=folder)
+    restore_origin(ctx, out, src.source)
+    res: dict[str, Path] = {"map": out}
+    new = [p for p in ctx.find_new_files(["*.mrc"], start, folder)
+           if "processing_files" not in ctx.rel(p) and p != out and not p.is_symlink()]
+    pvddt = next((p for p in new if "pvddt" in p.name.lower()), None)
+    variance = next((p for p in new if "_variance" in p.name.lower()), None)
+    if pvddt:
+        res["pvddt"] = pvddt
+    elif variance:
+        res["variance"] = variance
+    final = next((p for p in new if p not in (pvddt, variance) and ("baseline" in p.name.lower() or "locscale" in p.name.lower())), None)
+    if final:
+        restore_origin(ctx, final, src.source)
+        res["locscale"] = final
+    return res
 
 
 # -------------------------------------------------------------- DeepEMhancer
@@ -462,18 +564,26 @@ class DeepEMhancer(JobType):
         return _halves_or_map(params, connected)
 
     def run(self, ctx: JobContext) -> None:
-        hm, full = ctx.input("half_maps"), ctx.input("map")
-        out = ctx.path(f"deepemhancer_{ctx.params['model']}.mrc")
-        args = [ctx.executable("deepemhancer")]
-        args += ["-i", hm.files[0], "-i2", hm.files[1]] if hm else ["-i", full.path]  # type: ignore[union-attr]
-        args += ["-o", str(out), "-p", ctx.params["model"], "-b", str(ctx.params["batch_size"]),
-                 "-g", ",".join(ctx.physical_gpus(ctx.params.get("gpu_ids", "")))]
-        if ctx.params.get("models_dir"):
-            args += ["--deepLearningModelPath", ctx.params["models_dir"]]
-        args += ctx.split_extra()
-        ctx.run(args, tool="deepemhancer")
-        restore_origin(ctx, out, hm.files[0] if hm else full.path)  # type: ignore[union-attr]
+        out = run_deepemhancer(ctx, sources_from(ctx), network=ctx.params["model"], batch_size=int(ctx.params["batch_size"]),
+                               gpus=ctx.physical_gpus(ctx.params.get("gpu_ids", "")), models_dir=ctx.params.get("models_dir", ""),
+                               extra=ctx.split_extra())
         ctx.add_output("map", "map", out, f"DeepEMhancer ({ctx.params['model']})", inherit=["half_maps", "map"])
+
+
+def run_deepemhancer(ctx: JobContext, src: MapSources, folder: Path | None = None, network: str = "tightTarget",
+                     batch_size: int = 8, gpus: list[str] | None = None, models_dir: str = "",
+                     extra: Iterable[str] = ()) -> Path:
+    folder = _folder(ctx, folder)
+    out = folder / f"deepemhancer_{network}.mrc"
+    args = [ctx.executable("deepemhancer")]
+    args += ["-i", src.half_maps[0], "-i2", src.half_maps[1]] if src.half_maps else ["-i", str(src.full_map)]
+    args += ["-o", str(out), "-p", network, "-b", str(batch_size), "-g", ",".join(gpus or ctx.physical_gpus())]
+    if models_dir:
+        args += ["--deepLearningModelPath", models_dir]
+    args += list(extra)
+    ctx.run(args, tool="deepemhancer", cwd=folder)
+    restore_origin(ctx, out, src.source)
+    return out
 
 
 # ------------------------------------------------------------------ EMReady
@@ -499,16 +609,25 @@ class EMReady(JobType):
     outputs = [OutputDef("map", "map", "EMReady map")]
 
     def run(self, ctx: JobContext) -> None:
-        m = ctx.require("map")
-        out = ctx.path("emready.mrc")
-        args = [ctx.executable("emready"), m.path, str(out), "-g", ",".join(ctx.physical_gpus(ctx.params.get("gpu_ids", ""))),
-                "-s", str(ctx.params["stride"]), "-b", str(ctx.params["batch_size"])]
-        mask = ctx.input("mask")
-        if mask:
-            args += ["-m", mask.path, "-c", f"{ctx.params['mask_contour']:g}"]
-        args += ctx.split_extra()
-        ctx.run(args, tool="emready")
+        m, mask = ctx.require("map"), ctx.input("mask")
+        out = run_emready(ctx, m.path, mask=mask.path if mask else None, mask_contour=ctx.params["mask_contour"],
+                          stride=int(ctx.params["stride"]), batch_size=int(ctx.params["batch_size"]),
+                          gpus=ctx.physical_gpus(ctx.params.get("gpu_ids", "")), extra=ctx.split_extra())
         ctx.add_output("map", "map", out, "EMReady map", inherit=["map"])
+
+
+def run_emready(ctx: JobContext, map_path: str, folder: Path | None = None, mask: str | None = None,
+                mask_contour: float = 0.5, stride: int = 16, batch_size: int = 16, gpus: list[str] | None = None,
+                extra: Iterable[str] = ()) -> Path:
+    folder = _folder(ctx, folder)
+    out = folder / "emready.mrc"
+    args = [ctx.executable("emready"), map_path, str(out), "-g", ",".join(gpus or ctx.physical_gpus()),
+            "-s", str(stride), "-b", str(batch_size)]
+    if mask:
+        args += ["-m", mask, "-c", f"{mask_contour:g}"]
+    args += list(extra)
+    ctx.run(args, tool="emready", cwd=folder)
+    return out
 
 
 # ------------------------------------------------------------------ spIsoNet

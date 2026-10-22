@@ -436,7 +436,8 @@ function renderOverview(body) {
       t.params.flatMap((p) => {
         const v = job.params[p.name];
         const nd = JSON.stringify(v) !== JSON.stringify(p.default);
-        const shown = v === '' || v === null || v === undefined ? '—' : (p.name === 'resolution' && Number(v) === 0 ? 'auto' : String(v));
+        const empty = v === '' || v === null || v === undefined || (Array.isArray(v) && !v.length);
+        const shown = empty ? '—' : Array.isArray(v) ? v.join(', ') : (p.name === 'resolution' && Number(v) === 0 ? 'auto' : String(v));
         return [h('span', {}, p.label), h('span', { class: nd ? 'nondefault mono' : 'mono' }, shown.length > 300 ? `${shown.slice(0, 300)}…` : shown)];
       }))));
   }

@@ -63,7 +63,7 @@ class JobKilled(BaseException):
 @dataclass
 class Param:
     name: str
-    type: str  # float | int | bool | str | text | choice | path
+    type: str  # float | int | bool | str | text | choice | multichoice (a list of choices) | path
     default: Any = None
     label: str = ""
     help: str = ""
@@ -75,6 +75,7 @@ class Param:
     unit: str = ""
     placeholder: str = ""
     path_kind: str = "any"  # type=path: file | dir | any; type=str: "files" (paths separated by ';'), "name" (file name)
+    labels: dict[str, str] | None = None  # choice / multichoice: the name shown for each value
     admin_only: bool = False  # with user accounts, only administrators may set it (it can run code on the server)
 
     def to_dict(self) -> dict[str, Any]:
@@ -83,6 +84,8 @@ class Param:
         return d
 
     def coerce(self, value: Any) -> Any:
+        if self.type == "multichoice":
+            return self._coerce_list(value)
         if value is None or (isinstance(value, str) and value.strip() == "" and self.type not in ("text",)):
             return self.default
         try:
@@ -113,6 +116,17 @@ class Param:
             if self.max is not None and value > self.max:
                 raise ValueError(f"Parameter '{self.name}' must be <= {self.max}")
         return value
+
+    def _coerce_list(self, value: Any) -> list[str]:
+        """Several of the choices: a list, or text separated by commas (an empty list chooses none)."""
+        if value is None:
+            return list(self.default or [])
+        items = value if isinstance(value, (list, tuple)) else re.split(r"[,;]", str(value))
+        chosen = [str(v).strip() for v in items if str(v).strip()]
+        wrong = [v for v in chosen if self.choices and v not in self.choices]
+        if wrong:
+            raise ValueError(f"Parameter '{self.name}': {', '.join(map(repr, wrong))} not among {self.choices}")
+        return list(dict.fromkeys(chosen))
 
 
 SAFE_FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")

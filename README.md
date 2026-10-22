@@ -498,9 +498,23 @@ petits morceaux. **CryoAtom2 enhanced** fait tout cela seul :
    reconstruit avec les séquences trouvées par au moins la moitié des essais, jusqu'à ce qu'aucune nouvelle
    n'apparaisse ;
 5. si la plupart des résidus sont en morceaux de moins de 10 résidus, il construit une fois dans la carte **miroir**.
-   Si elle fait nettement mieux, le job signale une main probablement inversée et donne la carte miroir et son modèle.
+   Si elle fait nettement mieux, le job signale une main probablement inversée et donne la carte miroir et son modèle ;
+6. **boucle carte–modèle** (*Improve the map and build again*), le cycle décrit par les auteurs de LocScale : améliorer
+   la carte avec le modèle, construire, puis recommencer donne des cartes et des modèles meilleurs à chaque tour. Les
+   résidus du meilleur modèle ajustés à la densité (B-factors remis à une valeur uniforme : CryoAtom2 y met une
+   confiance) affûtent les **demi-cartes non filtrées** avec **LocScale hybride** (les zones sans modèle sont complétées
+   par des pseudo-atomes, le mode recommandé pour un modèle partiel), **LocScale model-based** ou l'**affûtage par
+   modèle de Phenix** (`phenix.map_sharpening` avec carte et modèle). CryoAtom2 reconstruit dans la nouvelle carte, et
+   le cycle reprend avec le nouveau meilleur modèle tant que le score contre la carte **expérimentale** progresse (au
+   plus *Map-model cycles*). On peut aussi cocher des méthodes sans modèle, qui donnent chacune une carte de plus à
+   essayer : **EMmerNet**, **LocScale model-free**, **DeepEMhancer**, **EMReady2**, **modification de densité Phenix**.
+   La carte du meilleur modèle est en sortie (*map_improved*). Un programme absent est sauté, avec un avertissement.
 
-![CryoAtom2 enhanced : les essais comparés](docs/images/cryoatom_enhanced.png)
+![CryoAtom2 enhanced : les essais comparés, dont deux cycles LocScale hybride](docs/images/cryoatom_enhanced.png)
+
+La notation se fait toujours contre la carte expérimentale : une carte améliorée n'est jamais la référence, ce qui
+évite qu'un modèle se « confirme » lui-même. LocScale model-based et hybride affinent les B-factors avec REFMAC5 (CCP4
+doit être installé pour LocScale).
 
 Le rapport compare tous les essais (*Runs compared* : résidus construits, ajustés, dupliqués, Q-score, CC, fragments,
 score) et liste les morceaux ajoutés. Les modèles de chaque essai restent disponibles (*Models of every run*).

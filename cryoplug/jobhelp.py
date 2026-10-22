@@ -876,7 +876,8 @@ HELP: dict[str, dict[str, Any]] = {
     "cryoatom_enhanced": {
         "purpose": "CryoAtom2 lancé plusieurs fois, avec plusieurs réglages (et éventuellement d'autres cartes), chaque modèle "
                    "noté contre la carte expérimentale ; le meilleur est gardé, ses trous comblés par les morceaux bien "
-                   "ajustés des autres essais, les chaînes identifiées et reconstruites jusqu'à convergence, la main vérifiée.",
+                   "ajustés des autres essais, les chaînes identifiées et reconstruites jusqu'à convergence, la main vérifiée. "
+                   "En option, la carte est améliorée avec le modèle (LocScale…) puis reconstruite, tant que le score monte.",
         "when": [
             "Carte difficile (résolution locale basse, régions flexibles) : CryoAtom2 construit différemment à chaque "
             "lancement, et ses auteurs conseillent d'en lancer plusieurs et de garder le meilleur.",
@@ -885,13 +886,16 @@ HELP: dict[str, dict[str, Any]] = {
             "Comparer la construction dans plusieurs cartes (affûtées autrement, LocScale, EMReady…) en les notant toutes "
             "contre la même carte expérimentale.",
             "Composition inconnue : avec une base de séquences, identification puis reconstruction automatiques.",
+            "Carte hétérogène (régions bien et mal résolues) : la boucle carte–modèle (« Improve the map and build again », "
+            "LocScale hybride avec les demi-cartes) affûte localement avec les parties fiables du modèle, puis reconstruit.",
         ],
         "avoid": [
             "Un seul essai rapide suffit (carte nette à haute résolution) : « CryoAtom2 build » prend N fois moins de GPU.",
             "Carte d'un réseau de neurones utilisée comme carte de référence : les modèles seraient notés contre une densité "
             "déjà interprétée. Branchez la carte expérimentale en « Map » et les autres en « Other map ».",
         ],
-        "inputs": "Carte expérimentale (référence de la notation), séquence(s), masque ; cartes alternatives et bases de séquences optionnelles.",
+        "inputs": "Carte expérimentale (référence de la notation), séquence(s), masque ; demi-cartes non filtrées pour améliorer "
+                  "la carte ; cartes alternatives et bases de séquences optionnelles.",
         "tips": [
             "Le tableau « Runs compared » donne, pour chaque essai, les résidus construits, ajustés (Q-score par résidu ≥ Q "
             "attendu − 0,2), dupliqués, et le score : résidus ajustés, une densité tracée deux fois comptée une seule fois.",
@@ -899,7 +903,15 @@ HELP: dict[str, dict[str, Any]] = {
             "plafonne le premier tour.",
             "Si le job signale une main probablement inversée, retournez la carte (et les demi-cartes) avant d'aller plus loin : "
             "la carte miroir et son modèle sont en sortie.",
-            "Affinez ensuite le meilleur modèle (real-space refine, ISOLDE) : les modèles bruts gardent des erreurs locales.",
+            "Boucle carte–modèle : seuls les résidus ajustés à la densité, avec un B uniforme, sont donnés à LocScale (qui "
+            "affine leurs B avec REFMAC5 : CCP4 requis) ; LocScale hybride complète le reste par des pseudo-atomes. Le cycle "
+            "s'arrête dès qu'il n'améliore plus le score contre la carte expérimentale : la carte améliorée ne sert jamais "
+            "de référence, ce qui évite qu'un modèle se « confirme » lui-même.",
+            "Les méthodes sans modèle (EMmerNet, LocScale model-free, DeepEMhancer, EMReady2, modification de densité Phenix) "
+            "donnent une carte de plus à essayer, une seule fois ; cochez-en plusieurs pour les comparer.",
+            "Affinez ensuite le meilleur modèle (real-space refine, ISOLDE) : les modèles bruts gardent des erreurs locales. "
+            "La carte améliorée (sortie « map_improved ») aide à interpréter ; déposez la carte expérimentale comme carte "
+            "principale.",
         ],
         "next": ["phenix_real_space_refine", "isolde_session", "mapmodel_validation", "checkmysequence"],
     },

@@ -6,6 +6,13 @@ best model on difficult maps, raising the rounds at low resolution, lowering the
 rebuilding with the identified sequences until none is new, and flipping a map whose helices come out in short pieces.
 This job does all of that by itself and scores every model against the experimental map
 (:mod:`cryoplug.modelsearch`): residues fitted to the density, counted once where the density is traced twice.
+
+It can also improve the map with the model and build again, the cycle LocScale's authors describe (Jakobi et al.
+2017: scaling, building and refinement iterated for successively better maps and models): the parts of the best model
+fitted to the density sharpen the half maps (LocScale hybrid or model-based, Phenix model-based sharpening), CryoAtom2
+builds into the new map, and the cycle goes on while the score against the experimental map improves. Methods that do
+not use a model (EMmerNet, model-free LocScale, DeepEMhancer, EMReady2, Phenix density modification) give one more map
+to build into.
 """
 from __future__ import annotations
 
@@ -56,6 +63,17 @@ SETTING_SETS = {
 }
 FLAGS = {"protein": "-ps", "rna": "-rs", "dna": "-ds"}
 ALT_MAPS = 3
+# Map improvement: (label, uses the model). Those using the model are cycled: sharpen with the best model, rebuild.
+IMPROVE_METHODS: dict[str, tuple[str, bool]] = {
+    "locscale_hybrid": ("LocScale hybrid", True),
+    "locscale_model_based": ("LocScale model-based", True),
+    "phenix_model_sharpening": ("Phenix model-based sharpening", True),
+    "emmernet": ("EMmerNet", False),
+    "locscale_model_free": ("LocScale model-free", False),
+    "deepemhancer": ("DeepEMhancer", False),
+    "emready": ("EMReady2", False),
+    "phenix_density_modification": ("Phenix density modification", False),
+}
 
 
 def merged(base: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
@@ -104,10 +122,14 @@ class CryoAtomEnhanced(JobType):
                    "optionally on re-sharpened or other maps; scores every model against the experimental map (residues "
                    "fitted to the density by Q-score, the same density traced twice counted once) and keeps the best, "
                    "with its gaps filled by well-fitted pieces of the other runs. With sequence databases, identifies the "
-                   "chains and rebuilds with them until no new sequence appears. Checks the hand of the map when the "
-                   "model comes out in short pieces.")
+                   "chains and rebuilds with them until no new sequence appears. Can improve the map with the best model "
+                   "(LocScale hybrid or model-based, Phenix) and build again while the score improves, or try other "
+                   "sharpening methods (EMmerNet, DeepEMhancer, EMReady2, density modification). Checks the hand of the "
+                   "map when the model comes out in short pieces.")
     inputs = [
         Slot("map", ("map",), "Map", help="The experimental map to build into: every model is scored against it."),
+        Slot("half_maps", ("half_maps",), "Half maps", required=False,
+             help="Unfiltered half maps, for the map improvement (LocScale and density modification read them)."),
         Slot("sequence", ("sequence",), "Sequence", required=False,
              help="Each unique chain once; protein, RNA and DNA records are passed separately."),
         Slot("mask", ("mask",), "Mask", required=False, help="Build only inside this region (same box as the map)."),
@@ -135,6 +157,15 @@ class CryoAtomEnhanced(JobType):
         Param("check_hand", "choice", "auto", choices=["auto", "always", "never"], label="Check the hand",
               help="auto: when most of the model is in short pieces (helices broken up: the sign of a mirrored map), "
                    "build once into the mirrored map and compare."),
+        Param("improve_map", "multichoice", [], choices=list(IMPROVE_METHODS), label="Improve the map and build again",
+              labels={k: v[0] for k, v in IMPROVE_METHODS.items()},
+              help="Model-based methods (LocScale hybrid or model-based, Phenix model-based sharpening) sharpen the half "
+                   "maps with the parts of the best model fitted to the density, then CryoAtom2 builds into the new map, "
+                   "for as many cycles as the score improves. The others (EMmerNet, LocScale model-free, DeepEMhancer, "
+                   "EMReady2, Phenix density modification) give one more map to build into. All models are scored "
+                   "against the experimental map."),
+        Param("improve_rounds", "int", 2, label="Map-model cycles", min=1, max=5,
+              help="At most this many sharpen-and-build cycles per model-based method."),
         Param("protein_db", "path", "", label="Protein sequence database", path_kind="file",
               help="FASTA database to identify the protein chains (e.g. the UniProt proteome of the organism); the job "
                    "then rebuilds with the sequences found until no new one appears."),
@@ -154,17 +185,21 @@ class CryoAtomEnhanced(JobType):
         OutputDef("model_raw", "model", "Raw model of the best run"),
         OutputDef("sequence", "sequence", "Sequences (with the identified ones)"),
         OutputDef("candidates", "files", "Models of every run"),
+        OutputDef("map_improved", "map", "Improved map (the best model's)"),
         OutputDef("map_other_hand", "map", "Map in the other hand"),
         OutputDef("model_other_hand", "model", "Model in the other hand"),
     ]
 
     @classmethod
     def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        problems = []
         try:
             parse_bfactors(params.get("bfactors", ""))
         except ValueError:
-            return ["Re-sharpened maps: give B-factors as numbers separated by commas, e.g. -30, 40"]
-        return []
+            problems.append("Re-sharpened maps: give B-factors as numbers separated by commas, e.g. -30, 40")
+        if "phenix_density_modification" in (params.get("improve_map") or []) and "half_maps" not in connected:
+            problems.append("Phenix density modification needs the half maps")
+        return problems
 
     # ------------------------------------------------------------------ run
     def run(self, ctx: JobContext) -> None:
@@ -183,6 +218,7 @@ class CryoAtomEnhanced(JobType):
         self.runs_dir = ctx.path("runs")
         self.runs_dir.mkdir(exist_ok=True)
         self.candidates: list[dict[str, Any]] = []
+        self._links: dict[str, str] = {}  # maps linked as .mrc for CryoAtom2
         self.done = 0
         self.mask = ctx.input("mask")
         self.dbs = []
@@ -266,6 +302,10 @@ class CryoAtomEnhanced(JobType):
                         best = self._combine(best, last_round, write_structure) or best
                 ctx.log(f"Round {rnd}: best run {top['label']} ({self._summary(top)})")
 
+        self.round = rounds
+        if ctx.params["improve_map"]:
+            best = self._improve(best, maps, write_structure)
+
         # The hand of the map
         hand = "not checked"
         mode = ctx.params["check_hand"]
@@ -316,7 +356,7 @@ class CryoAtomEnhanced(JobType):
         config = merged(self.base_config, PRESETS[setting][2])
         (folder / "config.json").write_text(json.dumps(config, indent=1))
         out = folder / "cryoatom"
-        map_path = mp["path"] if mp["path"].lower().endswith((".mrc", ".map")) else str(ctx.link_input(mp["path"], f"{label}.mrc"))
+        map_path = self._readable(mp)
         args = [self.exe, "build", "-v", map_path, "-o", str(out), "-c", str(folder / "config.json")]
         for kind, path in sequences.items():
             args += [FLAGS[kind], path]
@@ -368,6 +408,21 @@ class CryoAtomEnhanced(JobType):
             self.candidates.append(cand)
         return cand
 
+    def _readable(self, mp: dict[str, Any]) -> str:
+        """The map as CryoAtom2 reads it: named .mrc or .map (a link otherwise, made once per map)."""
+        path = mp["path"]
+        if path.lower().endswith((".mrc", ".map")):
+            return path
+        links = self._links
+        if path not in links:
+            target = Path(path)
+            try:  # next to the map when it is in this job's folder (an improved map), else at the top of the folder
+                rel = str(target.with_suffix(".mrc").relative_to(self.ctx.job_dir))
+            except ValueError:
+                rel = f"input_{re.sub(r'[^A-Za-z0-9+-]+', '_', mp['label'])}.mrc"
+            links[path] = str(self.ctx.link_input(path, rel))
+        return links[path]
+
     @staticmethod
     def _best(cands: list[dict[str, Any]]) -> dict[str, Any]:
         return max(cands, key=lambda c: (c["score"]["score"], c["score"]["q_mean"], c["score"]["cc_mask"]))
@@ -408,6 +463,113 @@ class CryoAtomEnhanced(JobType):
             if fresh:
                 new[kind] = fresh
         return new
+
+    # ------------------------------------------------------- map improvement
+    def _map_sources(self, model: str | None):
+        """The maps the enhancement programs read: the unfiltered half maps when they are connected (with their average
+        as the full map), else the experimental map."""
+        from cryoplug.jobs.sharpening import LOCSCALE_SYMMETRY, MapSources
+        from cryoplug.modelio import write_fasta
+        from cryoplug.mrc import MapVolume
+
+        ctx = self.ctx
+        hm = ctx.input("half_maps")
+        if not hasattr(self, "_full_map"):
+            self._full_map = ctx.require("map").path
+            if hm:
+                a, b = MapVolume.read(hm.files[0]), MapVolume.read(hm.files[1])
+                if tuple(a.shape_xyz) == tuple(b.shape_xyz):
+                    folder = ctx.path("improve")
+                    folder.mkdir(exist_ok=True)
+                    self._full_map = str(a.write(folder / "half_map_average.mrc", (a.data + b.data) / 2))
+            sym = str(ctx.inherited_meta("half_maps", "map").get("symmetry") or "C1").strip().upper()
+            if not LOCSCALE_SYMMETRY.fullmatch(sym):
+                ctx.warn(f"Point group {sym} not understood by LocScale: the map improvement uses none (C1)")
+                sym = "C1"
+            self._symmetry = sym
+        records = [rec for recs in self.records.values() for rec in recs]
+        sequence = str(write_fasta(records, ctx.path("improve", "sequences.fasta"))) if records else None
+        return MapSources(half_maps=list(hm.files[:2]) if hm else None, full_map=self._full_map,
+                          mask=self.mask.path if self.mask else None, sequence=sequence, model=model,
+                          resolution=self.resolution, symmetry=self._symmetry)
+
+    def _improve_map(self, method: str, model: str | None, folder: Path) -> Path:
+        from cryoplug.jobs import sharpening as sh
+
+        ctx = self.ctx
+        src = self._map_sources(model)
+        gpus = ctx.physical_gpus()
+        if method in ("locscale_hybrid", "locscale_model_based", "locscale_model_free"):
+            if not src.half_maps:
+                ctx.warn("LocScale reads unfiltered maps: without half maps it scales the experimental map, which may "
+                         "be filtered already (connect the half maps)")
+            mode = {"locscale_hybrid": "hybrid", "locscale_model_based": "model_based"}.get(method, "model_free")
+            return sh.run_locscale(ctx, src, mode, folder, nproc=4, gpus=gpus)
+        if method == "emmernet":
+            return sh.run_emmernet(ctx, src, folder, gpus=gpus)["map"]
+        if method == "deepemhancer":
+            return sh.run_deepemhancer(ctx, src, folder, gpus=gpus)
+        if method == "emready":
+            return sh.run_emready(ctx, ctx.require("map").path, folder, mask=src.mask, gpus=gpus)
+        if method == "phenix_model_sharpening":
+            return sh.run_map_sharpening(ctx, src, folder, use_model=True)
+        if method == "phenix_density_modification":
+            return sh.run_resolve_cryo_em(ctx, src, folder, nproc=4)
+        raise JobError(f"Unknown map improvement {method}")
+
+    def _improve(self, best: dict[str, Any], maps: list[dict[str, Any]], write_structure) -> dict[str, Any]:
+        """Sharpen with the best model and build again, while the score improves (model-based methods); one more map
+        to build into for the others."""
+        ctx, ms = self.ctx, self.ms
+        runs = int(ctx.params["runs"])
+        cutoff = ms.fitted_cutoff(self.resolution)
+        self.improved: dict[str, Path] = {}
+        for method in ctx.params["improve_map"]:
+            label, uses_model = IMPROVE_METHODS[method]
+            for cycle in range(1, (int(ctx.params["improve_rounds"]) if uses_model else 1) + 1):
+                folder = ctx.path("improve", f"{method}_{cycle}" if uses_model else method)
+                folder.mkdir(parents=True, exist_ok=True)
+                model = None
+                if uses_model:
+                    part = ms.reliable_part(self.read_structure(best["model"]), best["score"]["per_residue"], cutoff)
+                    n = len(ms.polymer_residues(part))
+                    if n < 10:
+                        ctx.warn(f"{label}: only {n} residues of the best model fit the density, too few to sharpen with")
+                        break
+                    model = str(write_structure(part, folder / "model_fitted.cif"))
+                    ctx.log(f"{label}, cycle {cycle}: sharpening with the {n} fitted residues of {best['label']}")
+                self.planned += runs
+                ctx.progress(self.done / max(self.planned, 1), f"Map improvement: {label}"
+                             + (f", cycle {cycle} (with the model of {best['label']})" if uses_model else ""),
+                             log=not uses_model)  # the model-based cycles have logged it in detail
+                try:
+                    new_map = self._improve_map(method, model, folder)
+                except JobError as exc:
+                    self.planned -= runs
+                    ctx.warn(f"{label} left out: {exc}")
+                    break
+                self.round += 1
+                mp = {"label": f"{label} {cycle}" if uses_model else label,
+                      "short": f"{label} ⟳{cycle}" if uses_model else label, "path": str(new_map),
+                      "note": f"{label} map" + (f", cycle {cycle}" if uses_model else "")}
+                maps.append(mp)
+                self.improved[mp["label"]] = new_map
+                cands = [c for c in (self._build(mp, best["setting"], r, self.sequences, self.round)
+                                     for r in range(1, runs + 1)) if c]
+                if not cands:
+                    ctx.warn(f"{label}: no run produced a model in the new map")
+                    break
+                top = self._best(cands)
+                better = top["score"]["score"] > best["score"]["score"]
+                ctx.log(f"{mp['note']}: best run {top['label']} ({self._summary(top)}) — "
+                        + ("better than the best so far" if better else f"not better than {best['label']}"))
+                if better:
+                    best = top
+                    if ctx.params["combine"] and len(cands) > 1:
+                        best = self._combine(best, cands, write_structure) or best
+                if not better or not uses_model:
+                    break
+        return best
 
     def _check_hand(self, best: dict[str, Any], main: dict[str, Any], flip_hand, MapVolume) -> str:
         ctx = self.ctx
@@ -457,6 +619,9 @@ class CryoAtomEnhanced(JobType):
         ctx.add_highlight("Runs", str(len([c for c in self.candidates if "combined_from" not in c])))
         ctx.add_highlight("Best run", f"{PRESETS[best['setting']][0]} · {best['map_short']}")
 
+        improved = getattr(self, "improved", {}).get(best["map"])
+        if improved:
+            ctx.add_output("map_improved", "map", improved, f"{best['map_note']} (the best model's map)", inherit=["map"])
         identified = [rec for recs in self.records.values() for rec in recs]
         given = ctx.input("sequence")
         if identified and (rounds > 1 or not given):
@@ -493,6 +658,11 @@ class CryoAtomEnhanced(JobType):
         lines = [f"Best model: run {best['label']} — {PRESETS[best['setting']][0]} settings "
                  f"({PRESETS[best['setting']][1]}) on the {best['map_note']}.",
                  f"Rounds: {rounds} (identification {'on' if self.dbs else 'off: no sequence database'}). Hand: {hand}."]
+        if ctx.params["improve_map"]:
+            tried = ", ".join(IMPROVE_METHODS[m][0] for m in ctx.params["improve_map"])
+            lines.append(f"Map improvement tried: {tried}. "
+                         + (f"The best model was built into the {best['map_note']}, an output."
+                            if improved else "No improved map gave a better model than the maps before."))
         if s["short_fraction"] > 0.3:
             lines.append(f"{s['short_fraction']:.0%} of the residues are in pieces shorter than {self.ms.SHORT} residues.")
         ctx.add_text("Summary", "\n".join(lines))

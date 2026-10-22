@@ -268,9 +268,9 @@ Automated building of proteins, RNA/DNA and their complexes (CryoAtom2, Su et al
 Usually followed by: `phenix_real_space_refine`, `isolde_session`, `mapmodel_validation`.
 
 ### `cryoatom_enhanced` — CryoAtom2 enhanced (best of several runs)
-CryoAtom2 · GPU. In: map: map, sequence?: sequence, mask?: mask, alt_map_1?: map, alt_map_2?: map, alt_map_3?: map. Out: model: model, model_raw: model, sequence: sequence, candidates: files, map_other_hand: map, model_other_hand: model.
+CryoAtom2 · GPU. In: map: map, half_maps?: half_maps, sequence?: sequence, mask?: mask, alt_map_1?: map, alt_map_2?: map, alt_map_3?: map. Out: model: model, model_raw: model, sequence: sequence, candidates: files, map_improved: map, map_other_hand: map, model_other_hand: model.
 
-Runs CryoAtom2 several times (it builds differently each time) with several settings, and optionally on re-sharpened or other maps; scores every model against the experimental map (residues fitted to the density by Q-score, the same density traced twice counted once) and keeps the best, with its gaps filled by well-fitted pieces of the other runs. With sequence databases, identifies the chains and rebuilds with them until no new sequence appears. Checks the hand of the map when the model comes out in short pieces.
+Runs CryoAtom2 several times (it builds differently each time) with several settings, and optionally on re-sharpened or other maps; scores every model against the experimental map (residues fitted to the density by Q-score, the same density traced twice counted once) and keeps the best, with its gaps filled by well-fitted pieces of the other runs. With sequence databases, identifies the chains and rebuilds with them until no new sequence appears. Can improve the map with the best model (LocScale hybrid or model-based, Phenix) and build again while the score improves, or try other sharpening methods (EMmerNet, DeepEMhancer, EMReady2, density modification). Checks the hand of the map when the model comes out in short pieces.
 Usually followed by: `phenix_real_space_refine`, `isolde_session`, `mapmodel_validation`, `checkmysequence`.
 
 ### `phenix_dock_in_map` — Dock in map (Phenix)

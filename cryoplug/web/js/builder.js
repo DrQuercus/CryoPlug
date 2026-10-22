@@ -278,10 +278,19 @@ export function paramField(prm, values, idPrefix = 'p') {
       h('input', { id, type: 'checkbox', checked: !!v, onchange: (e) => set(e.target.checked) }),
       h('label', { for: id }, prm.label)), help);
   }
+  if (prm.type === 'multichoice') { // several of the choices: one box each
+    const chosen = new Set(Array.isArray(v) ? v : []);
+    return h('div', { class: 'field' }, h('label', {}, prm.label),
+      h('div', { class: 'multi-choice', role: 'group', 'aria-label': prm.label }, prm.choices.map((c) => h('label', { class: 'check' },
+        h('input', { type: 'checkbox', checked: chosen.has(c), onchange: (e) => {
+          if (e.target.checked) chosen.add(c); else chosen.delete(c);
+          set(prm.choices.filter((x) => chosen.has(x)));
+        } }), prm.labels?.[c] ?? String(c).replaceAll('_', ' ')))), help);
+  }
   let input;
   if (prm.type === 'choice') {
     input = h('select', { id, onchange: (e) => set(e.target.value) },
-      prm.choices.map((c) => h('option', { value: c, selected: c === v }, String(c).replaceAll('_', ' '))));
+      prm.choices.map((c) => h('option', { value: c, selected: c === v }, prm.labels?.[c] ?? String(c).replaceAll('_', ' '))));
   } else if (prm.type === 'text') {
     input = h('textarea', { id, class: 'mono', rows: 4, placeholder: prm.placeholder || '', oninput: (e) => set(e.target.value) });
     input.value = v ?? '';
