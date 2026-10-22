@@ -36,8 +36,8 @@ HELP: dict[str, dict[str, Any]] = {
             "Indiquez la symétrie réellement imposée (C1, C2, D7…) : LocScale, EMmerNet et le dépôt l'utilisent.",
             "« copy » rend le projet autonome ; « symlink » économise de l'espace mais dépend du dossier CryoSPARC.",
         ],
-        "next": ["directional_fsc", "locscale", "modelangelo_build", "cryoatom_build", "import_sequence", "draw_mask",
-                 "relion_local_refine"],
+        "next": ["directional_fsc", "locscale", "modelangelo_build", "cryoatom_build", "cryoatom_enhanced", "import_sequence",
+                 "draw_mask", "relion_local_refine"],
     },
     "import_maps": {
         "purpose": "Importe des demi-cartes, une carte complète, une carte affûtée et un masque venant de n'importe quel logiciel.",
@@ -84,7 +84,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Incluez les étiquettes (tags) réellement présentes si elles sont visibles dans la carte.",
             "Les ARN/ADN sont reconnus à leur composition (A, C, G, U/T).",
         ],
-        "next": ["modelangelo_build", "cryoatom_build", "boltz_predict", "colabfold_predict"],
+        "next": ["modelangelo_build", "cryoatom_build", "cryoatom_enhanced", "boltz_predict", "colabfold_predict"],
     },
     "import_particles": {
         "purpose": "Importe des particules pour l'analyse d'hétérogénéité (cryoDRGN) : un job CryoSPARC ou un fichier .cs "
@@ -278,7 +278,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Les opérations s'enchaînent dans un ordre fixe : pixel → boîte → main → B-factor → filtre → masque → normalisation.",
             "B-factor négatif = affûtage, positif = flou.",
         ],
-        "next": ["modelangelo_build", "cryoatom_build", "fit_in_map", "chimerax_fitmap"],
+        "next": ["modelangelo_build", "cryoatom_build", "cryoatom_enhanced", "fit_in_map", "chimerax_fitmap"],
     },
     "create_mask": {
         "purpose": "Crée un masque à bord doux : à partir de la densité (passe-bas + seuil), des atomes de chaînes choisies, "
@@ -404,7 +404,8 @@ HELP: dict[str, dict[str, Any]] = {
             "Le mode model-free utilise EMmerNet : un GPU est fortement conseillé.",
             "Le mode pseudo-modèle convient aux cartes très bruitées ou de basse résolution.",
         ],
-        "next": ["modelangelo_build", "cryoatom_build", "fit_in_map", "chimerax_fitmap", "isolde_session"],
+        "next": ["modelangelo_build", "cryoatom_build", "cryoatom_enhanced", "fit_in_map", "chimerax_fitmap",
+                 "isolde_session"],
     },
     "emmernet": {
         "purpose": "Carte « améliorée » par le réseau EMmerNet (LocScale 2) avec estimation d'incertitude Monte-Carlo.",
@@ -461,7 +462,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Déposez toujours les cartes d'origine ; la carte corrigée peut être déposée en carte additionnelle et mentionnée dans les méthodes.",
             "Jugez le résultat visuellement et par l'ajustement du modèle (Q-score), pas par une nouvelle FSC.",
         ],
-        "next": ["modelangelo_build", "cryoatom_build", "isolde_session"],
+        "next": ["modelangelo_build", "cryoatom_build", "cryoatom_enhanced", "isolde_session"],
     },
     "phenix_resolve_cryo_em": {
         "purpose": "Modification de densité au maximum de vraisemblance à partir des demi-cartes (phenix.resolve_cryo_em).",
@@ -472,7 +473,7 @@ HELP: dict[str, dict[str, Any]] = {
         "avoid": ["Comme carte primaire du dépôt (déposez-la en carte additionnelle)."],
         "inputs": "Demi-cartes non filtrées ; la séquence améliore le résultat (sinon donner la teneur en solvant).",
         "tips": ["Augmentez nproc : le calcul est long sur de grandes boîtes."],
-        "next": ["modelangelo_build", "cryoatom_build", "phenix_real_space_refine"],
+        "next": ["modelangelo_build", "cryoatom_build", "cryoatom_enhanced", "phenix_real_space_refine"],
     },
     "phenix_auto_sharpen": {
         "purpose": "Affûtage global optimisé pour maximiser le détail et la connectivité (phenix.auto_sharpen).",
@@ -502,7 +503,7 @@ HELP: dict[str, dict[str, Any]] = {
             "La résolution est facultative en mode « shell », obligatoire en « b-factor ».",
             "Avec Phenix 1.21 ou plus ancien sans map_sharpening : job « Auto-sharpen (Phenix) ».",
         ],
-        "next": ["modelangelo_build", "cryoatom_build", "phenix_real_space_refine", "local_resolution"],
+        "next": ["modelangelo_build", "cryoatom_build", "cryoatom_enhanced", "phenix_real_space_refine", "local_resolution"],
     },
     "phenix_local_aniso_sharpen": {
         "purpose": "Affûtage local et anisotrope avec mise à l'échelle dépendant de la résolution, à partir des demi-cartes "
@@ -849,7 +850,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Les hits sous le seuil d'E-value (1e-5 par défaut) deviennent une sortie « sequence ».",
             "Reconstruisez ensuite avec ces séquences (ModelAngelo ou CryoAtom2) et vérifiez l'accord de séquence dans la carte.",
         ],
-        "next": ["cryoatom_build", "modelangelo_build"],
+        "next": ["cryoatom_build", "cryoatom_enhanced", "modelangelo_build"],
     },
     "cryoatom_build": {
         "purpose": "Construction automatique (CryoAtom2 : attention locale et encodage de position 3D) de protéines, ARN/ADN et "
@@ -871,6 +872,36 @@ HELP: dict[str, dict[str, Any]] = {
             "Comparez avec ModelAngelo (Q-score, résidus construits).",
         ],
         "next": ["phenix_real_space_refine", "isolde_session", "mapmodel_validation"],
+    },
+    "cryoatom_enhanced": {
+        "purpose": "CryoAtom2 lancé plusieurs fois, avec plusieurs réglages (et éventuellement d'autres cartes), chaque modèle "
+                   "noté contre la carte expérimentale ; le meilleur est gardé, ses trous comblés par les morceaux bien "
+                   "ajustés des autres essais, les chaînes identifiées et reconstruites jusqu'à convergence, la main vérifiée.",
+        "when": [
+            "Carte difficile (résolution locale basse, régions flexibles) : CryoAtom2 construit différemment à chaque "
+            "lancement, et ses auteurs conseillent d'en lancer plusieurs et de garder le meilleur.",
+            "Vous ne savez pas quels réglages conviennent : « auto » essaie les réglages standard et, selon la résolution, "
+            "« more residues » (seuils Cα/P abaissés) ou « low resolution » (4 tours).",
+            "Comparer la construction dans plusieurs cartes (affûtées autrement, LocScale, EMReady…) en les notant toutes "
+            "contre la même carte expérimentale.",
+            "Composition inconnue : avec une base de séquences, identification puis reconstruction automatiques.",
+        ],
+        "avoid": [
+            "Un seul essai rapide suffit (carte nette à haute résolution) : « CryoAtom2 build » prend N fois moins de GPU.",
+            "Carte d'un réseau de neurones utilisée comme carte de référence : les modèles seraient notés contre une densité "
+            "déjà interprétée. Branchez la carte expérimentale en « Map » et les autres en « Other map ».",
+        ],
+        "inputs": "Carte expérimentale (référence de la notation), séquence(s), masque ; cartes alternatives et bases de séquences optionnelles.",
+        "tips": [
+            "Le tableau « Runs compared » donne, pour chaque essai, les résidus construits, ajustés (Q-score par résidu ≥ Q "
+            "attendu − 0,2), dupliqués, et le score : résidus ajustés, une densité tracée deux fois comptée une seule fois.",
+            "Comptez « Runs » × réglages × durée d'un CryoAtom2 (≈ 30 min pour 5 000 résidus sur une A100) ; « Maximum runs » "
+            "plafonne le premier tour.",
+            "Si le job signale une main probablement inversée, retournez la carte (et les demi-cartes) avant d'aller plus loin : "
+            "la carte miroir et son modèle sont en sortie.",
+            "Affinez ensuite le meilleur modèle (real-space refine, ISOLDE) : les modèles bruts gardent des erreurs locales.",
+        ],
+        "next": ["phenix_real_space_refine", "isolde_session", "mapmodel_validation", "checkmysequence"],
     },
     "colabfold_predict": {
         "purpose": "Prédiction AlphaFold2 locale (ColabFold) pour obtenir des modèles de départ.",

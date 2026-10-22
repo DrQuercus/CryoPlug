@@ -169,14 +169,56 @@ fi
 [ "$cmd" = "build_no_seq" ] && mkdir -p "$out/hmm_profiles" && touch "$out/hmm_profiles/A.hmm"
 exit 0
 """)
+    # With a config (-c): the Cα threshold sets how much is built (0.5 or less: everything, else the first 60%, or the
+    # last 60% in a map re-sharpened with a negative B-factor); with $CRYOPLUG_FAKE_WRONG_HAND the map is mirrored: short
+    # misplaced pieces, unless the map is the job's mirrored copy (other_hand), where the model is mirrored to fit it.
     _script(d / "cryoatom", f"""
-# cryoatom build -v map [-ps p.fasta] [-pf db] -o out -d 0
+# cryoatom build -v map [-ps p.fasta] [-pf db] [-c config.json] -o out -d 0
 echo "fake CryoAtom2 $@"
-out=""; db=""
-while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; -pf) db="$2"; shift;; esac; shift; done
+out=""; db=""; cfg=""; map=""
+while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; -pf) db="$2"; shift;; -c) cfg="$2"; shift;; -v) map="$2"; shift;; esac; shift; done
 mkdir -p "$out"
 name="$(basename "$out")"
-{write_cif} "$out/$name.cif"
+echo "--------------------- CryoAtom2 Stage1 (Predict C-alpha or P atoms by RU-Net) ---------------------"
+echo "------------------ CryoAtom2 Stage2 (Build all-atom structure by Cryo-Net), round 1 / 3 ------------------"
+{sys.executable} - "$map" "$cfg" "$out/$name.cif" <<'PY'
+import json, os, sys
+import gemmi
+from cryoplug.mrc import MapVolume
+map_path, cfg_path, out = sys.argv[1:4]
+st = gemmi.read_structure('{model}')
+chain = st[0][0]
+n = len(chain)
+keep = range(n)
+wrong_hand = bool(os.environ.get("CRYOPLUG_FAKE_WRONG_HAND")) and "other_hand" not in map_path
+if cfg_path and not wrong_hand:
+    threshold = json.load(open(cfg_path)).get("RUNet_args", {{}}).get("ca_threshold", 0.6)
+    if threshold > 0.5:
+        k = int(n * 0.6)
+        keep = range(n - k, n) if "_B-" in os.path.basename(map_path) else range(k)
+for i in range(n - 1, -1, -1):
+    if i not in keep:
+        del chain[i]
+if wrong_hand:
+    residues = [r.clone() for r in chain]
+    st[0].remove_chain(chain.name)
+    for j in range(0, len(residues), 5):
+        piece = gemmi.Chain("P" + str(j // 5))
+        for r in residues[j:j + 5]:
+            for a in r:
+                a.pos = gemmi.Position(a.pos.x + 3, a.pos.y + 3, a.pos.z)
+            piece.add_residue(r)
+        st[0].add_chain(piece)
+if "other_hand" in map_path:
+    vol = MapVolume.read(map_path, header_only=True)
+    top = 2 * vol.origin[2] + (vol.shape_xyz[2] - 1) * vol.voxel[2]
+    for ch in st[0]:
+        for r in ch:
+            for a in r:
+                a.pos = gemmi.Position(a.pos.x, a.pos.y, top - a.pos.z)
+st.setup_entities()
+st.make_mmcif_document().write_file(out)
+PY
 cp "$out/$name.cif" "$out/${{name}}_raw.cif"
 [ -n "$db" ] && head -2 "$db" > "$out/${{name}}_prot.fasta"
 exit 0

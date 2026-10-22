@@ -309,6 +309,9 @@ section 6). La commande affiche les jobs d'import à créer.
   jobs concernés par chaque action et une confirmation).
 - **N** nouveau job, **/** filtrer, **G** cartes ⇄ arbre, **Échap** vide la sélection ou ferme le détail,
   **?** liste des raccourcis.
+- Le bouton de **tri** (à droite des filtres) change l'ordre des cartes : les plus récents ou les plus anciens
+  d'abord, la dernière activité, par statut (en cours, en attente, en file, échoués…), par catégorie et type de job,
+  par titre, ou par durée d'exécution. Le choix est gardé par le navigateur.
 
 ### Vue en arbre
 
@@ -468,6 +471,41 @@ Workflows *Conformational heterogeneity (cryoDRGN)*, *Ab initio heterogeneity (c
 (CryoSPARC) → interpretation* ; tout le protocole, la lecture des rapports et les pièges dans le
 [guide](cryoplug/web/docs/GUIDE.md) (chapitre 4 « Hétérogénéité avec cryoDRGN » dont §4.12 pour cryoDRGN-AI, §3.7,
 recettes H et I).
+
+### Construction automatique : CryoAtom2 enhanced
+
+CryoAtom2 ne construit pas deux fois le même modèle : il parcourt les résidus dans un ordre aléatoire. Ses réglages
+arbitrent aussi entre complétude et faux résidus, et la carte utilisée compte. Ses auteurs conseillent donc, sur
+les cartes difficiles, de le lancer plusieurs fois et de garder le meilleur modèle. Ils conseillent aussi d'augmenter
+les tours à basse résolution, de baisser les seuils Cα/P pour obtenir plus de résidus, de reconstruire avec les
+séquences identifiées jusqu'à ce qu'il n'en apparaisse plus, et de retourner une carte dont les hélices sortent en
+petits morceaux. **CryoAtom2 enhanced** fait tout cela seul :
+
+1. il lance CryoAtom2 *N* fois par réglage. Le réglage *auto* essaie les réglages standard et, selon la résolution,
+   **more residues** (seuils Cα/P abaissés à 0,5/0,4) ou **low resolution** (4 tours, chaque résidu vu 4 fois) ;
+   *all* ajoute **strict** (seuils relevés). Il peut ensuite construire avec le meilleur réglage dans des copies de la
+   carte **réaffûtées** (B = −30, +40… Å²) ou dans **d'autres cartes** branchées en entrée (LocScale, EMReady,
+   modification de densité…) ;
+2. chaque modèle est noté **contre la carte expérimentale**, même s'il a été construit dans une autre carte. Le score
+   compte les **résidus ajustés**, ceux dont le Q-score moyen des atomes dépasse le Q attendu à la résolution moins 0,2.
+   Une même densité tracée deux fois (Cα à moins de 2,5 Å) n'est comptée qu'une fois. Un résidu construit dans le
+   bruit, ou avec la mauvaise chaîne latérale, a un Q-score bas : le score mesure à la fois la complétude et la
+   justesse ;
+3. le meilleur modèle est gardé. Ses **trous sont comblés** par les morceaux des autres essais qui s'ajustent là où
+   il n'a rien : un fragment qui chevauche le modèle à ses bouts est rogné. La combinaison n'est retenue que si le
+   score augmente ;
+4. avec une **base de séquences** (protéines, acides nucléiques), les chaînes sont identifiées puis le modèle est
+   reconstruit avec les séquences trouvées par au moins la moitié des essais, jusqu'à ce qu'aucune nouvelle
+   n'apparaisse ;
+5. si la plupart des résidus sont en morceaux de moins de 10 résidus, il construit une fois dans la carte **miroir**.
+   Si elle fait nettement mieux, le job signale une main probablement inversée et donne la carte miroir et son modèle.
+
+![CryoAtom2 enhanced : les essais comparés](docs/images/cryoatom_enhanced.png)
+
+Le rapport compare tous les essais (*Runs compared* : résidus construits, ajustés, dupliqués, Q-score, CC, fragments,
+score) et liste les morceaux ajoutés. Les modèles de chaque essai restent disponibles (*Models of every run*).
+Comptez le nombre d'essais × la durée d'un CryoAtom2 (≈ 30 min pour 5 000 résidus sur une A100) : **Maximum runs**
+plafonne le premier tour. Plusieurs GPU sont partagés par chaque essai, comme CryoAtom2 2.1 sait le faire.
 
 ### Sessions interactives ISOLDE / Coot
 
@@ -834,7 +872,7 @@ directement le chemin aux jobs d'import, s'il est dans les dossiers du compte (`
 
 | Skill | Contenu |
 |---|---|
-| `cryoplug` | méthode de travail et règles, concepts, quelle carte pour quoi, syntaxe des jobs, workflows ; index des 66 types de jobs (généré) |
+| `cryoplug` | méthode de travail et règles, concepts, quelle carte pour quoi, syntaxe des jobs, workflows ; index des 67 types de jobs (généré) |
 | `cryoplug-map-quality` | FSC, anisotropie, résolution locale, main ; LocScale, spIsoNet, modification de densité, cartes « réseau » |
 | `cryoplug-masks-and-fitting` | masques (densité, atomes, molmap, densité proche du modèle), placement de corps rigide, cartes composites |
 | `cryoplug-model-building` | stratégie selon la résolution, de novo, chaînes inconnues, modèles prédits, ligands |
@@ -862,7 +900,7 @@ révision 2026-07-28 reviennent automatiquement à 2025-11-25.
 
 La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes) est dans
 [docs/JOBS.md](docs/JOBS.md), générée depuis `cryoplug/jobhelp.py` par `cryoplug docs-jobs`.
-`cryoplug jobtypes` liste les 66 types de jobs :
+`cryoplug jobtypes` liste les 67 types de jobs :
 
 | Catégorie | Jobs |
 |---|---|
@@ -870,7 +908,7 @@ La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes
 | Reconstruction | RELION local refinement · RELION signal subtraction · RELION 3D classification (focused) · RELION post-processing · RELION reconstruction |
 | Map processing | Half-map FSC · Directional resolution (3D FSC) · Local resolution (Phenix) · Create mask · Mask drawn in the 3D viewer · Composite map (focused maps) · Map operations · LocScale 2 · EMmerNet · DeepEMhancer · EMReady2 · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Map sharpening (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
 | Heterogeneity | cryoDRGN input check (backprojection) · cryoDRGN training · cryoDRGN-AI ab initio reconstruction · cryoDRGN continue training · cryoDRGN convergence check · cryoDRGN analysis · cryoDRGN landscape analysis · cryoDRGN trajectory · cryoDRGN volumes at particles · Select particles (latent space) · Volume series analysis · Extract volume from series |
-| Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Fit in map (rigid body) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
+| Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · CryoAtom2 enhanced (meilleur de plusieurs essais) · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Fit in map (rigid body) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
 | Interactive | ISOLDE session · Coot session |
 | Refinement | Real-space refinement (Phenix) · Refinement (Servalcat) · Add waters (phenix.douse) |
 | Validation | Comprehensive validation (Phenix) · MolProbity · EMRinger · Map-model validation (Q-score, FSC) · Sequence register check (checkMySequence) · wwPDB validation report (OneDep) |
@@ -901,6 +939,7 @@ cryoplug/
   jobs/            un module par famille de jobs (imports, sharpening, building, ...)
   mrc.py           I/O MRC, FSC, filtres, cartes modèles
   analysis.py      Q-score, FSC carte-modèle, CC, inclusion d'atomes
+  modelsearch.py   notation et fusion de modèles construits automatiquement (CryoAtom2 enhanced)
   modelio.py       modèles et séquences (gemmi)
   workflows.py     modèles de pipelines
   agent/           pour les assistants IA : client HTTP, outils, serveur MCP (stdio et /mcp), skills

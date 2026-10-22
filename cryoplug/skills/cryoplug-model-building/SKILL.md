@@ -33,6 +33,13 @@ description: Build atomic models into cryo-EM maps with CryoPlug - choose the st
    medium resolution and handles nucleic acids well. Running both is cheap and informative.
 3. Compare: residues built per chain against the sequence (report table), then `mapmodel_validation` on each model
    (Q-score, CC_mask, atom inclusion). Keep the better model, or merge chains from both with `merge_models`.
+   Difficult map (low local resolution, flexible regions, unsure settings): `cryoatom_enhanced` runs CryoAtom2 several
+   times (`runs` per setting; `settings=auto` adds "more residues" at better than 3.5 Å, "low resolution" beyond),
+   optionally on re-sharpened copies (`bfactors`, e.g. "-30, 40") or other maps (`alt_map_1..3`), scores every model
+   against the experimental `map` (fitted residues by Q-score, duplicates counted once), keeps the best with its gaps
+   filled from the other runs, identifies chains with `protein_db`/`na_db` until no new sequence appears, and checks
+   the hand. It costs runs × one CryoAtom2 build of GPU time (`max_runs` caps it): ask before launching. Its "Runs
+   compared" table tells which setting works for this map; "probably in the WRONG HAND" means flipping the map first.
 4. Continue with refinement and validation (`cryoplug-refinement-validation`). Workflows `denovo_modelangelo` and
    `denovo_cryoatom` create the whole chain up to the deposition package.
 

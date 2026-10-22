@@ -742,7 +742,7 @@ poses dans le repère du consensus :
 
 | Situation | Stratégie | Jobs |
 |---|---|---|
-| Résolution ≲ 4 Å, séquence connue | Construction de novo | ModelAngelo build **et/ou** CryoAtom2 build ; gardez le meilleur |
+| Résolution ≲ 4 Å, séquence connue | Construction de novo | ModelAngelo build **et/ou** CryoAtom2 build ; gardez le meilleur. Carte difficile : **CryoAtom2 enhanced** (plusieurs essais notés, le meilleur gardé) |
 | Complexe protéine–ARN/ADN | De novo avec FASTA séparés | CryoAtom2 build (ou ModelAngelo) |
 | Sous-unité inconnue / densité inattendue | Identifier puis reconstruire | ModelAngelo sans séquence → Identify chains → CryoAtom2 avec les séquences trouvées (workflow « Identify unknown proteins ») |
 | 4–8 Å ou régions mal résolues | Modèle prédit puis ajustement | AlphaFold DB / ColabFold / Boltz-2 → Process predicted model → **Fit in map** (intégré ; ou Rigid-body fit ChimeraX, Dock in map) → Real-space refinement (morphing) |
@@ -757,6 +757,21 @@ Ouvrez le job et vérifiez :
 - la carte et le modèle dans le **visualiseur 3D** : hélices droites, chaînes continues, résidus dans la densité.
 
 Lancer ModelAngelo et CryoAtom2 sur la même carte puis comparer les Q-scores est peu coûteux et souvent instructif.
+
+**Plusieurs essais : CryoAtom2 enhanced.** CryoAtom2 donne un modèle un peu différent à chaque lancement, et ses
+réglages comptent. Sur une carte difficile, **CryoAtom2 enhanced** le lance plusieurs fois avec plusieurs réglages,
+éventuellement dans des copies réaffûtées de la carte ou d'autres cartes (LocScale, EMReady…). Il note chaque modèle
+contre la carte expérimentale : résidus ajustés au Q-score, une densité tracée deux fois comptée une seule fois. Il
+garde le meilleur, comble ses trous avec les morceaux bien ajustés des autres essais, identifie et reconstruit les
+chaînes avec une base de séquences, et vérifie la main quand le modèle sort en petits morceaux. Lisez le tableau
+« Runs compared » :
+
+- un réglage qui gagne nettement (par exemple *more residues*) vous dit comment lancer les constructions suivantes ;
+- des essais très différents avec le même réglage indiquent des régions ambiguës : regardez-les dans le visualiseur ;
+- branchez toujours la carte **expérimentale** en « Map » : une carte de réseau de neurones en référence
+  noterait les modèles contre une densité déjà interprétée.
+
+Le meilleur modèle reste un modèle brut : affinez-le (real-space refine, ISOLDE) avant de le valider.
 
 **Dans le visualiseur 3D** (*View 3D*, ou bouton **3D** au survol d'une carte de job), pour juger
 l'ajustement comme dans Coot ou ChimeraX :

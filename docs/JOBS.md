@@ -66,7 +66,7 @@ Point d'entrée habituel : récupère la reconstruction finale d'un job CryoSPAR
 - Indiquez la symétrie réellement imposée (C1, C2, D7…) : LocScale, EMmerNet et le dépôt l'utilisent.
 - « copy » rend le projet autonome ; « symlink » économise de l'espace mais dépend du dossier CryoSPARC.
 
-**Étapes suivantes** : Directional resolution (3D FSC), LocScale 2, ModelAngelo build, CryoAtom2 build, Import sequence, Mask drawn in the 3D viewer, RELION local refinement
+**Étapes suivantes** : Directional resolution (3D FSC), LocScale 2, ModelAngelo build, CryoAtom2 build, CryoAtom2 enhanced (best of several runs), Import sequence, Mask drawn in the 3D viewer, RELION local refinement
 
 ### Import maps
 
@@ -139,7 +139,7 @@ Déclare la ou les séquences de l'échantillon (FASTA collé, fichier ou access
 - Incluez les étiquettes (tags) réellement présentes si elles sont visibles dans la carte.
 - Les ARN/ADN sont reconnus à leur composition (A, C, G, U/T).
 
-**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Complex prediction (Boltz-2), AlphaFold2 prediction (ColabFold)
+**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, CryoAtom2 enhanced (best of several runs), Complex prediction (Boltz-2), AlphaFold2 prediction (ColabFold)
 
 ### Import volume series
 
@@ -327,7 +327,7 @@ Corrige l'anisotropie due à l'orientation préférentielle : un réseau auto-su
 - Déposez toujours les cartes d'origine ; la carte corrigée peut être déposée en carte additionnelle et mentionnée dans les méthodes.
 - Jugez le résultat visuellement et par l'ajustement du modèle (Q-score), pas par une nouvelle FSC.
 
-**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, ISOLDE session
+**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, CryoAtom2 enhanced (best of several runs), ISOLDE session
 
 ### Auto-sharpen (Phenix)
 
@@ -457,7 +457,7 @@ Modification de densité au maximum de vraisemblance à partir des demi-cartes (
 
 - Augmentez nproc : le calcul est long sur de grandes boîtes.
 
-**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Real-space refinement (Phenix)
+**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, CryoAtom2 enhanced (best of several runs), Real-space refinement (Phenix)
 
 ### Directional resolution (3D FSC)
 
@@ -582,7 +582,7 @@ Affûtage local (local amplitude scaling) : renforce le contraste là où la car
 - Le mode model-free utilise EMmerNet : un GPU est fortement conseillé.
 - Le mode pseudo-modèle convient aux cartes très bruitées ou de basse résolution.
 
-**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Fit in map (rigid body), Rigid-body fit (ChimeraX), ISOLDE session
+**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, CryoAtom2 enhanced (best of several runs), Fit in map (rigid body), Rigid-body fit (ChimeraX), ISOLDE session
 
 ### Local anisotropic sharpening (Phenix)
 
@@ -659,7 +659,7 @@ Opérations simples sur une carte : taille de pixel, recadrage/agrandissement de
 - Les opérations s'enchaînent dans un ordre fixe : pixel → boîte → main → B-factor → filtre → masque → normalisation.
 - B-factor négatif = affûtage, positif = flou.
 
-**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Fit in map (rigid body), Rigid-body fit (ChimeraX)
+**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, CryoAtom2 enhanced (best of several runs), Fit in map (rigid body), Rigid-body fit (ChimeraX)
 
 ### Map sharpening (Phenix)
 
@@ -685,7 +685,7 @@ L'outil d'affûtage de Phenix 2 (phenix.map_sharpening, qui remplace auto_sharpe
 - La résolution est facultative en mode « shell », obligatoire en « b-factor ».
 - Avec Phenix 1.21 ou plus ancien sans map_sharpening : job « Auto-sharpen (Phenix) ».
 
-**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, Real-space refinement (Phenix), Local resolution
+**Étapes suivantes** : ModelAngelo build, CryoAtom2 build, CryoAtom2 enhanced (best of several runs), Real-space refinement (Phenix), Local resolution
 
 ### Mask drawn in the 3D viewer
 
@@ -1129,6 +1129,35 @@ Construction automatique (CryoAtom2 : attention locale et encodage de position 3
 
 **Étapes suivantes** : Real-space refinement (Phenix), ISOLDE session, Map-model validation (Q-score, FSC)
 
+### CryoAtom2 enhanced (best of several runs)
+
+`cryoatom_enhanced` — logiciel : `cryoatom` · GPU
+
+CryoAtom2 lancé plusieurs fois, avec plusieurs réglages (et éventuellement d'autres cartes), chaque modèle noté contre la carte expérimentale ; le meilleur est gardé, ses trous comblés par les morceaux bien ajustés des autres essais, les chaînes identifiées et reconstruites jusqu'à convergence, la main vérifiée.
+
+**Quand l'utiliser**
+
+- Carte difficile (résolution locale basse, régions flexibles) : CryoAtom2 construit différemment à chaque lancement, et ses auteurs conseillent d'en lancer plusieurs et de garder le meilleur.
+- Vous ne savez pas quels réglages conviennent : « auto » essaie les réglages standard et, selon la résolution, « more residues » (seuils Cα/P abaissés) ou « low resolution » (4 tours).
+- Comparer la construction dans plusieurs cartes (affûtées autrement, LocScale, EMReady…) en les notant toutes contre la même carte expérimentale.
+- Composition inconnue : avec une base de séquences, identification puis reconstruction automatiques.
+
+**À éviter / pièges**
+
+- Un seul essai rapide suffit (carte nette à haute résolution) : « CryoAtom2 build » prend N fois moins de GPU.
+- Carte d'un réseau de neurones utilisée comme carte de référence : les modèles seraient notés contre une densité déjà interprétée. Branchez la carte expérimentale en « Map » et les autres en « Other map ».
+
+**Entrées conseillées** : Carte expérimentale (référence de la notation), séquence(s), masque ; cartes alternatives et bases de séquences optionnelles.
+
+**Conseils**
+
+- Le tableau « Runs compared » donne, pour chaque essai, les résidus construits, ajustés (Q-score par résidu ≥ Q attendu − 0,2), dupliqués, et le score : résidus ajustés, une densité tracée deux fois comptée une seule fois.
+- Comptez « Runs » × réglages × durée d'un CryoAtom2 (≈ 30 min pour 5 000 résidus sur une A100) ; « Maximum runs » plafonne le premier tour.
+- Si le job signale une main probablement inversée, retournez la carte (et les demi-cartes) avant d'aller plus loin : la carte miroir et son modèle sont en sortie.
+- Affinez ensuite le meilleur modèle (real-space refine, ISOLDE) : les modèles bruts gardent des erreurs locales.
+
+**Étapes suivantes** : Real-space refinement (Phenix), ISOLDE session, Map-model validation (Q-score, FSC), Sequence register check (checkMySequence)
+
 ### Dock in map (Phenix)
 
 `phenix_dock_in_map` — logiciel : `phenix`
@@ -1203,7 +1232,7 @@ Identifie les protéines (ou ARN/ADN) présentes dans la carte : les profils HMM
 - Les hits sous le seuil d'E-value (1e-5 par défaut) deviennent une sortie « sequence ».
 - Reconstruisez ensuite avec ces séquences (ModelAngelo ou CryoAtom2) et vérifiez l'accord de séquence dans la carte.
 
-**Étapes suivantes** : CryoAtom2 build, ModelAngelo build
+**Étapes suivantes** : CryoAtom2 build, CryoAtom2 enhanced (best of several runs), ModelAngelo build
 
 ### Ligand restraints (eLBOW)
 

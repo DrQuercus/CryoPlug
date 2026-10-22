@@ -11,6 +11,42 @@ import {
 
 const STATUSES = ['building', 'queued', 'launched', 'running', 'waiting', 'completed', 'failed', 'killed'];
 
+// The orders of the job cards (the Sort button of the toolbar; remembered in this browser).
+const STATUS_RANK = { running: 0, launched: 0, waiting: 1, queued: 2, failed: 3, building: 4, killed: 5, completed: 6 };
+const newest = (a, b) => b.num - a.num;
+const lastActivity = (j) => Math.max(j.ended_at || 0, j.started_at || 0, j.queued_at || 0, j.created_at || 0);
+const runTime = (j) => (j.started_at ? (j.ended_at || Date.now() / 1000) - j.started_at : -1);
+const categoryRank = (j) => {
+  const i = state.info.categories.indexOf(state.types[j.type]?.category);
+  return i < 0 ? 999 : i;
+};
+const titleOf = (j) => j.title || typeTitle(j.type);
+export const CARD_SORTS = {
+  newest: { label: 'Newest first', short: 'Newest', compare: newest },
+  oldest: { label: 'Oldest first', short: 'Oldest', compare: (a, b) => a.num - b.num },
+  activity: { label: 'Latest activity first', short: 'Activity', compare: (a, b) => lastActivity(b) - lastActivity(a) || newest(a, b) },
+  status: { label: 'By status: running, waiting, queued, failed…', short: 'Status',
+    compare: (a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) || newest(a, b) },
+  type: { label: 'By category and job type', short: 'Type',
+    compare: (a, b) => categoryRank(a) - categoryRank(b) || typeTitle(a.type).localeCompare(typeTitle(b.type)) || newest(a, b) },
+  title: { label: 'By title (A–Z)', short: 'Title',
+    compare: (a, b) => titleOf(a).localeCompare(titleOf(b), undefined, { numeric: true, sensitivity: 'base' }) || newest(a, b) },
+  runtime: { label: 'Longest run first', short: 'Run time', compare: (a, b) => runTime(b) - runTime(a) || newest(a, b) },
+};
+
+function sortButton(content) {
+  const current = CARD_SORTS[state.cardSort] ? state.cardSort : 'newest';
+  const choose = (key) => {
+    state.cardSort = key;
+    localStorage.setItem('cryoplug.cardSort', key);
+    renderProject(content);
+  };
+  return h('button', { class: 'btn', type: 'button', 'aria-haspopup': 'menu', title: `Order of the cards: ${CARD_SORTS[current].label}`,
+    onclick: (e) => popupMenu(e.currentTarget, Object.entries(CARD_SORTS).map(([key, s]) => ({
+      label: s.label, ic: key === current ? 'check' : 'blank', action: () => choose(key) }))) },
+  icon('sort'), h('span', { class: 'lbl' }, CARD_SORTS[current].short), icon('chevron', 'chev'));
+}
+
 export function renderProject(content) {
   const p = state.project;
   const search = h('label', { class: 'search-field', title: 'Filter by number, title, job type or notes (/)' }, icon('search'),
@@ -39,7 +75,7 @@ export function renderProject(content) {
         icon('flow'), h('span', { class: 'lbl' }, 'Workflows')),
       h('button', { class: 'btn', type: 'button', title: 'Upload maps, models, sequences or folders from this computer and import them '
         + '(or drop them on the page)', onclick: () => importFromComputer() }, icon('upload'), h('span', { class: 'lbl' }, 'Upload')),
-      h('span', { class: 'toolbar-gap' }), search, statusSel, catSel),
+      h('span', { class: 'toolbar-gap' }), search, statusSel, catSel, state.view === 'cards' ? sortButton(content) : null),
     p.description ? h('p', { class: 'project-desc' }, p.description) : null,
     h('div', { id: 'jobs-area' }));
   renderJobs();
@@ -85,7 +121,7 @@ export function renderJobs() {
     return;
   }
   const jobs = filtered();
-  const sorted = [...jobs].sort((a, b) => b.num - a.num);
+  const sorted = [...jobs].sort((CARD_SORTS[state.cardSort] || CARD_SORTS.newest).compare);
   state.cardOrder = sorted.map((j) => j.uid);
   for (const uid of [...state.selection]) if (!state.jobsByUid[uid]) state.selection.delete(uid);
   if (state.view === 'graph') {

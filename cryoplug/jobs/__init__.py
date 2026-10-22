@@ -45,6 +45,7 @@ def _load() -> None:
         cryodrgn,
         cryodrgn_ai,
         deposition,
+        enhanced,
         heterogeneity,
         imports,
         interactive,

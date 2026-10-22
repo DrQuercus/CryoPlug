@@ -11,6 +11,7 @@ export const state = {
   jobsByUid: {},
   route: { page: 'projects' },
   view: localStorage.getItem('cryoplug.view') || 'cards',
+  cardSort: localStorage.getItem('cryoplug.cardSort') || 'newest', // order of the job cards (see project.js)
   filter: { text: '', status: '', category: '' },
   builder: null, // { type, editing, inputs, params, title, lane, requested, gpuMode }
   selection: new Set(), // job uids picked with Ctrl/Shift-click for bulk actions

@@ -124,6 +124,8 @@ const ICONS = {
   move: 'M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3',
   minus: 'M5 12h14',
   tree: 'M9.5 3h5v4h-5zM3.5 17h5v4h-5zM15.5 17h5v4h-5zM12 7v6M6 17v-3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v3',
+  sort: 'M7 4v16M3.5 16.5L7 20l3.5-3.5M13 6h8M13 11h6M13 16h4',
+  blank: 'M0 0', // draws nothing: keeps menu labels aligned
 };
 
 export function icon(name, cls = '') {

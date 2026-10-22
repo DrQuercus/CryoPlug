@@ -17,7 +17,7 @@ Usually followed by: `phenix_process_predicted_model`, `fit_in_map`, `chimerax_f
 built-in. In: none. Out: half_maps: half_maps, map: map, map_sharp: map, mask: mask, map_locres: locres, particles: particles, latent: latent.
 
 Import the final reconstruction of a CryoSPARC refinement job (half maps, unsharpened and sharpened maps, FSC mask, local resolution) and its particles (for heterogeneity analysis) by pointing at its job directory, e.g. /data/CS-myproject/J245. The latest iteration is selected automatically.
-Usually followed by: `directional_fsc`, `locscale`, `modelangelo_build`, `cryoatom_build`, `import_sequence`, `draw_mask`, `relion_local_refine`.
+Usually followed by: `directional_fsc`, `locscale`, `modelangelo_build`, `cryoatom_build`, `cryoatom_enhanced`, `import_sequence`, `draw_mask`, `relion_local_refine`.
 
 ### `import_maps` — Import maps
 built-in. In: none. Out: half_maps: half_maps, map: map, map_sharp: map, mask: mask.
@@ -35,7 +35,7 @@ Usually followed by: `cryodrgn_backproject`, `cryodrgn_train`, `cryodrgn_abinit`
 built-in. In: none. Out: sequence: sequence.
 
 Paste FASTA, read a FASTA file or fetch UniProt entries. Protein, RNA and DNA records are separated automatically (ModelAngelo needs them in separate files).
-Usually followed by: `modelangelo_build`, `cryoatom_build`, `boltz_predict`, `colabfold_predict`.
+Usually followed by: `modelangelo_build`, `cryoatom_build`, `cryoatom_enhanced`, `boltz_predict`, `colabfold_predict`.
 
 ### `import_volume_series` — Import volume series
 built-in. In: none. Out: series: volume_series.
@@ -81,7 +81,7 @@ Usually followed by: `relion_local_refine`, `relion_class3d`, `cryodrgn_train`.
 spIsoNet · GPU. In: half_maps: half_maps, mask: mask. Out: half_maps: half_maps, map: map, fsc3d: map.
 
 Self-supervised correction of the resolution anisotropy caused by preferred orientation (spIsoNet, Liu et al. 2025): computes the 3D FSC, then trains a network on the half maps to restore the poorly sampled directions. The corrected half maps are no longer independent: never use them for the deposited FSC.
-Usually followed by: `modelangelo_build`, `cryoatom_build`, `isolde_session`.
+Usually followed by: `modelangelo_build`, `cryoatom_build`, `cryoatom_enhanced`, `isolde_session`.
 
 ### `phenix_auto_sharpen` — Auto-sharpen (Phenix)
 Phenix. In: map: map, half_maps?: half_maps. Out: map: map.
@@ -111,7 +111,7 @@ Usually followed by: `fit_in_map`, `chimerax_fitmap`, `isolde_session`.
 Phenix. In: half_maps: half_maps, sequence?: sequence. Out: map: map.
 
 Maximum-likelihood density modification from half maps (phenix.resolve_cryo_em, Terwilliger et al. 2020). Typically improves interpretability and the half-map FSC. A sequence helps.
-Usually followed by: `modelangelo_build`, `cryoatom_build`, `phenix_real_space_refine`.
+Usually followed by: `modelangelo_build`, `cryoatom_build`, `cryoatom_enhanced`, `phenix_real_space_refine`.
 
 ### `directional_fsc` — Directional resolution (3D FSC)
 built-in. In: half_maps: half_maps, mask?: mask. Out: report: report.
@@ -141,7 +141,7 @@ Usually followed by: `directional_fsc`, `deposition_package`.
 LocScale 2 / EMmerNet · GPU. In: half_maps?: half_maps, map?: map, model?: model, mask?: mask. Out: map: map.
 
 Local amplitude scaling. Model-free (EMmerNet reference, default), pseudo-atomic model, model-based (requires a model; REFMAC/Servalcat used for B-factor refinement) or hybrid (partial model completed with pseudo-atoms). Use unfiltered, unsharpened half maps.
-Usually followed by: `modelangelo_build`, `cryoatom_build`, `fit_in_map`, `chimerax_fitmap`, `isolde_session`.
+Usually followed by: `modelangelo_build`, `cryoatom_build`, `cryoatom_enhanced`, `fit_in_map`, `chimerax_fitmap`, `isolde_session`.
 
 ### `phenix_local_aniso_sharpen` — Local anisotropic sharpening (Phenix)
 Phenix. In: half_maps: half_maps, model?: model. Out: map: map.
@@ -159,13 +159,13 @@ Usually followed by: `create_mask`, `locscale`, `mapmodel_validation`.
 built-in. In: map: map, mask?: mask. Out: map: map.
 
 Built-in map manipulations applied in order: set pixel size, crop/pad, flip handedness, global B-factor sharpening/blurring, low-pass filter, mask, normalisation.
-Usually followed by: `modelangelo_build`, `cryoatom_build`, `fit_in_map`, `chimerax_fitmap`.
+Usually followed by: `modelangelo_build`, `cryoatom_build`, `cryoatom_enhanced`, `fit_in_map`, `chimerax_fitmap`.
 
 ### `phenix_map_sharpening` — Map sharpening (Phenix)
 Phenix. In: half_maps?: half_maps, map?: map, model?: model, sequence?: sequence. Out: map: map.
 
 Phenix's sharpening tool (phenix.map_sharpening, which replaces auto_sharpen and local_aniso_sharpen in Phenix 2): shell scaling from two half maps (or a map and a fitted model), anisotropic and optionally local; or B-factor sharpening of a single map.
-Usually followed by: `modelangelo_build`, `cryoatom_build`, `phenix_real_space_refine`, `local_resolution`.
+Usually followed by: `modelangelo_build`, `cryoatom_build`, `cryoatom_enhanced`, `phenix_real_space_refine`, `local_resolution`.
 
 ### `draw_mask` — Mask drawn in the 3D viewer
 built-in. In: map: map, model?: model. Out: mask: mask.
@@ -267,6 +267,12 @@ CryoAtom2 · GPU. In: map: map, sequence?: sequence, mask?: mask, backbone?: mod
 Automated building of proteins, RNA/DNA and their complexes (CryoAtom2, Su et al. 2025). With a sequence: sequence-guided building. Without: residue types are assigned from the density; give a sequence database (e.g. the UniProt proteome of your organism) to identify the chains, then rebuild with the 'Identified sequences' output. A mask restricts building to one region.
 Usually followed by: `phenix_real_space_refine`, `isolde_session`, `mapmodel_validation`.
 
+### `cryoatom_enhanced` — CryoAtom2 enhanced (best of several runs)
+CryoAtom2 · GPU. In: map: map, sequence?: sequence, mask?: mask, alt_map_1?: map, alt_map_2?: map, alt_map_3?: map. Out: model: model, model_raw: model, sequence: sequence, candidates: files, map_other_hand: map, model_other_hand: model.
+
+Runs CryoAtom2 several times (it builds differently each time) with several settings, and optionally on re-sharpened or other maps; scores every model against the experimental map (residues fitted to the density by Q-score, the same density traced twice counted once) and keeps the best, with its gaps filled by well-fitted pieces of the other runs. With sequence databases, identifies the chains and rebuilds with them until no new sequence appears. Checks the hand of the map when the model comes out in short pieces.
+Usually followed by: `phenix_real_space_refine`, `isolde_session`, `mapmodel_validation`, `checkmysequence`.
+
 ### `phenix_dock_in_map` — Dock in map (Phenix)
 Phenix. In: model: model, map: map. Out: model: model.
 
@@ -283,7 +289,7 @@ Usually followed by: `phenix_real_space_refine`, `servalcat_refine`, `isolde_ses
 ModelAngelo. In: model: model. Out: sequence: sequence, report: report.
 
 Identify unknown proteins (or RNA/DNA) in the map: the HMM profiles written by 'ModelAngelo build' without a sequence are searched against a sequence database (model_angelo hmm_search). The best hits become a sequence output to rebuild the model with ModelAngelo or CryoAtom2.
-Usually followed by: `cryoatom_build`, `modelangelo_build`.
+Usually followed by: `cryoatom_build`, `cryoatom_enhanced`, `modelangelo_build`.
 
 ### `phenix_elbow` — Ligand restraints (eLBOW)
 Phenix. In: none. Out: restraints: restraints, ligand: model.
