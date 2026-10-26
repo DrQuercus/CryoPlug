@@ -697,6 +697,29 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "next": ["relion_refine3d", "relion_symmetry_expand", "relion_mask_create"],
     },
+    "align_3d_maps": {
+        "purpose": "Amène une carte dans le repère d'une carte de référence (rotation et translation), comme « Align 3D "
+                   "maps » de CryoSPARC, et fait suivre ses demi-cartes, son masque et les poses de ses particules : des "
+                   "particules raffinées contre des références différentes se retrouvent dans un même repère.",
+        "when": [
+            "Réunir deux jeux de données raffinés séparément (puis Join star files et un raffinement commun).",
+            "Comparer ou combiner des classes 3D, des cartes de deux logiciels, un modèle ab initio et une carte consensus.",
+            "Remettre un masque dessiné sur une carte dans le repère d'une autre.",
+        ],
+        "avoid": [
+            "Des cartes de conformations très différentes : l'alignement suit la partie la plus massive ; masquez la partie commune.",
+            "Les priors d'angles (filaments) ne suivent pas : refaites un raffinement hélical ensuite.",
+        ],
+        "inputs": "La carte à aligner et la référence ; facultatifs : ses demi-cartes, son masque, ses particules (celles de "
+                  "son raffinement).",
+        "tips": [
+            "Recherche globale par défaut (toutes les orientations, les meilleures affinées) ; « Local » pour des cartes déjà proches.",
+            "« Also try the mirror image » pour un modèle ab initio de main inconnue : les poses sont alors aussi inversées.",
+            "Corrélation après alignement > 0,8 : alignement sûr ; regardez aussi les coupes centrales avant / après.",
+            "Les sorties sont sur la grille de la référence (boîte et pixel), centres des boîtes alignés.",
+        ],
+        "next": ["relion_join", "relion_refine3d", "relion_reconstruct", "map_tools", "relion_local_refine"],
+    },
     "relion_helix_toolbox": {
         "purpose": "Outils de symétrie hélicale de RELION (relion_helix_toolbox) sur la carte d'un filament : recherche "
                    "locale de la torsion (twist) et de la montée (rise), puis imposition de la symétrie trouvée dans "
@@ -986,7 +1009,8 @@ HELP: dict[str, dict[str, Any]] = {
     },
     "directional_fsc": {
         "purpose": "Résolution dans chaque direction (FSC coniques, « 3D FSC ») pour mesurer l'anisotropie causée par "
-                   "l'orientation préférentielle des particules.",
+                   "l'orientation préférentielle des particules, avec le cFAR et, si les particules sont branchées, le "
+                   "SCF : les indicateurs de l'« Orientation Diagnostics » de CryoSPARC.",
         "when": [
             "La distribution angulaire de CryoSPARC montre des vues dominantes.",
             "La densité paraît étirée selon un axe, ou les hélices sont nettes dans un plan et floues dans un autre.",
@@ -996,12 +1020,17 @@ HELP: dict[str, dict[str, Any]] = {
             "Très petites particules : chaque cône contient peu de coefficients, le résultat est bruité.",
             "Ce n'est pas une résolution locale (par région) mais par direction.",
         ],
-        "inputs": "Demi-cartes non filtrées et masque FSC.",
+        "inputs": "Demi-cartes non filtrées et masque FSC ; facultatif : les particules du raffinement (leurs orientations).",
         "tips": [
             "Rapport pire/meilleure direction ≤ 1,25 : isotrope ; 1,25–1,6 : modéré ; > 1,6 : anisotropie forte.",
+            "cFAR (aire sous la pire FSC conique / aire sous la meilleure, chaque coquille pondérée par sa surface) : "
+            "< 0,5 signale une orientation préférentielle (seuil de CryoSPARC) ; une seule mauvaise direction suffit à le faire baisser.",
+            "SCF (Baldwin & Lyumkis 2019), calculé sur 10 000 particules au plus : 1 pour des vues uniformes, 0,81 pour des "
+            "vues de côté seules, moins avec des vues dominantes ; la carte « Fourier sampling by direction » montre les "
+            "directions jamais échantillonnées (cône manquant).",
             "Élévation 90° = axe z de la carte ; directions opposées équivalentes (hémisphère).",
         ],
-        "next": ["spisonet", "locscale"],
+        "next": ["spisonet", "locscale", "relion_rebalance"],
     },
     "map_tools": {
         "purpose": "Opérations simples sur une carte, comme les « Volume Tools » de CryoSPARC : taille de pixel (en-tête), "

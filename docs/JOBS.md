@@ -824,6 +824,34 @@ Soustraction de signal (relion_particle_subtract) : retire de chaque image la pr
 
 ## Traitement de carte
 
+### Align 3D maps
+
+`align_3d_maps` — intégré (aucun logiciel externe)
+
+Amène une carte dans le repère d'une carte de référence (rotation et translation), comme « Align 3D maps » de CryoSPARC, et fait suivre ses demi-cartes, son masque et les poses de ses particules : des particules raffinées contre des références différentes se retrouvent dans un même repère.
+
+**Quand l'utiliser**
+
+- Réunir deux jeux de données raffinés séparément (puis Join star files et un raffinement commun).
+- Comparer ou combiner des classes 3D, des cartes de deux logiciels, un modèle ab initio et une carte consensus.
+- Remettre un masque dessiné sur une carte dans le repère d'une autre.
+
+**À éviter / pièges**
+
+- Des cartes de conformations très différentes : l'alignement suit la partie la plus massive ; masquez la partie commune.
+- Les priors d'angles (filaments) ne suivent pas : refaites un raffinement hélical ensuite.
+
+**Entrées conseillées** : La carte à aligner et la référence ; facultatifs : ses demi-cartes, son masque, ses particules (celles de son raffinement).
+
+**Conseils**
+
+- Recherche globale par défaut (toutes les orientations, les meilleures affinées) ; « Local » pour des cartes déjà proches.
+- « Also try the mirror image » pour un modèle ab initio de main inconnue : les poses sont alors aussi inversées.
+- Corrélation après alignement > 0,8 : alignement sûr ; regardez aussi les coupes centrales avant / après.
+- Les sorties sont sur la grille de la référence (boîte et pixel), centres des boîtes alignés.
+
+**Étapes suivantes** : Join star files (RELION), 3D auto-refine (RELION), RELION reconstruction, Map operations, RELION local refinement
+
 ### Align to symmetry axes (RELION)
 
 `relion_align_symmetry` — logiciel : `relion`
@@ -1009,7 +1037,7 @@ Modification de densité au maximum de vraisemblance à partir des demi-cartes (
 
 `directional_fsc` — intégré (aucun logiciel externe)
 
-Résolution dans chaque direction (FSC coniques, « 3D FSC ») pour mesurer l'anisotropie causée par l'orientation préférentielle des particules.
+Résolution dans chaque direction (FSC coniques, « 3D FSC ») pour mesurer l'anisotropie causée par l'orientation préférentielle des particules, avec le cFAR et, si les particules sont branchées, le SCF : les indicateurs de l'« Orientation Diagnostics » de CryoSPARC.
 
 **Quand l'utiliser**
 
@@ -1022,14 +1050,16 @@ Résolution dans chaque direction (FSC coniques, « 3D FSC ») pour mesurer l'an
 - Très petites particules : chaque cône contient peu de coefficients, le résultat est bruité.
 - Ce n'est pas une résolution locale (par région) mais par direction.
 
-**Entrées conseillées** : Demi-cartes non filtrées et masque FSC.
+**Entrées conseillées** : Demi-cartes non filtrées et masque FSC ; facultatif : les particules du raffinement (leurs orientations).
 
 **Conseils**
 
 - Rapport pire/meilleure direction ≤ 1,25 : isotrope ; 1,25–1,6 : modéré ; > 1,6 : anisotropie forte.
+- cFAR (aire sous la pire FSC conique / aire sous la meilleure, chaque coquille pondérée par sa surface) : < 0,5 signale une orientation préférentielle (seuil de CryoSPARC) ; une seule mauvaise direction suffit à le faire baisser.
+- SCF (Baldwin & Lyumkis 2019), calculé sur 10 000 particules au plus : 1 pour des vues uniformes, 0,81 pour des vues de côté seules, moins avec des vues dominantes ; la carte « Fourier sampling by direction » montre les directions jamais échantillonnées (cône manquant).
 - Élévation 90° = axe z de la carte ; directions opposées équivalentes (hémisphère).
 
-**Étapes suivantes** : Anisotropy correction (spIsoNet), LocScale 2
+**Étapes suivantes** : Anisotropy correction (spIsoNet), LocScale 2, Rebalance orientations
 
 ### EMReady2
 

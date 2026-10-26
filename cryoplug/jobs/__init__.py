@@ -41,6 +41,7 @@ def _load() -> None:
     _loaded = True
     # Importing the modules registers their job types.
     from cryoplug.jobs import (  # noqa: F401
+        align3d,
         building,
         cryodrgn,
         cryodrgn_ai,

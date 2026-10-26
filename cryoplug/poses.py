@@ -145,6 +145,47 @@ def _small_rotations(n: int, degrees: float, rng: np.random.Generator) -> np.nda
     return rotvec_to_matrix(axes * np.radians(degrees) * rng.uniform(0.3, 1.0, (n, 1)))
 
 
+# ------------------------------------------------------- orientation sampling
+def viewing_directions(euler: np.ndarray) -> np.ndarray:
+    """Projection directions (unit vectors x, y, z of the map frame) of RELION Euler angles (degrees): the tilt is the
+    angle from z, the rot the azimuth about z (the psi turns the image in its plane only)."""
+    e = np.radians(np.atleast_2d(np.asarray(euler, dtype=np.float64)))
+    rot, tilt = e[:, 0], e[:, 1]
+    return np.stack([np.cos(rot) * np.sin(tilt), np.sin(rot) * np.sin(tilt), np.cos(tilt)], 1)
+
+
+def fibonacci_sphere(n: int) -> np.ndarray:
+    """``n`` unit vectors spread evenly over the sphere (golden-angle spiral)."""
+    i = np.arange(n) + 0.5
+    z = 1 - 2 * i / n
+    r = np.sqrt(1 - z * z)
+    phi = np.pi * (3 - np.sqrt(5)) * i
+    return np.stack([r * np.cos(phi), r * np.sin(phi), z], 1)
+
+
+def fourier_sampling(directions: np.ndarray, points: np.ndarray, band: float = 3.0) -> np.ndarray:
+    """Sampling of Fourier-space directions ``points`` by the central sections of particles viewed along
+    ``directions`` (a section passes within ``band`` degrees of a point), normalised to 1 on average over the sphere."""
+    d = np.asarray(directions, dtype=np.float64)
+    h = np.sin(np.radians(band))
+    counts = np.zeros(len(points))
+    for start in range(0, len(d), 2000):  # memory: points × 2000 at a time
+        counts += (np.abs(points @ d[start:start + 2000].T) < h).sum(axis=1)
+    return counts / max(len(d) * h, 1e-12)  # the band around a great circle covers a fraction h of the sphere
+
+
+def sampling_compensation(directions: np.ndarray, band: float = 3.0, n_points: int = 4000) -> dict[str, Any]:
+    """Sampling compensation factor (Baldwin & Lyumkis 2019, Prog. Biophys. Mol. Biol. 150, 160): every particle samples
+    the central section perpendicular to its viewing direction; SCF = 1 / ⟨1/S⟩ over the sampled Fourier directions,
+    S being their sampling normalised to 1 on average. 1 for evenly spread views, 0.81 for side views only, lower with
+    preferred orientation; ``unsampled``: the fraction of Fourier directions no particle samples (a missing cone)."""
+    points = fibonacci_sphere(n_points)
+    s = fourier_sampling(directions, points, band)
+    sampled = s > 0
+    scf = float(1.0 / np.mean(1.0 / s[sampled])) if sampled.any() else 0.0
+    return {"scf": scf, "unsampled": float(1.0 - sampled.mean()), "points": points, "sampling": s}
+
+
 # --------------------------------------------------------------- comparison
 def _residuals(q: np.ndarray, ops: np.ndarray, g: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Angle between each relative rotation Qᵢ and the frame G, over the symmetry copies (smallest), and the copy."""
@@ -357,7 +398,8 @@ class _MapSearch:
 
 
 def align_maps(moving: np.ndarray, apix_moving: float, reference: np.ndarray, apix_reference: float, size: int = 32,
-               n_rotations: int = 4000, keep: int = 6, fine: int = 64, seed: int = 0) -> dict[str, Any]:
+               n_rotations: int = 4000, keep: int = 6, fine: int = 64, seed: int = 0,
+               hands: tuple[bool, ...] = (False, True)) -> dict[str, Any]:
     """Frame that brings ``moving`` onto ``reference`` (both hands tried): exhaustive search over evenly spread
     rotations on low-passed copies (size³ voxels), every translation at once by FFT, local refinement of the best
     candidates, then a final refinement of the best of each hand on a finer grid (fine³), where the hands are
@@ -370,7 +412,7 @@ def align_maps(moving: np.ndarray, apix_moving: float, reference: np.ndarray, ap
     fine_search = _MapSearch(moving, apix_moving, reference, apix_reference, fine) if fine > size else coarse
     base = uniform_rotations(n_rotations)
     best: dict[bool, tuple[float, np.ndarray, np.ndarray]] = {}
-    for mirror in (False, True):
+    for mirror in hands:
         cands = []
         for r in base:
             m = MIRROR @ r if mirror else r
@@ -381,11 +423,31 @@ def align_maps(moving: np.ndarray, apix_moving: float, reference: np.ndarray, ap
         _s, m, _t = max(refined, key=lambda x: x[0])
         s, t = fine_search.score(m)
         best[mirror] = fine_search.refine(s, m, t, (2.0, 1.0, 0.5), rng)
-    mirror = best[True][0] > best[False][0]
+    mirror = max(best, key=lambda h: best[h][0])
     s, m, t = best[mirror]
     g = (MIRROR @ m).T if mirror else m.T  # M = D Gᵀ (mirror) or Gᵀ
-    other = best[not mirror][0]
-    gap = s - other
-    confidence = "clear" if gap > 0.05 and s > 0.5 else ("weak" if gap > 0.015 else "none")
+    other = best[not mirror][0] if (not mirror) in best else None
+    if other is None:
+        confidence = "not tested"
+    else:
+        gap = s - other
+        confidence = "clear" if gap > 0.05 and s > 0.5 else ("weak" if gap > 0.015 else "none")
     return {"rotation": nearest_rotation(g), "mirror": bool(mirror), "shift": t * fine_search.pixel / fine_search.extent_m,
             "score": s, "other_hand_score": other, "hand_confidence": confidence, "pixel": fine_search.pixel}
+
+
+def refine_alignment(moving: np.ndarray, apix_moving: float, reference: np.ndarray, apix_reference: float,
+                     size: int = 32, fine: int = 64, seed: int = 0) -> dict[str, Any]:
+    """Local version of :func:`align_maps` for maps already close: small rotations from the maps as they are, every
+    translation (up to a quarter of the box) by FFT, on the coarse then on the fine grid; the hand is kept."""
+    moving, reference = np.asarray(moving, dtype=np.float32), np.asarray(reference, dtype=np.float32)
+    rng = np.random.default_rng(seed)
+    coarse = _MapSearch(moving, apix_moving, reference, apix_reference, size)
+    fine = max(size, min(fine, max(moving.shape[0], reference.shape[0])))
+    fine_search = _MapSearch(moving, apix_moving, reference, apix_reference, fine) if fine > size else coarse
+    s, t = coarse.score(np.eye(3))
+    s, m, t = coarse.refine(s, np.eye(3), t, (6.0, 3.0, 1.5), rng)
+    s, t = fine_search.score(m)
+    s, m, t = fine_search.refine(s, m, t, (1.5, 0.75, 0.3), rng)
+    return {"rotation": nearest_rotation(m.T), "mirror": False, "shift": t * fine_search.pixel / fine_search.extent_m,
+            "score": s, "other_hand_score": None, "hand_confidence": "not tested", "pixel": fine_search.pixel}

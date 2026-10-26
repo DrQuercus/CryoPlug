@@ -197,6 +197,12 @@ Usually followed by: `relion_local_refine`, `relion_class3d`, `cryodrgn_train`.
 
 ## Map processing
 
+### `align_3d_maps` — Align 3D maps
+built-in. In: map: map, reference: map, half_maps?: half_maps, mask?: mask, particles?: particles. Out: map: map, half_maps: half_maps, mask: mask, particles: particles.
+
+A map brought into the frame of a reference map, as CryoSPARC's Align 3D maps: the rotation and shift are found by a global search over all orientations (or refined locally for maps already close), then applied to the map, its half maps and mask, and to the poses of its particles. Particles refined against different references (two data sets, two classes, an ab initio model) can then be compared, joined or refined together.
+Usually followed by: `relion_join`, `relion_refine3d`, `relion_reconstruct`, `map_tools`, `relion_local_refine`.
+
 ### `relion_align_symmetry` — Align to symmetry axes (RELION)
 RELION. In: map: map. Out: map: map.
 
@@ -240,10 +246,10 @@ Maximum-likelihood density modification from half maps (phenix.resolve_cryo_em, 
 Usually followed by: `modelangelo_build`, `cryoatom_build`, `cryoatom_enhanced`, `phenix_real_space_refine`.
 
 ### `directional_fsc` — Directional resolution (3D FSC)
-built-in. In: half_maps: half_maps, mask?: mask. Out: report: report.
+built-in. In: half_maps: half_maps, mask?: mask, particles?: particles. Out: report: report.
 
-Conical FSC in every direction (3D FSC, Tan et al. 2017): reveals the resolution anisotropy caused by preferred orientation, with the best / worst directions and a direction map. Strong anisotropy: consider spIsoNet, tilted data collection or orientation rebalancing.
-Usually followed by: `spisonet`, `locscale`.
+Conical FSC in every direction (3D FSC, Tan et al. 2017): reveals the resolution anisotropy caused by preferred orientation, with the best / worst directions, a direction map and the cFAR (as CryoSPARC's Orientation Diagnostics); with the particles, the sampling compensation factor (SCF) of their viewing directions. Strong anisotropy: consider spIsoNet, tilted data collection or orientation rebalancing.
+Usually followed by: `spisonet`, `locscale`, `relion_rebalance`.
 
 ### `emready` — EMReady2
 EMReady2 · GPU. In: map: map, mask?: mask. Out: map: map.

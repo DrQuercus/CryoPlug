@@ -198,9 +198,13 @@ class DirectionalFSC(JobType):
     software = ["CryoPlug"]
     cpus = 2
     description = ("Conical FSC in every direction (3D FSC, Tan et al. 2017): reveals the resolution anisotropy caused by "
-                   "preferred orientation, with the best / worst directions and a direction map. Strong anisotropy: "
-                   "consider spIsoNet, tilted data collection or orientation rebalancing.")
-    inputs = [Slot("half_maps", ("half_maps",), "Half maps"), Slot("mask", ("mask",), "Mask", required=False)]
+                   "preferred orientation, with the best / worst directions, a direction map and the cFAR (as CryoSPARC's "
+                   "Orientation Diagnostics); with the particles, the sampling compensation factor (SCF) of their viewing "
+                   "directions. Strong anisotropy: consider spIsoNet, tilted data collection or orientation rebalancing.")
+    inputs = [Slot("half_maps", ("half_maps",), "Half maps"), Slot("mask", ("mask",), "Mask", required=False),
+              Slot("particles", ("particles",), "Particles", required=False,
+                   help="Those of the refinement: their viewing directions give the sampling compensation factor (SCF) "
+                        "and a map of the Fourier sampling.")]
     params = [
         Param("cone_angle", "float", 20.0, label="Cone half-angle", unit="°", min=5.0, max=45.0),
         Param("sampling", "float", 15.0, label="Direction sampling", unit="°", min=5.0, max=30.0),
@@ -250,6 +254,12 @@ class DirectionalFSC(JobType):
                         rows, unit="Å", x_label="Azimuth", y_label="Elevation",
                         note="Lower is better. Elevation 90° is the map z axis; opposite directions are equivalent.")
         status = "good" if ratio <= 1.25 else "warn" if ratio <= 1.6 else "bad"
+        # cFAR (CryoSPARC): worst / best area under the conical FSCs, each shell weighted by its surface (k²)
+        weights = np.asarray(r["frequency"], dtype=float) ** 2
+        areas = np.array([float(np.sum(weights[1:] * d["fsc"][1:])) for d in dirs])
+        cfar = float(np.clip(areas.min() / areas.max(), 0.0, 1.0)) if areas.max() > 0 else 0.0
+        cfar_status = "good" if cfar >= 0.5 else "warn" if cfar >= 0.3 else "bad"
+        scf = self.sampling(ctx, r)
         ctx.add_metrics("Directional resolution", [
             {"label": "Global resolution", "value": f"{r['global_resolution']:.2f} Å"},
             {"label": "Best direction",
@@ -258,14 +268,54 @@ class DirectionalFSC(JobType):
              "value": f"{worst['resolution']:.2f} Å (az {worst['azimuth']:.0f}°, el {worst['elevation']:.0f}°)"},
             {"label": "Mean directional resolution", "value": f"{float(res.mean()):.2f} Å"},
             {"label": "Anisotropy (worst / best)", "value": f"{ratio:.2f}", "status": status, "target": "≤ 1.25"},
+            {"label": "cFAR (conical FSC area ratio)", "value": f"{cfar:.2f}", "status": cfar_status, "target": "≥ 0.5"},
+            *([{"label": "SCF (sampling compensation factor)", "value": f"{scf['scf']:.3f}",
+                "status": "good" if scf["scf"] >= 0.81 else "warn" if scf["scf"] >= 0.6 else "bad", "target": "≥ 0.81"},
+               {"label": "Fourier directions never sampled", "value": f"{100 * scf['unsampled']:.1f} %",
+                "status": "good" if scf["unsampled"] < 0.005 else "warn" if scf["unsampled"] < 0.05 else "bad"}] if scf else []),
             {"label": "Cone half-angle", "value": f"{ctx.params['cone_angle']:g}°"},
         ])
         ctx.add_highlight("Directional", f"{best['resolution']:.2f}–{worst['resolution']:.2f} Å")
         ctx.add_highlight("Anisotropy", f"{ratio:.2f}", status)
+        ctx.add_highlight("cFAR", f"{cfar:.2f}", cfar_status)
+        if scf:
+            ctx.add_highlight("SCF", f"{scf['scf']:.2f}", "good" if scf["scf"] >= 0.81 else "warn" if scf["scf"] >= 0.6 else "bad")
         out = ctx.path("directional_fsc.json")
         out.write_text(json.dumps({
-            "global_resolution": r["global_resolution"], "anisotropy": ratio, "cone_angle": r["half_angle"],
+            "global_resolution": r["global_resolution"], "anisotropy": ratio, "cfar": cfar, "cone_angle": r["half_angle"],
+            **({"scf": scf["scf"], "unsampled": scf["unsampled"], "particles": scf["n"]} if scf else {}),
             "directions": [{k: d[k] for k in ("azimuth", "elevation", "resolution")} for d in dirs]}, indent=1))
         ctx.add_output("report", "report", out, "Directional FSC",
                        meta={"anisotropy": round(ratio, 3), "best": round(best["resolution"], 3),
-                             "worst": round(worst["resolution"], 3)})
+                             "worst": round(worst["resolution"], 3), "cfar": round(cfar, 3),
+                             **({"scf": round(scf["scf"], 3)} if scf else {})})
+
+    @staticmethod
+    def sampling(ctx: JobContext, r: dict) -> dict | None:
+        """SCF of the viewing directions of the particles (at most 10,000, as CryoSPARC) and a map of the Fourier
+        sampling on the directions of the cones."""
+        inp = ctx.input("particles")
+        if inp is None:
+            return None
+        from cryoplug import poses as ps
+        from cryoplug import relion as rl
+        from cryoplug.jobs.relion_common import relion_particles
+        ptab = rl.particle_table(relion_particles(ctx, inp, need_poses=True)["tables"])
+        if not (ptab.has("rlnAngleRot") and ptab.has("rlnAngleTilt")):
+            ctx.warn("The particles have no orientations: no SCF")
+            return None
+        euler = np.stack([ptab.floats("rlnAngleRot"), ptab.floats("rlnAngleTilt"), np.zeros(len(ptab))], 1)
+        if len(euler) > 10000:
+            euler = euler[np.random.default_rng(0).choice(len(euler), 10000, replace=False)]
+        dirs = ps.viewing_directions(euler)
+        result = ps.sampling_compensation(dirs)
+        result["n"] = len(dirs)
+        els = sorted(r["elevations"], reverse=True)
+        grid = np.array([[np.cos(np.radians(el)) * np.cos(np.radians(az)), np.cos(np.radians(el)) * np.sin(np.radians(az)),
+                          np.sin(np.radians(el))] for el in els for az in r["azimuths"]])
+        s = ps.fourier_sampling(dirs, grid).reshape(len(els), len(r["azimuths"]))
+        ctx.add_heatmap("Fourier sampling by direction", [f"{az:.0f}°" for az in r["azimuths"]], [f"{el:.0f}°" for el in els],
+                        np.round(s, 2).tolist(), x_label="Azimuth", y_label="Elevation",
+                        note=f"Central sections of {len(dirs):,} particles through each Fourier direction, 1 = even "
+                             "sampling; 0 = never sampled (missing cone). Compare with the resolution by direction.")
+        return result

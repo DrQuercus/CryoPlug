@@ -386,6 +386,10 @@ une par ligne) et le mode *cluster* sépare les particules en groupes d'une stat
   droite et sur la page des projets. **Clear intermediate results** (détail, menu **⋯**, ou *Free space* sur une
   sélection) supprime les fichiers de toutes les itérations d'un run RELION sauf la dernière — les demi-cartes et les
   `run_itNNN_*` s'accumulent vite — en gardant les sorties, le rapport et *Resume*.
+- Deux jeux de données (ou deux classes) raffinés contre des références différentes : **Align 3D maps** amène la carte
+  de l'un dans le repère de l'autre (recherche globale de la rotation et de la translation, ou locale), avec ses
+  demi-cartes, son masque et les poses de ses particules ; **Join star files** les réunit ensuite pour un raffinement
+  commun. Pour un modèle ab initio de main inconnue, cochez *Also try the mirror image*.
 - Une carte raffinée en C1 qui montre une symétrie : **Align to symmetry axes (RELION)** (relion_align_symmetry) la
   tourne et la recentre sur les axes du groupe ponctuel (convention de RELION, axe principal selon z), avec la
   symétrie imposée si besoin ; elle sert ensuite de référence à un 3D auto-refine lancé avec cette symétrie.
@@ -434,6 +438,11 @@ C'est la source d'erreurs la plus fréquente : chaque logiciel attend un type de
 | ≤ 1,25 | Carte isotrope | Rien de particulier |
 | 1,25 – 1,6 | Anisotropie modérée | LocScale ; surveillez l'aspect étiré de la densité |
 | > 1,6 | Anisotropie forte (orientation préférentielle) | spIsoNet, et si possible nouvelle collecte inclinée ou rééquilibrage des vues |
+
+Le même job donne les indicateurs de l'*Orientation Diagnostics* de CryoSPARC : le **cFAR** (aire sous la pire FSC
+conique rapportée à celle sous la meilleure, < 0,5 = orientation préférentielle) et, quand on branche les particules
+du raffinement, le **SCF** de leurs directions de vue (Baldwin & Lyumkis 2019 : 1 pour des vues uniformes, 0,81 pour
+des vues de côté seules) avec la carte de l'échantillonnage de Fourier, qui montre un éventuel cône manquant.
 
 ### 4.2 Choisir une méthode d'amélioration
 

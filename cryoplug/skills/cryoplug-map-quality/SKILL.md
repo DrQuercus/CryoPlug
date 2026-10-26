@@ -14,7 +14,7 @@ resolution propagates to later jobs (their `resolution` parameter stays 0).
 | Question | Job | Inputs | Read |
 |---|---|---|---|
 | Global resolution | `map_fsc` | half maps (+ mask) | corrected FSC (phase randomisation) at 0.143; masked vs unmasked |
-| Anisotropy (preferred orientation) | `directional_fsc` | half maps (+ mask) | worst/best direction resolution ratio, best and worst directions |
+| Anisotropy (preferred orientation) | `directional_fsc` | half maps (+ mask, + particles of the refinement) | worst/best direction resolution ratio, best and worst directions, cFAR (< 0.5: preferred orientation), SCF of the viewing directions (1 even, 0.81 side views only) |
 | Local resolution | `local_resolution` (Phenix) | half maps (+ map, mask, model) | distribution in the molecule; with a model, per chain and per residue |
 | Map header, box, pixel size | `map_info` tool | a map path or `J1.map_sharp` | box (cubic?), voxel size, origin |
 
