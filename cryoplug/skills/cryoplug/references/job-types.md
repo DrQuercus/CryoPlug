@@ -29,7 +29,7 @@ Usually followed by: `map_fsc`, `directional_fsc`, `locscale`, `import_model`.
 built-in. In: none. Out: movies: movies, micrographs: micrographs.
 
 Imports raw movies (or single-frame micrographs) with their optics group: pixel size, voltage, spherical aberration, amplitude contrast, MTF and gain reference. Writes the movies.star of relion_import; the movie folders are linked into the job folder, nothing is copied. The start of the RELION pipeline: motion correction, CTF estimation, picking...
-Usually followed by: `relion_motioncorr`.
+Usually followed by: `relion_motioncorr`, `relion_estimate_gain`.
 
 ### `import_particles` — Import particles
 built-in. In: none. Out: particles: particles, latent: latent.
@@ -68,6 +68,12 @@ RELION · GPU optional. In: micrographs: micrographs. Out: micrographs: microgra
 
 Denoises the micrographs with Topaz's pretrained network (topaz denoise), as CryoSPARC's Micrograph Denoiser: the particles stand out for picking, by eye or by program, and for inspection. The denoised micrographs keep the CTF of the originals; picks made on them are extracted from the originals (the extraction translates the names).
 Usually followed by: `relion_pick_inspect`, `relion_autopick`.
+
+### `relion_estimate_gain` — Estimate gain reference (RELION)
+RELION. In: movies: movies. Out: movies: movies, gain: files.
+
+relion_estimate_gain: a gain reference estimated from the movies themselves (the inverse of the average of many frames), when the gain reference of the session is missing or doubtful. The movies come out with this gain attached: motion correction applies it.
+Usually followed by: `relion_motioncorr`.
 
 ### `relion_live` — Live preprocessing (RELION)
 RELION · GPU optional. In: none. Out: micrographs: micrographs, all_micrographs: micrographs, rejected: micrographs, movies: movies, coordinates: coordinates, particles: particles, classes: class_averages, classified_particles: particles.
@@ -120,6 +126,12 @@ RELION · GPU optional. In: particles: particles, map: map, mask?: mask. Out: ma
 
 Sorts the particles into 3D classes against a reference (relion_refine --K): global angular searches, local ones, or none (classification with the poses kept). Every class gives a map and its particles; Blush regularisation helps small or flexible particles.
 Usually followed by: `relion_refine3d`, `relion_class3d_global`, `relion_hetero_refine`, `relion_particle_curate`.
+
+### `relion_helix_inimodel2d` — Amyloid initial model (RELION)
+RELION. In: classes: class_averages. Out: map: map, map_1: map.
+
+relion_helix_inimodel2d: a 3D initial model of an amyloid fibril from its 2D class averages, which are aligned into one long 2D image of a whole cross-over and turned around the axis by the cross-over distance (RELION's amyloid tutorial). One map per class; the reference of the helical 3D refinement.
+Usually followed by: `relion_refine3d`, `relion_class3d_global`, `relion_helix_toolbox`.
 
 ### `relion_hetero_refine` — Heterogeneous refinement (RELION)
 RELION · GPU optional. In: particles: particles, ref_1: map, ref_2: map, ref_3?: map, ref_4?: map, ref_5?: map, ref_6?: map, ref_7?: map, ref_8?: map, mask?: mask. Out: maps: volume_series, particles: particles, map_1: map, class_1: particles.
@@ -244,6 +256,12 @@ built-in. In: half_maps: half_maps, mask?: mask. Out: fsc: fsc.
 
 Gold-standard Fourier shell correlation between half maps: unmasked, masked and corrected by high-resolution phase randomisation. Writes an EMDB-compatible FSC XML for deposition.
 Usually followed by: `directional_fsc`, `deposition_package`.
+
+### `relion_helix_toolbox` — Helical symmetry (RELION)
+RELION. In: map?: map. Out: map: map.
+
+relion_helix_toolbox on the map of a filament: local search of the helical twist and rise (--search), then the symmetry found imposed in real space; a given symmetry imposed (--impose); or a cylinder as the initial reference of a helical refinement (--cylinder).
+Usually followed by: `relion_refine3d`, `relion_mask_create`, `relion_postprocess`.
 
 ### `locscale` — LocScale 2
 LocScale 2 / EMmerNet · GPU. In: half_maps?: half_maps, map?: map, model?: model, mask?: mask. Out: map: map.

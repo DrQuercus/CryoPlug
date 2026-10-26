@@ -83,7 +83,12 @@ Also: `relion_optics_groups` (optics groups from EPU beam shifts, file names or 
 refinement of AFIS data), `relion_topaz_denoise` (denoised micrographs for picking; extraction maps the picks back to
 the originals), and `helical=true` on autopick (templates), extraction, 2D/3D classification, auto-refine and mask
 creation for filaments (tube diameter, twist, rise, symmetry search). Filaments picked by hand (start-end coordinates)
-need `helical=true` in `relion_extract`, which cuts them into segments one rise apart.
+need `helical=true` in `relion_extract`, which cuts them into segments one rise apart. `relion_helix_toolbox` searches
+the twist and rise of a helical map locally (`mode=search` with `twist_min/max`, `rise_min/max`, then imposes them),
+imposes a given symmetry (`mode=impose`) or makes a cylinder reference (`mode=cylinder`); `relion_helix_inimodel2d`
+makes the initial model of an amyloid from its 2D class averages and `crossover_distance`. `relion_estimate_gain` makes
+a gain reference from the movies (its `movies` output carries it to motion correction). `relion_ctffind` has
+`tilt_search` and `extra_ice` (ice ring power fraction and kurtosis for the curation).
 
 ## Limits and pitfalls
 

@@ -199,6 +199,108 @@ class RelionMaskCreate(RelionJob):
         ctx.add_output("mask", "mask", out, "Mask", inherit=("map",), meta={"threshold": round(threshold, 6)})
 
 
+# ------------------------------------------------------------------ helical symmetry tools
+@register
+class RelionHelixToolbox(JobType):
+    name = "relion_helix_toolbox"
+    title = "Helical symmetry (RELION)"
+    category = "Map processing"
+    tool = "relion"
+    software = ["RELION"]
+    description = ("relion_helix_toolbox on the map of a filament: local search of the helical twist and rise (--search), "
+                   "then the symmetry found imposed in real space; a given symmetry imposed (--impose); or a cylinder as "
+                   "the initial reference of a helical refinement (--cylinder).")
+    inputs = [Slot("map", ("map",), "Map", required=False, help="A helical reconstruction (search, impose).")]
+    params = [
+        Param("mode", "choice", "search", choices=["search", "impose", "cylinder"], label="Tool",
+              labels={"search": "Search the twist and rise, then impose them", "impose": "Impose a helical symmetry",
+                      "cylinder": "Cylinder (initial reference)"}),
+        Param("outer_diameter", "float", 200.0, label="Tube diameter", unit="Å", min=1,
+              help="Outer diameter of the filament: the symmetry is searched and imposed within it."),
+        Param("inner_diameter", "float", -1.0, label="Inner tube diameter", unit="Å", help="Hollow filaments; -1 = solid."),
+        Param("twist_min", "float", -2.0, label="Twist from", unit="°", show_if="mode=search", help="+ for right-handed."),
+        Param("twist_max", "float", -0.5, label="Twist to", unit="°", show_if="mode=search"),
+        Param("rise_min", "float", 4.6, label="Rise from", unit="Å", min=0, show_if="mode=search"),
+        Param("rise_max", "float", 4.9, label="Rise to", unit="Å", min=0, show_if="mode=search"),
+        Param("twist", "float", 0.0, label="Twist", unit="°", show_if="mode=impose", help="+ for right-handed."),
+        Param("rise", "float", 4.75, label="Rise", unit="Å", min=0, show_if="mode=impose"),
+        Param("z_percentage", "float", 30.0, label="Central part along the axis", unit="%", min=10, max=90,
+              show_if="mode=search|impose", help="Part of the box height used (the ends of a reconstruction are worse)."),
+        Param("box", "int", 256, label="Box", unit="px", min=20, max=2048, show_if="mode=cylinder"),
+        Param("pixel_size", "float", 1.0, label="Pixel size", unit="Å", min=0.01, show_if="mode=cylinder",
+              help="That of the particles the reference is for."),
+        Param("polar", "bool", False, label="Polar cylinder", show_if="mode=cylinder", advanced=True,
+              help="Narrower at the bottom, for a polar reference (--polar)."),
+        extra_args_param(),
+    ]
+    outputs = [OutputDef("map", "map", "Map")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        mode = params.get("mode", "search")
+        if mode in ("search", "impose") and "map" not in connected:
+            return ["Connect the map of the filament"]
+        if mode == "search" and not (float(params.get("twist_min", -2)) < float(params.get("twist_max", -0.5))
+                                     and 0 < float(params.get("rise_min", 4.6)) < float(params.get("rise_max", 4.9))):
+            return ["The search ranges need a lower and a higher value (rise above 0)"]
+        if mode == "impose" and not float(params.get("rise") or 0) > 0:
+            return ["Give the helical rise"]
+        return []
+
+    def run(self, ctx: JobContext) -> None:
+        p = ctx.params
+        prog = ctx.program("relion", "relion_helix_toolbox")
+        diam = ["--cyl_inner_diameter", f"{p['inner_diameter']:g}", "--cyl_outer_diameter", f"{p['outer_diameter']:g}"]
+        if p["mode"] == "cylinder":
+            out = ctx.path("cylinder.mrc")
+            args = [prog, "--cylinder", "--o", ctx.rel(out), "--boxdim", str(p["box"]), *diam,
+                    "--angpix", f"{p['pixel_size']:g}", "--sphere_percentage", "0.9", "--width", "5"]
+            if p["polar"]:
+                args.append("--polar")
+            run_relion(ctx, args + ctx.split_extra())
+            if not out.exists():
+                raise JobError("relion_helix_toolbox wrote no cylinder (see the log)")
+            ctx.add_output("map", "map", out, f"Cylinder ({p['outer_diameter']:g} Å, {p['box']} px)",
+                           meta={"helical_reference": True})
+            return
+        inp = ctx.require("map")
+        apix = float(MapVolume.read(inp.path).voxel[0])
+        common = ["--i", ctx.rel(inp.path), *diam, "--angpix", f"{apix:g}", "--z_percentage", f"{p['z_percentage'] / 100:g}"]
+        if p["mode"] == "search":
+            found: dict[str, float] = {}
+
+            def read(line: str) -> None:
+                m = re.search(r"Refined helical rise = ([-\d.eE+]+) Angstroms, twist = ([-\d.eE+]+) degrees", line)
+                if m:
+                    found.update(rise=float(m.group(1)), twist=float(m.group(2)))
+            ctx.progress(0.1, "Local search of the helical twist and rise")
+            run_relion(ctx, [prog, "--search", *common, "--rise_min", f"{p['rise_min']:g}", "--rise_max", f"{p['rise_max']:g}",
+                             "--twist_min", f"{p['twist_min']:g}", "--twist_max", f"{p['twist_max']:g}", *ctx.split_extra()],
+                       on_line=read)
+            if not found:
+                raise JobError("relion_helix_toolbox did not report the refined symmetry (see the log)")
+            twist, rise = found["twist"], found["rise"]
+            ctx.add_table("Helical symmetry found", ["", "Value"], [
+                ["Twist", f"{twist:.4f}° (searched {p['twist_min']:g} to {p['twist_max']:g}°)"],
+                ["Rise", f"{rise:.4f} Å (searched {p['rise_min']:g} to {p['rise_max']:g} Å)"],
+                ["Handedness", "right-handed" if twist > 0 else "left-handed"]])
+            ctx.add_highlight("Twist", f"{twist:.3f}°")
+            ctx.add_highlight("Rise", f"{rise:.3f} Å")
+            at_edge = [n for n, v, lo, hi in (("twist", twist, p["twist_min"], p["twist_max"]), ("rise", rise, p["rise_min"], p["rise_max"]))
+                       if min(abs(v - lo), abs(v - hi)) < 1e-3 * max(1.0, abs(hi - lo))]
+            if at_edge:
+                ctx.warn(f"The {' and '.join(at_edge)} found are at the end of the range searched: widen it")
+        else:
+            twist, rise = float(p["twist"]), float(p["rise"])
+        out = ctx.path("helical.mrc")
+        ctx.progress(0.7, "Helical symmetry imposed in real space")
+        run_relion(ctx, [prog, "--impose", *common, "--o", ctx.rel(out), "--rise", f"{rise:g}", "--twist", f"{twist:g}"])
+        if not out.exists():
+            raise JobError("relion_helix_toolbox wrote no map (see the log)")
+        ctx.add_output("map", "map", out, f"Helical symmetry imposed ({twist:.3f}°, {rise:.3f} Å)",
+                       meta={"helical_twist": round(twist, 5), "helical_rise": round(rise, 5)})
+
+
 # ------------------------------------------------------------------ helpers of CTF refinement and polishing
 def postprocess_star(ctx: JobContext, parts: dict[str, Any]) -> tuple[Path, float | None]:
     """relion_postprocess of the connected half maps with the mask, on the grid of the particles (the

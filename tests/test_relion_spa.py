@@ -480,6 +480,88 @@ def test_helical_options(manager, spa):
             manager.queue_job(puid, job["uid"])
 
 
+def test_helical_symmetry_toolbox_and_ctf_options(manager, spa):
+    """relion_helix_toolbox: a cylinder reference, the local search of twist and rise followed by their imposition, a
+    given symmetry imposed; CTFFIND's sample tilt search and extra ice statistics."""
+    puid, mc = spa["puid"], spa["motioncorr"]
+    pdir = manager.project_dir(puid)
+    cyl = _run(manager, puid, "relion_helix_toolbox", {"mode": "cylinder", "box": 48, "pixel_size": 2.0, "outer_diameter": 60})
+    assert (f"relion_helix_toolbox --cylinder --o {cyl['uid']}/cylinder.mrc --boxdim 48 --cyl_inner_diameter -1 "
+            "--cyl_outer_diameter 60 --angpix 2 --sphere_percentage 0.9 --width 5") in _command(manager, puid, cyl)
+    ref = _ref(cyl, "map")
+    assert MapVolume.read(pdir / _outs(cyl)["map"]["path"]).data.shape == (48, 48, 48)
+    search = _run(manager, puid, "relion_helix_toolbox", {"mode": "search", "outer_diameter": 60, "twist_min": -2,
+                                                          "twist_max": -1, "rise_min": 4.6, "rise_max": 4.9}, {"map": ref})
+    log = _command(manager, puid, search)
+    assert (f"--search --i {_outs(cyl)['map']['path']} --cyl_inner_diameter -1 --cyl_outer_diameter 60 --angpix 2 "
+            "--z_percentage 0.3 --rise_min 4.6 --rise_max 4.9 --twist_min -2 --twist_max -1") in log
+    assert "--impose" in log and "--rise 4.78 --twist -1.6" in log
+    meta = _outs(search)["map"]["meta"]
+    assert meta["helical_rise"] == 4.78 and meta["helical_twist"] == -1.6
+    rows = dict(next(s for s in _sections(manager, puid, search, "table") if s["title"] == "Helical symmetry found")["rows"])
+    assert rows["Handedness"] == "left-handed"
+    imp = _run(manager, puid, "relion_helix_toolbox", {"mode": "impose", "outer_diameter": 60, "twist": 179.4, "rise": 2.4},
+               {"map": ref})
+    assert "--rise 2.4 --twist 179.4" in _command(manager, puid, imp)
+    job = manager.create_job(puid, "relion_helix_toolbox", {"mode": "search"}, {})
+    with pytest.raises(Exception, match="map of the filament"):
+        manager.queue_job(puid, job["uid"])
+    # CTFFIND: tilt search and extra ice statistics (with the power spectra of motion correction)
+    ctf = _run(manager, puid, "relion_ctffind", {"mpi": 1, "tilt_search": True, "extra_ice": True},
+               {"micrographs": _ref(mc, "micrographs")})
+    log = _command(manager, puid, ctf)
+    assert "--use_given_ps --extra_ice_stats --tilt_search" in log
+    mics = rl.micrograph_table(rl.read_star(pdir / _outs(ctf)["micrographs"]["path"]))
+    assert mics.has("rlnCtfIceRingKurtosis") and mics.has("rlnCtfIceRingPowerFraction")
+    data = json.loads((pdir / _sections(manager, puid, ctf, "exposures")[0]["data"]).read_text())
+    assert {"ice_fraction", "ice_kurtosis"} <= {m["key"] for m in data["metrics"]}
+
+
+def test_gain_estimation(manager, spa):
+    """relion_estimate_gain on the movies; the movies come out with the estimated gain, which motion correction uses."""
+    puid, imp = spa["puid"], spa["import"]
+    pdir = manager.project_dir(puid)
+    est = _run(manager, puid, "relion_estimate_gain", {"max_frames": 12, "threads": 2}, {"movies": _ref(imp, "movies")})
+    log = _command(manager, puid, est)
+    assert (f"relion_estimate_gain --i {_outs(imp)['movies']['path']} --o {est['uid']}/gain_estimate.mrc --j 2 "
+            "--max_frames 12 --random") in log and "already have a gain reference" in log
+    out = _outs(est)
+    assert out["movies"]["meta"]["gain"] == f"{est['uid']}/gain_estimate.mrc" and out["gain"]["type"] == "files"
+    assert (pdir / out["movies"]["path"]).read_text() == (pdir / _outs(imp)["movies"]["path"]).read_text()
+    assert any(s["title"] == "Gain reference" for s in _sections(manager, puid, est, "image"))
+    mc = _run(manager, puid, "relion_motioncorr", {"threads": 2, "patches_x": 1, "patches_y": 1}, {"movies": _ref(est, "movies")})
+    assert f"--gainref {est['uid']}/gain_estimate.mrc --gain_rot 0 --gain_flip 0" in _command(manager, puid, mc)
+
+
+def test_amyloid_initial_model(manager, spa):
+    """relion_helix_inimodel2d from the class averages of a 2D selection (or of the classification itself)."""
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = _ref(ctf, "micrographs")
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1},
+                {"micrographs": mics})
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1},
+               {"micrographs": mics, "coordinates": _ref(pick, "coordinates")})
+    c2d = _run(manager, puid, "relion_class2d", {"classes": 3, "vdam_batches": 10, "threads": 1, "gpus": 0},
+               {"particles": _ref(ext, "particles")})
+    sel = _run(manager, puid, "relion_select2d", {"mode": "list", "classes": "1, 2"}, {"classes": _ref(c2d, "classes")})
+    job = manager.create_job(puid, "relion_helix_inimodel2d", {}, {"classes": _ref(sel, "class_averages")})
+    with pytest.raises(Exception, match="cross-over distance"):
+        manager.queue_job(puid, job["uid"])
+    ini = _run(manager, puid, "relion_helix_inimodel2d", {"crossover_distance": 600, "iterations": 3, "symmetry": 2,
+                                                          "threads": 2}, {"classes": _ref(sel, "class_averages")})
+    log = _command(manager, puid, ini)
+    assert (f"relion_helix_inimodel2d --i {ini['uid']}/class_averages.star --o {ini['uid']}/inimodel --crossover_distance 600 "
+            "--angpix 2 --iter 3 --K 1 --search_shift 10 --search_angle 15 --step_angle 1 --sym 2 --j 2") in log
+    refs = rl.read_star(pdir / ini["uid"] / "class_averages.star")
+    assert len(next(iter(refs.values())).rows) == 2
+    vol = MapVolume.read(pdir / _outs(ini)["map"]["path"])
+    assert vol.data.shape == (32, 32, 32) and abs(vol.voxel[0] - 2.0) < 1e-6
+    both = _run(manager, puid, "relion_helix_inimodel2d", {"crossover_distance": 600, "iterations": 2, "classes": 2},
+                {"classes": _ref(c2d, "classes")})
+    assert {"map", "map_1", "map_2"} <= set(_outs(both))
+
+
 EPU_XML = """<?xml version="1.0" encoding="utf-8"?>
 <MicroscopeImage xmlns="http://schemas.datacontract.org/2004/07/Fei.SharedObjects" xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
 <microscopeData><optics><BeamShift xmlns:a="http://schemas.datacontract.org/2004/07/Fei.Types"><a:_x>{x}</a:_x><a:_y>{y}</a:_y></BeamShift>

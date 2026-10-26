@@ -251,6 +251,26 @@ HELP: dict[str, dict[str, Any]] = {
             "une première micrographie corrigée.",
             "Le fichier MTF du détecteur (wiki RELION) sert au post-traitement.",
         ],
+        "next": ["relion_motioncorr", "relion_estimate_gain"],
+    },
+    "relion_estimate_gain": {
+        "purpose": "Estime une référence de gain à partir des films eux-mêmes (relion_estimate_gain) : l'inverse de la "
+                   "moyenne de milliers d'images (la moyenne des comptes pour l'EER). Les films ressortent avec ce gain "
+                   "attaché, que la correction de mouvement applique.",
+        "when": [
+            "Référence de gain perdue, mal orientée ou d'une autre session ; motifs fixes visibles sur les micrographies.",
+            "Films en mode comptage non corrigés du gain.",
+        ],
+        "avoid": [
+            "Trop peu d'images : il en faut des milliers pour un gain sans bruit.",
+            "Des films déjà corrigés du gain (le gain estimé serait plat et inutile).",
+        ],
+        "inputs": "Les films importés (non corrigés du gain).",
+        "tips": [
+            "5000 images tirées au hasard pour commencer ; -1 prend tous les films (long).",
+            "EER : l'option --dont_invert est ajoutée d'office (le gain des EER est la moyenne des comptes).",
+            "Vérifiez l'image du gain dans le rapport : pixels morts ou chauds, bandes du détecteur.",
+        ],
         "next": ["relion_motioncorr"],
     },
     "relion_motioncorr": {
@@ -287,6 +307,9 @@ HELP: dict[str, dict[str, Any]] = {
             "pour des micrographies en float16).",
             "Le meilleur critère de tri est la résolution de l'ajustement : filtrez avec « Curate micrographs » (≤ 6 Å par exemple).",
             "L'image des ajustements (meilleur, médian, pire) permet de les vérifier d'un coup d'œil.",
+            "Avancé : « Sample tilt search » (CTFFIND 4.1.15 ou plus récent) ajuste l'inclinaison de l'échantillon "
+            "(collecte inclinée) ; « Extra ice statistics » ajoute la fraction de puissance et le kurtosis de l'anneau "
+            "de glace (tri des micrographies de glace cristalline), avec les spectres de la correction de mouvement.",
         ],
         "next": ["relion_curate", "relion_autopick"],
     },
@@ -623,6 +646,51 @@ HELP: dict[str, dict[str, Any]] = {
             "Filaments : « Helical processing » garde la partie centrale le long de l'axe (z %).",
         ],
         "next": ["relion_refine3d", "relion_ctf_refine", "relion_polish", "relion_postprocess", "relion_locres"],
+    },
+    "relion_helix_inimodel2d": {
+        "purpose": "Construit le modèle initial 3D d'une fibre amyloïde à partir de ses classes 2D "
+                   "(relion_helix_inimodel2d, tutoriel amyloïdes de RELION) : les moyennes de classes sont alignées en "
+                   "une longue image 2D couvrant tout un cross-over, puis tournées autour de l'axe selon la distance "
+                   "entre cross-overs. Une carte par classe, référence du raffinement hélical 3D.",
+        "when": [
+            "Fibres amyloïdes sans modèle initial : après une classification 2D de segments en grandes boîtes.",
+            "Plusieurs polymorphes : une carte par classe (« Classes »).",
+        ],
+        "avoid": [
+            "Des classes 2D floues ou de petite boîte : il faut voir la torsion de la fibre sur les classes.",
+            "Une distance de cross-over approximative : mesurez-la sur les micrographies ou de longues classes.",
+        ],
+        "inputs": "Les bonnes classes 2D (Select 2D classes) ou les classes d'une classification 2D (les vides sont "
+                  "écartées).",
+        "tips": [
+            "Symétrie 2 dans la section pour deux protofilaments reliés par un axe d'ordre 2 (pseudo-2₁).",
+            "Puis raffinement hélical 3D avec ce modèle (twist ≈ −180 × montée / cross-over, montée 4,75 Å).",
+            "Recherche de décalage ~10 Å et d'angle ~15° ; quelques dizaines d'itérations suffisent.",
+        ],
+        "next": ["relion_refine3d", "relion_class3d_global", "relion_helix_toolbox"],
+    },
+    "relion_helix_toolbox": {
+        "purpose": "Outils de symétrie hélicale de RELION (relion_helix_toolbox) sur la carte d'un filament : recherche "
+                   "locale de la torsion (twist) et de la montée (rise), puis imposition de la symétrie trouvée dans "
+                   "l'espace réel ; imposition d'une symétrie donnée ; ou cylindre comme référence initiale d'un "
+                   "raffinement hélical.",
+        "when": [
+            "Après un premier raffinement hélical : affiner twist et rise dans une petite fenêtre autour des valeurs "
+            "connues (diffraction, classes 2D).",
+            "Symétriser une carte de filament pour la construction de modèle.",
+            "Pas de référence pour un raffinement hélical : un cylindre du diamètre du tube.",
+        ],
+        "avoid": [
+            "Une fenêtre de recherche large : la recherche est locale, plusieurs symétries peuvent expliquer une carte.",
+            "Une valeur trouvée au bord de la fenêtre : élargissez la fenêtre (le job prévient).",
+        ],
+        "inputs": "La carte d'un raffinement hélical (recherche, imposition) ; rien pour le cylindre.",
+        "tips": [
+            "Twist positif : hélice droite ; vérifiez la main avec un modèle ou des hélices α visibles.",
+            "Partie centrale à 30 % de la hauteur de la boîte : les extrémités d'une reconstruction sont moins bonnes.",
+            "Le cylindre se fait à la taille de pixel et à la boîte des particules du raffinement.",
+        ],
+        "next": ["relion_refine3d", "relion_mask_create", "relion_postprocess"],
     },
     "relion_ctf_refine": {
         "purpose": "Affine l'optique du jeu de données et la CTF de chaque particule contre la carte raffinée "

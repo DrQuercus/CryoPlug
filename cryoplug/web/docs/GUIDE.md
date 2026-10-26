@@ -334,7 +334,7 @@ bandes d'images montrent des particules gardées et écartées, renouvelées à 
 particules gardées et les écartées. Sans attendre : le mode *thresholds* applique des limites écrites (`max_prob 0.1 -`,
 une par ligne) et le mode *cluster* sépare les particules en groupes d'une statistique (mélange de gaussiennes).
 
-### 2.6 Groupes d'optique, filaments, débruitage
+### 2.6 Groupes d'optique, filaments, gain, débruitage
 
 - **Optics groups (beam shift, file names)** répartit films, micrographies ou particules en groupes d'optique : par le
   décalage de faisceau des fichiers XML d'EPU (collecte AFIS, un groupe par trou du motif), par une partie des noms de
@@ -343,6 +343,16 @@ une par ligne) et le mode *cluster* sépare les particules en groupes d'une stat
 - **Filaments** : la case *Helical processing* des jobs d'auto-picking (modèles), d'extraction, de classification 2D
   et 3D, de raffinement 3D et de masque ajoute les options hélicoïdales de RELION (diamètre du tube, twist et montée,
   recherche locale de la symétrie, priors d'angles) ; les options n'apparaissent qu'une fois la case cochée.
+  **Helical symmetry (RELION)** (relion_helix_toolbox) cherche localement twist et montée sur la carte d'un
+  raffinement puis impose la symétrie trouvée dans l'espace réel, impose une symétrie donnée, ou fabrique un cylindre
+  comme référence initiale. Les filaments se pickent aussi à la main (mode *Filaments* de l'inspection des picks).
+  **Amyloid initial model (RELION)** (relion_helix_inimodel2d) construit le modèle initial d'une fibre amyloïde à partir
+  de ses classes 2D et de la distance entre cross-overs, comme dans le tutoriel amyloïdes de RELION.
+- **Estimate gain reference (RELION)** estime le gain à partir des films eux-mêmes (relion_estimate_gain) quand la
+  référence manque ou est douteuse ; les films ressortent avec ce gain, appliqué par la correction de mouvement.
+- **CTF estimation** : en options avancées, la recherche de l'inclinaison de l'échantillon (CTFFIND 4.1.15+) et des
+  statistiques de glace supplémentaires (fraction de puissance et kurtosis de l'anneau de glace), qui deviennent des
+  histogrammes du tri des micrographies.
 - **Denoise micrographs (Topaz)** débruite les micrographies (réseau pré-entraîné de Topaz) pour picker à l'œil ou
   automatiquement ; les picks faits sur les micrographies débruitées s'extraient des originales (l'extraction traduit
   les noms).

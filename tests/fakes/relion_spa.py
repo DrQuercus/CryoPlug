@@ -195,6 +195,8 @@ def ctffind(argv: list[str]) -> None:
         die("input micrographs STAR file does not contain rlnCtfPowerSpectrum")
     if "--use_noDW" in a and not mics.has("rlnMicrographNameNoDW"):
         die("input micrographs STAR file does not contain rlnMicrographNameNoDW")
+    if "--extra_ice_stats" in a and "--use_given_ps" not in a:  # CtffindRunner::initialise
+        die("ERROR: You cannot use --extra_ice_stats without also using --use_given_ps")
     names = mics.column("rlnMicrographName")
     src = mics.column("rlnCtfPowerSpectrum") if "--use_given_ps" in a else \
         (mics.column("rlnMicrographNameNoDW") if "--use_noDW" in a else names)
@@ -230,6 +232,9 @@ def ctffind(argv: list[str]) -> None:
     if "--do_phaseshift" in a:
         t.set_column("rlnPhaseShift", [90.0] * len(out_rows))
     t.set_column("rlnCtfIceRingDensity", [0.01 * (k + 1) for k in range(len(out_rows))])
+    if "--extra_ice_stats" in a:
+        t.set_column("rlnCtfIceRingPowerFraction", [0.002 * (k + 1) for k in range(len(out_rows))])
+        t.set_column("rlnCtfIceRingKurtosis", [2.5 + 0.3 * k for k in range(len(out_rows))])
     rl.write_star(out + "micrographs_ctf.star", [tables["optics"], t])
     pdf(out + "logfile.pdf")
     print(f" Done! Written out: {out}micrographs_ctf.star")
@@ -496,6 +501,115 @@ def stack_create(argv: list[str]) -> None:
     ptab.set_column("rlnImageName", names)
     rl.write_star(f"{root}.star", list(tables.values()))
     print(f"Written out: {root}.star")
+
+
+def estimate_gain(argv: list[str]) -> None:
+    """relion_estimate_gain: the inverse of the average of the frames of the movies (their sum with --dont_invert)."""
+    a = parse(argv, "relion_estimate_gain")
+    need(a, "--i", "--o")
+    if int(a.get("--eer_upsampling", 2)) not in (1, 2, 3):
+        die("eer_upsampling must be 1, 2 or 3")
+    tables = rl.read_star(str(a["--i"]))
+    table = tables.get("movies") or rl.micrograph_table(tables)
+    if not len(table):
+        die("No movies in the input STAR file")
+    if not table.has("rlnMicrographMovieName"):
+        die("The input STAR file does not contain the rlnMicrographMovieName column.")
+    names = table.column("rlnMicrographMovieName")
+    if names[0].lower().endswith(".eer") and "--dont_invert" not in a:
+        die("The input movie is EER. For EER, the gain reference is expected to be the average of counts, not the "
+            "inverse as in K2/K3. Thus, you need the --dont_invert flag.")
+    total, frames = None, 0
+    for name in names:
+        movie = read_image(name)
+        movie = movie if movie.ndim == 3 else movie[np.newaxis]
+        total = movie.sum(axis=0) if total is None else total + movie.sum(axis=0)
+        frames += len(movie)
+        print(f" Summed {frames} frames")
+        if 0 < int(a.get("--max_frames", -1)) <= frames:
+            break
+    mean = total / frames
+    gain = mean if "--dont_invert" in a else np.where(mean > 0, mean.mean() / np.maximum(mean, 1e-6), 0.0)
+    write_image(str(a["--o"]), gain.astype(np.float32), 1.0)
+
+
+def helix_inimodel2d(argv: list[str]) -> None:
+    """relion_helix_inimodel2d: a 3D initial model of an amyloid from its 2D class averages (rlnReferenceImage) and the
+    cross-over distance: the average rotated along z, one map per class (<o>_class001_rec3d.mrc...)."""
+    from scipy import ndimage
+    a = parse(argv, "relion_helix_inimodel2d")
+    need(a, "--o", "--i")
+    if float(a.get("--crossover_distance", 0) or 0) <= 0:
+        die("ERROR: provide the cross-over distance (--crossover_distance)")
+    apix = float(a.get("--angpix", -1))
+    if apix < 0:
+        die("ERROR: provide pixel size through --angpix or through the magnification and detectorpixel size in the input STAR file.")
+    table = next(iter(rl.read_star(str(a["--i"])).values()))
+    label = "rlnImageName" if table.has("rlnImageName") else "rlnReferenceImage" if table.has("rlnReferenceImage") else None
+    if label is None:
+        die("ERROR: input STAR file does not contain rlnImageName or rlnReferenceImage!")
+    images = []
+    for ref in table.column(label):
+        num, _, stack = ref.partition("@")
+        data = read_image(stack or num)
+        images.append(data[int(num) - 1] if stack and data.ndim == 3 else data)
+    avg = np.mean(images, axis=0)
+    if avg.shape[0] != avg.shape[1]:
+        die("ERROR: only squared 2D images are allowed.")
+    n_iter = int(a.get("--iter", 10))
+    for it in range(1, n_iter + 1):
+        print(f" Iteration {it} of {n_iter}")
+    box = avg.shape[0]
+    per_px = 180.0 * apix / float(a["--crossover_distance"])
+    for c in range(1, int(a.get("--K", 1)) + 1):
+        vol = np.stack([ndimage.rotate(avg, per_px * k + 5 * (c - 1), reshape=False, order=1) for k in range(box)])
+        out = f"{a['--o']}_class{c:03d}_rec3d.mrc"
+        MapVolume(data=vol.astype(np.float32), voxel=np.full(3, apix)).write(out)
+        print(f" * Written {out}")
+
+
+def helix_toolbox(argv: list[str]) -> None:
+    """relion_helix_toolbox: --cylinder (a cylinder reference), --impose (helical symmetry in real space, here an
+    average along the axis), --search (local search of twist and rise, reported as RELION prints it)."""
+    a = parse(argv, "relion_helix_toolbox")
+    functions = [f for f in ("--search", "--impose", "--cylinder") if f in a]
+    if len(functions) != 1:
+        die("Please specify one function (fake: --search, --impose or --cylinder)")
+    outer = float(a.get("--cyl_outer_diameter", -1))
+    if functions[0] == "--cylinder":
+        apix, box = float(a.get("--angpix", -1)), int(a.get("--boxdim", -1))
+        if apix < 0.01:
+            die("Pixel size should be larger than 0!")
+        if box < 20:
+            die("Box size should be larger than 20 pixels!")
+        z, y, x = np.indices((box, box, box), dtype=np.float32) - box / 2
+        r = np.hypot(x, y) * apix
+        inner = float(a.get("--cyl_inner_diameter", -1))
+        cyl = ((r <= outer / 2) & (r >= max(inner, 0) / 2) & (np.sqrt(x ** 2 + y ** 2 + z ** 2) < 0.45 * box)).astype(np.float32)
+        MapVolume(data=cyl, voxel=np.full(3, apix)).write(str(a["--o"]))
+        return
+    need(a, "--i")
+    vol = MapVolume.read(str(a["--i"]))
+    apix = float(a.get("--angpix", -1))
+    if apix < 0.01:
+        print(f"WARNING: You did not specify --angpix. The pixel size in the image header, {vol.voxel[0]} A/px, is used.",
+              file=sys.stderr)
+    if outer <= 0:
+        die("Outer diameter of the cylinder should be positive")
+    if functions[0] == "--search":
+        lo_r, hi_r = float(a.get("--rise_min", -1)), float(a.get("--rise_max", -1))
+        lo_t, hi_t = float(a.get("--twist_min", -1)), float(a.get("--twist_max", -1))
+        if not (0 < lo_r < hi_r) or not lo_t < hi_t:
+            die("Invalid helical search ranges")
+        print(f" Done! Refined helical rise = {lo_r + 0.6 * (hi_r - lo_r):.6g} Angstroms, twist = "
+              f"{lo_t + 0.4 * (hi_t - lo_t):.6g} degrees.")
+        return
+    need(a, "--o", "--rise", "--twist")
+    if float(a["--rise"]) <= 0:
+        die("Helical rise should be positive")
+    data = vol.data.astype(np.float32)
+    data = 0.5 * data + 0.5 * data.mean(axis=0, keepdims=True)  # symmetrised along z (the axis)
+    MapVolume(data=data, voxel=vol.voxel).write(str(a["--o"]))
 
 
 def kmeans_classes(images: np.ndarray, k: int) -> np.ndarray:
@@ -956,5 +1070,6 @@ PROGRAMS = {
     "relion_ctf_refine": ctf_refine, "relion_ctf_refine_mpi": ctf_refine,
     "relion_motion_refine": motion_refine, "relion_motion_refine_mpi": motion_refine,
     "relion_star_handler": star_handler, "relion_flex_analyse": flex_analyse, "relion_python_dynamight": dynamight,
-    "relion_stack_create": stack_create,
+    "relion_stack_create": stack_create, "relion_helix_toolbox": helix_toolbox, "relion_estimate_gain": estimate_gain,
+    "relion_helix_inimodel2d": helix_inimodel2d,
 }

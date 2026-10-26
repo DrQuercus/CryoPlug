@@ -121,7 +121,7 @@ Importe les films bruts (ou des micrographies déjà alignées) avec leur groupe
 - Rotation et retournement du gain comme dans MotionCor2 (-RotGain / -FlipGain) : vérifiez l'orientation sur une première micrographie corrigée.
 - Le fichier MTF du détecteur (wiki RELION) sert au post-traitement.
 
-**Étapes suivantes** : Motion correction (RELION)
+**Étapes suivantes** : Motion correction (RELION), Estimate gain reference (RELION)
 
 ### Import particles
 
@@ -220,6 +220,7 @@ Ajuste la fonction de transfert de contraste de chaque micrographie avec CTFFIND
 - Les spectres de puissance de la correction de mouvement donnent de meilleurs anneaux de Thon (indispensables pour des micrographies en float16).
 - Le meilleur critère de tri est la résolution de l'ajustement : filtrez avec « Curate micrographs » (≤ 6 Å par exemple).
 - L'image des ajustements (meilleur, médian, pire) permet de les vérifier d'un coup d'œil.
+- Avancé : « Sample tilt search » (CTFFIND 4.1.15 ou plus récent) ajuste l'inclinaison de l'échantillon (collecte inclinée) ; « Extra ice statistics » ajoute la fraction de puissance et le kurtosis de l'anneau de glace (tri des micrographies de glace cristalline), avec les spectres de la correction de mouvement.
 
 **Étapes suivantes** : Curate micrographs, Auto-picking (RELION)
 
@@ -275,6 +276,32 @@ Débruite les micrographies avec le réseau pré-entraîné de Topaz (topaz deno
 - Connectez à l'extraction les micrographies originales et les picks faits sur les débruitées.
 
 **Étapes suivantes** : Inspect picks / manual picking, Auto-picking (RELION)
+
+### Estimate gain reference (RELION)
+
+`relion_estimate_gain` — logiciel : `relion`
+
+Estime une référence de gain à partir des films eux-mêmes (relion_estimate_gain) : l'inverse de la moyenne de milliers d'images (la moyenne des comptes pour l'EER). Les films ressortent avec ce gain attaché, que la correction de mouvement applique.
+
+**Quand l'utiliser**
+
+- Référence de gain perdue, mal orientée ou d'une autre session ; motifs fixes visibles sur les micrographies.
+- Films en mode comptage non corrigés du gain.
+
+**À éviter / pièges**
+
+- Trop peu d'images : il en faut des milliers pour un gain sans bruit.
+- Des films déjà corrigés du gain (le gain estimé serait plat et inutile).
+
+**Entrées conseillées** : Les films importés (non corrigés du gain).
+
+**Conseils**
+
+- 5000 images tirées au hasard pour commencer ; -1 prend tous les films (long).
+- EER : l'option --dont_invert est ajoutée d'office (le gain des EER est la moyenne des comptes).
+- Vérifiez l'image du gain dans le rapport : pixels morts ou chauds, bandes du détecteur.
+
+**Étapes suivantes** : Motion correction (RELION)
 
 ### Live preprocessing (RELION)
 
@@ -501,6 +528,32 @@ Trie les particules en classes 3D contre une référence (relion_refine --K) : r
 - Filaments : « Helical processing » avec twist et montée initiaux (et leur recherche locale).
 
 **Étapes suivantes** : 3D auto-refine (RELION), 3D classification (RELION), Heterogeneous refinement (RELION), Curate particles (statistics)
+
+### Amyloid initial model (RELION)
+
+`relion_helix_inimodel2d` — logiciel : `relion`
+
+Construit le modèle initial 3D d'une fibre amyloïde à partir de ses classes 2D (relion_helix_inimodel2d, tutoriel amyloïdes de RELION) : les moyennes de classes sont alignées en une longue image 2D couvrant tout un cross-over, puis tournées autour de l'axe selon la distance entre cross-overs. Une carte par classe, référence du raffinement hélical 3D.
+
+**Quand l'utiliser**
+
+- Fibres amyloïdes sans modèle initial : après une classification 2D de segments en grandes boîtes.
+- Plusieurs polymorphes : une carte par classe (« Classes »).
+
+**À éviter / pièges**
+
+- Des classes 2D floues ou de petite boîte : il faut voir la torsion de la fibre sur les classes.
+- Une distance de cross-over approximative : mesurez-la sur les micrographies ou de longues classes.
+
+**Entrées conseillées** : Les bonnes classes 2D (Select 2D classes) ou les classes d'une classification 2D (les vides sont écartées).
+
+**Conseils**
+
+- Symétrie 2 dans la section pour deux protofilaments reliés par un axe d'ordre 2 (pseudo-2₁).
+- Puis raffinement hélical 3D avec ce modèle (twist ≈ −180 × montée / cross-over, montée 4,75 Å).
+- Recherche de décalage ~10 Å et d'angle ~15° ; quelques dizaines d'itérations suffisent.
+
+**Étapes suivantes** : 3D auto-refine (RELION), 3D classification (RELION), Helical symmetry (RELION)
 
 ### Heterogeneous refinement (RELION)
 
@@ -1019,6 +1072,33 @@ FSC gold-standard entre demi-cartes : sans masque, avec masque et corrigée par 
 - Un masque trop serré fait remonter la courbe masquée à haute résolution : la correction le compense en partie.
 
 **Étapes suivantes** : Directional resolution (3D FSC), Deposition package
+
+### Helical symmetry (RELION)
+
+`relion_helix_toolbox` — logiciel : `relion`
+
+Outils de symétrie hélicale de RELION (relion_helix_toolbox) sur la carte d'un filament : recherche locale de la torsion (twist) et de la montée (rise), puis imposition de la symétrie trouvée dans l'espace réel ; imposition d'une symétrie donnée ; ou cylindre comme référence initiale d'un raffinement hélical.
+
+**Quand l'utiliser**
+
+- Après un premier raffinement hélical : affiner twist et rise dans une petite fenêtre autour des valeurs connues (diffraction, classes 2D).
+- Symétriser une carte de filament pour la construction de modèle.
+- Pas de référence pour un raffinement hélical : un cylindre du diamètre du tube.
+
+**À éviter / pièges**
+
+- Une fenêtre de recherche large : la recherche est locale, plusieurs symétries peuvent expliquer une carte.
+- Une valeur trouvée au bord de la fenêtre : élargissez la fenêtre (le job prévient).
+
+**Entrées conseillées** : La carte d'un raffinement hélical (recherche, imposition) ; rien pour le cylindre.
+
+**Conseils**
+
+- Twist positif : hélice droite ; vérifiez la main avec un modèle ou des hélices α visibles.
+- Partie centrale à 30 % de la hauteur de la boîte : les extrémités d'une reconstruction sont moins bonnes.
+- Le cylindre se fait à la taille de pixel et à la boîte des particules du raffinement.
+
+**Étapes suivantes** : 3D auto-refine (RELION), Mask creation (RELION), RELION post-processing
 
 ### LocScale 2
 

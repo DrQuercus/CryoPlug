@@ -266,6 +266,72 @@ class RelionImport(JobType):
             ctx.add_output("micrographs", "micrographs", star, f"{len(names):,} micrographs", meta=meta, thumbnail=thumb)
 
 
+# ------------------------------------------------------------------ gain estimation
+@register
+class RelionEstimateGain(JobType):
+    name = "relion_estimate_gain"
+    title = "Estimate gain reference (RELION)"
+    category = "Preprocessing"
+    tool = "relion"
+    software = ["RELION"]
+    description = ("relion_estimate_gain: a gain reference estimated from the movies themselves (the inverse of the average "
+                   "of many frames), when the gain reference of the session is missing or doubtful. The movies come out "
+                   "with this gain attached: motion correction applies it.")
+    inputs = [Slot("movies", ("movies",), "Movies", help="Movies that are not gain-corrected (counting mode, EER).")]
+    params = [
+        Param("max_frames", "int", 5000, label="Frames averaged", min=-1,
+              help="About this many frames, in whole movies; -1 = every movie (slow). Thousands of frames are needed."),
+        Param("random", "bool", True, label="Movies taken at random", help="Otherwise the first movies of the list."),
+        Param("eer_upsampling", "choice", "1", choices=["1", "2"], label="EER up-sampling",
+              labels={"1": "1 (physical pixels)", "2": "2 (super-resolution)"}, help="EER movies only."),
+        threads(8),
+        extra_args_param(),
+    ]
+    outputs = [OutputDef("movies", "movies", "Movies with the estimated gain"), OutputDef("gain", "files", "Gain reference")]
+
+    def run(self, ctx: JobContext) -> None:
+        import mrcfile
+        p = ctx.params
+        inp = ctx.require("movies")
+        star, ref = star_of(ctx, inp)
+        names = rl.micrograph_table(rl.read_star(star)).column("rlnMicrographMovieName")
+        if inp.meta.get("gain"):
+            ctx.warn("These movies already have a gain reference: the estimate replaces it in the output")
+        out = ctx.path("gain_estimate.mrc")
+        args = [ctx.program("relion", "relion_estimate_gain"), "--i", ref, "--o", ctx.rel(out), "--j", str(p["threads"]),
+                "--max_frames", str(p["max_frames"])]
+        if p["random"]:
+            args.append("--random")
+        if any(n.lower().endswith(".eer") for n in names):  # EER: the gain is the average of the counts, not its inverse
+            args += ["--eer_upsampling", str(p["eer_upsampling"]), "--dont_invert"]
+        ctx.progress(0.05, f"relion_estimate_gain on the frames of {len(names):,} movies")
+        run_relion(ctx, args + ctx.split_extra())
+        if not out.exists():
+            raise JobError("relion_estimate_gain wrote no gain reference (see the log)")
+        with mrcfile.open(str(out), permissive=True) as m:
+            gain = np.asarray(m.data, dtype=np.float32).reshape(m.data.shape[-2:])
+        finite = gain[np.isfinite(gain)]
+        med = float(np.median(finite)) if len(finite) else 0.0
+        dead = int((~np.isfinite(gain) | (gain <= 0)).sum())
+        hot = int((gain > 3 * med).sum()) if med > 0 else 0
+        ctx.add_table("Gain reference", ["", "Value"], [
+            ["Size", f"{gain.shape[1]} × {gain.shape[0]} px"], ["Median", f"{med:.4g}"],
+            ["Spread (s.d. / median)", f"{float(finite.std()) / med:.3f}" if med > 0 else "–"],
+            ["Pixels without counts", f"{dead:,}"], ["Pixels above 3 × the median", f"{hot:,}"]])
+        try:  # the gain as a picture
+            from cryoplug.imaging import write_png
+            from cryoplug.micrographs import preview
+            ctx.add_image("Gain reference", write_png(ctx.path("gain_estimate.png"), preview(np.nan_to_num(gain, nan=med), 512)[0]))
+        except Exception as exc:  # cosmetic
+            ctx.warn(f"No picture of the gain: {exc}")
+        import shutil
+        movies = shutil.copyfile(star, ctx.path("movies.star"))  # the same movies (project-relative names)
+        meta = {**inp.meta, "gain": ctx.rel(out), "gain_rotation": 0, "gain_flip": 0, "gain_estimated": True,
+                "relion": {"star": ctx.rel(movies), "kind": "estimate_gain"}}
+        ctx.add_output("movies", "movies", movies, f"{len(names):,} movies, estimated gain", meta=meta)
+        ctx.add_output("gain", "files", out, "Estimated gain reference", meta={"gain_reference": True})
+
+
 # ------------------------------------------------------------------ motion correction
 @register
 class RelionMotionCorr(RelionJob):
@@ -482,6 +548,12 @@ class RelionCtffind(RelionJob):
               help="Slower; for difficult astigmatism or phase shifts (useful with CTFFIND 4.1.8 and older)."),
         Param("window", "int", -1, label="Window", unit="px", advanced=True,
               help="Fit only a centred square of this size (labels at the edge of film); negative: whole micrograph."),
+        Param("tilt_search", "bool", False, label="Sample tilt search", advanced=True,
+              help="CTFFIND 4.1.15 or later fits the tilt of the sample (data collected tilted, or bent ice) "
+                   "(--tilt_search)."),
+        Param("extra_ice", "bool", False, label="Extra ice statistics", advanced=True,
+              help="Ice ring power fraction and kurtosis, besides the ice ring density, for the curation of icy "
+                   "micrographs; needs the power spectra of motion correction (--extra_ice_stats)."),
         mpi(4, help="Micrographs processed at the same time (CTFFIND is single-threaded)."),
         extra_args_param(),
     ]
@@ -514,6 +586,12 @@ class RelionCtffind(RelionJob):
             args.append("--fast_search")
         if use_ps:
             args.append("--use_given_ps")
+            if p["extra_ice"]:
+                args.append("--extra_ice_stats")
+        elif p["extra_ice"]:
+            ctx.warn("Extra ice statistics need the power spectra of motion correction: left out")
+        if p["tilt_search"]:
+            args.append("--tilt_search")
         args += ctx.split_extra()
         ctx.progress(0.03, f"CTFFIND on {n:,} micrographs")
         with FileProgress(ctx, ctx.job_dir, "*.ctf", n, "Micrographs fitted"):
@@ -594,6 +672,7 @@ EXPOSURE_METRICS = [  # (key, STAR label, title, unit); the defocus is the mean 
     ("motion_late", "rlnAccumMotionLate", "Late motion", "Å"),
     ("ice", "rlnCtfIceRingDensity", "Ice ring density", ""),
     ("ice_fraction", "rlnCtfIceRingPowerFraction", "Ice ring power fraction", ""),
+    ("ice_kurtosis", "rlnCtfIceRingKurtosis", "Ice ring kurtosis", ""),
     ("ice_thickness", "rlnMicrographIceThickness", "Ice thickness", "Å"),
     ("phase_shift", "rlnPhaseShift", "Phase shift", "°"),
     ("n_particles", "", "Particles", ""),  # from the particles or picks connected to the curation

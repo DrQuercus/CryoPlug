@@ -3,6 +3,7 @@ CryoSPARC, listed, or automatic with RELION's class ranker), 3D initial model (V
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -438,6 +439,107 @@ class RelionSelect2D(RelionJob):
         if not chosen:
             raise JobError(f"No class scores {p['min_score']:g} or more (best {max(scores.values()):.2f}): lower the minimum score")
         self.select(ctx, chosen, f"class ranker, score ≥ {p['min_score']:g}", scores=scores)
+
+
+# ------------------------------------------------------------------ amyloid initial model
+@register
+class RelionHelixInimodel2D(JobType):
+    name = "relion_helix_inimodel2d"
+    title = "Amyloid initial model (RELION)"
+    category = "Classification"
+    tool = "relion"
+    software = ["RELION"]
+    description = ("relion_helix_inimodel2d: a 3D initial model of an amyloid fibril from its 2D class averages, which "
+                   "are aligned into one long 2D image of a whole cross-over and turned around the axis by the cross-over "
+                   "distance (RELION's amyloid tutorial). One map per class; the reference of the helical 3D refinement.")
+    inputs = [Slot("classes", ("class_averages",), "2D class averages",
+                   help="The good classes of a 2D classification of segments (Select 2D classes), boxes as wide as the fibril.")]
+    params = [
+        Param("crossover_distance", "float", 0.0, label="Cross-over distance", unit="Å", min=0, required=True,
+              help="Distance between two cross-overs of the fibril, measured on the micrographs or long class averages."),
+        Param("classes", "int", 1, label="Classes", min=1, max=10, help="Several fibril types (polymorphs): one model each."),
+        Param("iterations", "int", 10, label="Iterations", min=1, max=200),
+        Param("max_resolution", "float", -1.0, label="Highest resolution used", unit="Å",
+              help="-1 = twice the pixel size (Nyquist)."),
+        Param("search_shift", "float", 10.0, label="Shift search", unit="Å", min=0,
+              help="Translations searched perpendicular to the axis."),
+        Param("search_angle", "float", 15.0, label="In-plane angle search", unit="°", min=0, max=180),
+        Param("step_angle", "float", 1.0, label="Angular step", unit="°", min=0.1, max=10),
+        Param("mask_diameter", "float", -1.0, label="Mask diameter", unit="Å", help="Of the 2D reconstruction; -1 = automatic."),
+        Param("symmetry", "int", 1, label="Symmetry in the cross-section", min=1, max=6,
+              help="2 for fibrils of two protofilaments related by a two-fold (pseudo-2₁) axis."),
+        threads(6),
+        extra_args_param(),
+    ]
+    outputs = [OutputDef("map", "map", "Initial model"), OutputDef("map_1", "map", "Class 1")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        if not float(params.get("crossover_distance") or 0) > 0:
+            return ["Give the cross-over distance of the fibril"]
+        return []
+
+    def run(self, ctx: JobContext) -> None:
+        import mrcfile
+        p = ctx.params
+        inp = ctx.require("classes")
+        files = [Path(f) for f in (inp.files or [inp.path])]
+        star = next((f for f in files if f.suffix == ".star" and f.name.endswith(("class_averages.star", "_model.star"))), None)
+        refs: list[str] = []
+        if star is not None:
+            tables = rl.read_star(star)
+            table = tables.get("model_classes") or next((t for t in tables.values() if t.has("rlnReferenceImage")), None)
+            if table is None:
+                raise JobError(f"{star.name} has no rlnReferenceImage")
+            dist = table.floats("rlnClassDistribution") if table.has("rlnClassDistribution") else None
+            refs = [r for k, r in enumerate(table.column("rlnReferenceImage")) if dist is None or dist[k] > 0]
+        else:
+            stack = next((f for f in files if f.suffix == ".mrcs"), None)
+            if stack is None:
+                raise JobError("No class averages found in the input")
+            with mrcfile.mmap(str(stack), permissive=True) as m:
+                n = m.data.shape[0] if m.data.ndim == 3 else 1
+            refs = [f"{i + 1:06d}@{ctx.rel(stack)}" for i in range(n)]
+        if not refs:
+            raise JobError("No class average (every class is empty)")
+        first = refs[0].partition("@")[2] or refs[0]
+        apix = float(inp.meta.get("pixel_size") or 0)
+        if not apix:
+            with mrcfile.open(str(ctx.abs(first)), header_only=True, permissive=True) as m:
+                apix = float(m.voxel_size.x)
+        if not apix > 0:
+            raise JobError("The pixel size of the class averages is unknown")
+        listing = rl.StarTable("", ["rlnReferenceImage"], [[r] for r in refs])
+        ref_star = rl.write_star(ctx.path("class_averages.star"), [listing], comment=f"Class averages of {inp.source}")
+        root = ctx.path("inimodel")
+        args = [ctx.program("relion", "relion_helix_inimodel2d"), "--i", ctx.rel(ref_star), "--o", ctx.rel(root),
+                "--crossover_distance", f"{p['crossover_distance']:g}", "--angpix", f"{apix:g}", "--iter", str(p["iterations"]),
+                "--K", str(p["classes"]), "--search_shift", f"{p['search_shift']:g}", "--search_angle", f"{p['search_angle']:g}",
+                "--step_angle", f"{p['step_angle']:g}", "--sym", str(p["symmetry"]), "--j", str(p["threads"])]
+        if p["max_resolution"] > 0:
+            args += ["--maxres", f"{p['max_resolution']:g}"]
+        if p["mask_diameter"] > 0:
+            args += ["--mask_diameter", f"{p['mask_diameter']:g}"]
+        total = int(p["iterations"])
+
+        def progress(line: str) -> None:
+            m = re.search(r"Iteration\s+(\d+)\s+of\s+(\d+)", line)
+            if m:
+                ctx.progress(0.05 + 0.9 * min(1.0, int(m.group(1)) / max(1, total)), f"Iteration {m.group(1)} of {total}", log=False)
+        ctx.progress(0.05, f"relion_helix_inimodel2d on {len(refs)} class averages")
+        run_relion(ctx, args + ctx.split_extra(), on_line=progress)
+        maps = [ctx.path(f"inimodel_class{c:03d}_rec3d.mrc") for c in range(1, int(p["classes"]) + 1)]
+        maps = [m for m in maps if m.exists()]
+        if not maps:
+            raise JobError("relion_helix_inimodel2d wrote no map (see the log)")
+        ctx.add_table("Amyloid initial model", ["", "Value"], [
+            ["Class averages", f"{len(refs)}"], ["Cross-over distance", f"{p['crossover_distance']:g} Å"],
+            ["Pixel size", f"{apix:g} Å"], ["Symmetry in the cross-section", str(p["symmetry"])], ["Maps", str(len(maps))]])
+        meta = {"crossover_distance": p["crossover_distance"], "helical_reference": True}
+        ctx.add_output("map", "map", maps[0], f"Amyloid initial model (cross-over {p['crossover_distance']:g} Å)", meta=meta)
+        if len(maps) > 1:
+            for c, m in enumerate(maps, 1):
+                ctx.add_output(f"map_{c}", "map", m, f"Class {c}", meta=meta)
 
 
 # ------------------------------------------------------------------ initial model
