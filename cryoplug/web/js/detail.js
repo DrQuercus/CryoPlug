@@ -8,6 +8,7 @@ import { computeRows } from './compute.js';
 import { exposureCurator } from './curate.js';
 import { helpSheet } from './help.js';
 import { latentExplorer } from './latent.js';
+import { liveDashboard } from './live.js';
 import { pickInspector } from './picker.js';
 import { barChart, heatmap, lineChart } from './plots.js';
 import { builderHref, jobHref, navigate, refreshJobs, restricted, state, typeTitle } from './state.js';
@@ -405,6 +406,9 @@ function renderOverview(body) {
       h('div', { class: 'label' }, hl.label), h('div', { class: 'value' }, String(hl.value)), hl.status ? statusMark(hl.status) : null)))));
   }
 
+  // a live session first: its dashboard is what the job is about while it runs
+  for (const sec of (job.report?.sections || []).filter((s) => s.kind === 'live')) body.appendChild(reportSection(sec, puid, job));
+
   D.linkType = D.mode === 'page' ? state.builder?.type : null;
   if (job.outputs && job.outputs.length) {
     const linking = !!D.linkType;
@@ -454,7 +458,7 @@ function renderOverview(body) {
       h('div', { class: 'box' }, rows)));
   }
 
-  for (const sec of job.report?.sections || []) body.appendChild(reportSection(sec, puid, job));
+  for (const sec of job.report?.sections || []) if (sec.kind !== 'live') body.appendChild(reportSection(sec, puid, job));
 
   const inputs = Object.entries(job.input_details || {});
   if (inputs.length) {
@@ -553,14 +557,18 @@ function reportSection(sec, puid, job) {
       newInspection: job.status === 'completed' && (job.outputs || []).some((o) => o.type === 'coordinates') && job.inputs?.micrographs
         ? (threshold) => newPickInspection(job, threshold) : null,
     })));
+  } else if (sec.kind === 'live') {
+    wrap.append(h('div', { class: 'box' }, liveDashboard(sec, {
+      job, stop: () => act(api.control(puid, job.uid, 'stop'), 'The live job stops after this cycle'),
+    })));
   } else if (sec.kind === 'exposures') {
-    const mics = (job.outputs || []).find((o) => o.type === 'micrographs' && o.name === 'micrographs')
+    const mics = (job.outputs || []).find((o) => o.type === 'micrographs' && o.name === (sec.source_output || 'micrographs'))
       || (job.outputs || []).find((o) => o.type === 'micrographs');
     wrap.append(h('div', { class: 'box' }, exposureCurator(sec, {
       puid, job,
       finish: (payload) => act(api.finish(puid, job.uid, JSON.stringify(payload)), 'Curation saved'),
       widen: () => widenFor(job),
-      curate: sec.curate && job.status === 'completed' && mics ? (limits) => newCuration(job, mics, limits) : null,
+      curate: (sec.curate || sec.live) && job.status === 'completed' && mics ? (limits) => newCuration(job, mics, limits) : null,
     })));
   } else if (sec.kind === 'image') {
     wrap.append(h('h4', {}, sec.title), h('a', { href: api.fileUrl(puid, sec.path), target: '_blank', rel: 'noopener' },

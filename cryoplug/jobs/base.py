@@ -195,6 +195,7 @@ class JobType:
     cpus: ClassVar[int] = 1
     cpu_param: ClassVar[str] = ""  # parameter(s) giving the number of processes ("mpi*threads": their product)
     interactive: ClassVar[bool] = False
+    controls: ClassVar[tuple[str, ...]] = ()  # requests a running job takes (e.g. "stop": finish after the current cycle)
     software: ClassVar[list[str]] = []  # names used in the methods draft
     params: ClassVar[list[Param]] = []
     inputs: ClassVar[list[Slot]] = []
@@ -216,6 +217,7 @@ class JobType:
             "cpus": cls.cpus,
             "cpu_param": cls.cpu_param,
             "interactive": cls.interactive,
+            "controls": list(cls.controls),
             "admin_only": cls.admin_only,
             "params": [p.to_dict() for p in cls.params],
             "inputs": [s.to_dict() for s in cls.inputs],
@@ -639,6 +641,16 @@ class JobContext:
     def split_extra(self, name: str = "extra_args") -> list[str]:
         return shlex.split(str(self.params.get(name) or ""))
 
+    def control_requested(self, action: str) -> bool:
+        """Whether the user asked the running job for ``action`` (see JobType.controls), e.g. to stop after a cycle."""
+        path = self.path("control.json")
+        if not path.exists():
+            return False
+        try:
+            return bool(json.loads(path.read_text()).get(action))
+        except (OSError, ValueError):
+            return False
+
     # ---------------------------------------------------------------- GPUs
     def physical_gpus(self, override: str = "") -> list[str]:
         """GPU ids as seen by the machine, for programs that set CUDA_VISIBLE_DEVICES themselves."""
@@ -941,3 +953,36 @@ def first_existing(paths: Iterable[str | Path]) -> Path | None:
         if p and Path(p).exists():
             return Path(p)
     return None
+
+
+class StepContext(JobContext):
+    """One step of a job made of other jobs (live preprocessing): a job type runs in a sub-folder of the job with its
+    own parameters, inputs, report and outputs, writing into the job's log; its messages show on the job's card."""
+
+    def __init__(self, parent: JobContext, folder: str, params: dict[str, Any],
+                 inputs: dict[str, dict[str, Any] | None], label: str = ""):
+        job_dir = parent.path(folder)
+        job_dir.mkdir(parents=True, exist_ok=True)
+        super().__init__({**parent.spec, "params": params, "inputs": inputs, "project_dir": str(parent.project_dir)}, job_dir)
+        self.parent = parent
+        self.label = label or folder
+        self.log_path = parent.log_path
+        self.report = {"sections": []}  # each run of the step starts afresh
+        self.outputs, self.highlights = [], []
+
+    def progress(self, fraction: float, message: str | None = None, log: bool = True) -> None:
+        if message is not None:
+            self.parent.progress(float(self.parent.state.get("progress") or 0.0), f"{self.label}: {message}", log=log)
+        self.write_state(progress=max(0.0, min(1.0, float(fraction))), heartbeat=time.time())
+        self.parent.write_state(heartbeat=time.time())
+
+    def output_ref(self, name: str) -> dict[str, Any] | None:
+        """An output of the step as the input of the next step (absolute paths, as the manager resolves inputs)."""
+        out = next((o for o in self.outputs if o["name"] == name), None)
+        if out is None:
+            return None
+        pdir = self.project_dir
+        return {"type": out["type"], "label": out.get("label", ""), "source": f"{self.parent.uid}.{self.label}.{name}",
+                "path": str(pdir / out["path"]), "files": [str(pdir / f) for f in out.get("files", [out["path"]])],
+                "meta": out.get("meta", {}), "siblings": {}}
+

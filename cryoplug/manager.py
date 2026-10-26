@@ -458,6 +458,28 @@ class Manager:
             self.db.update_job(puid, juid, status="killed", ended_at=time.time(), message="Killed by user", gpus=[])
             return self.job(puid, juid)
 
+    def control_job(self, puid: str, juid: str, action: str) -> dict[str, Any]:
+        """A request to a running job that takes it (JobType.controls), e.g. "stop": finish after the current cycle
+        and keep the outputs (where kill would discard them). The job reads it from its folder (control.json)."""
+        with self.lock:
+            job = self.job(puid, juid)
+            jt = get_job_type(job["type"])
+            if action not in jt.controls:
+                raise ManagerError(f"{jt.title} does not take '{action}'")
+            if job["status"] not in ("launched", "running"):
+                raise ManagerError(f"Job is not running (status: {job['status']})")
+            path = self.project_dir(puid) / juid / "control.json"
+            try:
+                current = json.loads(path.read_text()) if path.exists() else {}
+            except (OSError, ValueError):
+                current = {}
+            current[action] = time.time()
+            tmp = path.with_name(f".control.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(current))
+            os.replace(tmp, path)
+            self.db.update_job(puid, juid, message={"stop": "Stopping after the current cycle"}.get(action, f"Asked to {action}"))
+            return self.job(puid, juid)
+
     def clear_job(self, puid: str, juid: str) -> dict[str, Any]:
         with self.lock:
             job = self.job(puid, juid)

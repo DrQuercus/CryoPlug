@@ -274,6 +274,14 @@ attendent, puis repartent seuls.
   coordonnées en entrée, c'est un picking manuel (un jeu d'entraînement pour Topaz). Depuis un picking terminé,
   **Inspect and edit…** crée l'inspection avec le seuil affiché.
 
+- **Live preprocessing (RELION)** traite les films pendant la collecte, comme CryoSPARC Live : à chaque cycle
+  (toutes les 60 s par défaut), les nouveaux films du dossier sont importés, corrigés du mouvement, leur CTF estimée,
+  triés sur les seuils donnés et, au choix, pickés (LoG ou Topaz) et extraits — seuls les nouveaux films sont traités
+  (`--only_do_unfinished`, comme un job RELION continué). Le panneau montre la session en direct : films, micrographies
+  acceptées et rejetées, particules, cadence par heure, histogrammes de CTF et de mouvement, navigateur d'expositions et
+  picks. **Stop after this cycle** traite les derniers films arrivés puis termine le job avec ses sorties
+  (micrographies acceptées, toutes les micrographies, rejetées, picks, particules) pour la suite.
+
 ### 2.4 Sélectionner les classes 2D comme dans CryoSPARC
 
 - La **2D classification** montre ses moyennes pendant le calcul. Chaque vignette porte le numéro de la classe, son

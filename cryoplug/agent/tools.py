@@ -1229,6 +1229,20 @@ def kill_job(s: Session, a: Args) -> str:
     return f"{p['uid']}/{job['uid']}: {job['status']} → {after['status']}" + (f" ({after['message']})" if after.get("message") else "")
 
 
+@tool("stop_after_cycle", "Stop a live job, keeping its outputs", """
+Ask a job that works in cycles (live preprocessing, relion_live) to process the movies arrived meanwhile and stop,
+with its outputs (micrographs, picks, particles) for the next jobs; kill_job would discard them. Ask the person first
+unless they asked for it: the collection may still be running.""",
+      {"project": PROJECT, "job": JOB}, ("project", "job"), read_only=False, destructive=False, idempotent=True)
+def stop_after_cycle(s: Session, a: Args) -> str:
+    p, job = project_and_job(s, a)
+    if job["status"] not in ("launched", "running"):
+        return f"{job['uid']} is {job['status']}: not running."
+    after = s.post(f"/api/projects/{p['uid']}/jobs/{job['uid']}/control", {"action": "stop"})
+    return (f"{p['uid']}/{job['uid']}: {after.get('message') or 'stop asked'}. It finishes its cycle first: wait_for_jobs "
+            "follows it to the end.")
+
+
 @tool("clear_job", "Reset a failed job", """
 Reset a failed or killed job to building state, deleting its files, so that update_job can fix it and queue_job
 run it again. Completed jobs are not cleared: clone_job runs a copy instead and keeps the results.""",

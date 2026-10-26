@@ -897,6 +897,7 @@ Un jeton se révoque dans *Settings › AI agents* ou avec `cryoplug user token 
 | `find_outputs`, `create_job`, `update_job`, `queue_job`, `clone_job` | brancher les sorties (`"J3.map_sharp"`, ou `"J3"` : la bonne sortie est choisie), créer, modifier, mettre en file |
 | `get_job`, `get_job_log`, `get_job_images`, `wait_for_jobs` | résultats (métriques, tableaux, courbes résumées et seuils franchis), journal, images, attente avec progression |
 | `kill_job`, `clear_job` | arrêter un job ; remettre en préparation un job en échec |
+| `stop_after_cycle` | arrêter un job « live » après son cycle en cours, avec ses sorties |
 | `list_workflows`, `apply_workflow` | les chaînes complètes prêtes à l'emploi |
 | `browse_server_files`, `list_job_files`, `read_project_file`, `map_info` | trouver les données, lire les fichiers texte, en-tête d'une carte |
 | `upload_file` | envoyer un fichier ou un dossier de l'ordinateur de l'assistant dans le projet (reprise, pas de doublon) ; répond le job d'import à créer |

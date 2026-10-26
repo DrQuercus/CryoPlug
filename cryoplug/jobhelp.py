@@ -290,6 +290,32 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "next": ["relion_curate", "relion_autopick"],
     },
+    "relion_live": {
+        "purpose": "Traite les films pendant la collecte, comme CryoSPARC Live : à chaque cycle, les nouveaux films du "
+                   "dossier sont importés, corrigés du mouvement, leur CTF estimée, triés sur des seuils et, au choix, "
+                   "pickés et extraits (les jobs RELION de CryoPlug avec --only_do_unfinished). Le panneau suit la "
+                   "session : comptes, cadence, CTF, défocus, mouvement, glace, expositions et picks ; « Stop after this "
+                   "cycle » termine le job avec ses sorties.",
+        "when": [
+            "Pendant une session au microscope : juger la grille et la glace tout de suite, ajuster la collecte.",
+            "Arriver à la fin de la collecte avec des micrographies triées et des particules prêtes pour la 2D.",
+        ],
+        "avoid": [
+            "Un dossier où les films arrivent incomplets sans délai : réglez « A movie is complete after » (30 s par "
+            "défaut) d'après la vitesse d'écriture.",
+            "Des seuils de tri trop stricts au début : les micrographies rejetées restent dans « All micrographs » et se "
+            "trient à nouveau ensuite.",
+        ],
+        "inputs": "Aucune : le motif des films (ou leur dossier), la taille de pixel, la dose par image et la référence de gain.",
+        "tips": [
+            "Picking LoG avec les diamètres minimum et maximum de la particule ; extraction à boîte réduite (64-128 px) "
+            "pour une 2D rapide.",
+            "Kill arrête tout sans sorties ; « Stop after this cycle » traite les derniers films puis donne les sorties.",
+            "« Stop after no new movie for » arrête le job seul à la fin de la session.",
+            "Depuis le job terminé, « Curate… » dans les expositions crée un tri interactif de toutes les micrographies.",
+        ],
+        "next": ["relion_curate", "relion_class2d", "relion_pick_inspect", "relion_extract"],
+    },
     "relion_curate": {
         "purpose": "Trie les micrographies sur leur ajustement CTF, leur défocus, leur astigmatisme, leur mouvement et la glace "
                    "(comme « Manually Curate Exposures » de CryoSPARC). En mode interactif, le job attend : distributions "

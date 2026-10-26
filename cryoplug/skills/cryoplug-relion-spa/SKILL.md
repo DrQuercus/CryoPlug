@@ -37,6 +37,11 @@ and resolution per class), and use a `relion_curate` job with `mode=thresholds` 
 `mode=list` instead, after showing the person your choice. `relion_pick_inspect` (picks shown on the micrographs,
 threshold, particles removed or added by hand, or manual picking) is for people only.
 
+During a collection, `relion_live` runs steps 1–6 cycle after cycle on the movies that arrive (`movies` wildcard,
+`pixel_size`, `dose_per_frame`, `gain`, acceptance thresholds, optional `picking` and `extract`); it runs until
+`stop_after` minutes without a new movie, or until a person clicks "Stop after this cycle" (the API
+`POST /api/projects/{p}/jobs/{j}/control {"action": "stop"}`); its outputs exist once it stops.
+
 ## Settings that matter
 
 - Pixel size: that of the movies as recorded; for super-resolution movies bin by 2 in motion correction.

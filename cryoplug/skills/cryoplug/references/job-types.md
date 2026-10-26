@@ -63,6 +63,12 @@ built-in · interactive: a person works in it. In: micrographs: micrographs. Out
 Keeps the micrographs whose CTF fit, defocus, astigmatism, motion or ice are within limits, as CryoSPARC's Manually Curate Exposures: the job waits with the distributions (limits dragged on the histograms), a scatter plot, the table of the micrographs and each micrograph with its CTF fit and drift, accepted or rejected one by one. Or applies the thresholds below at once. The rejected micrographs are an output too.
 Usually followed by: `relion_autopick`, `relion_pick_inspect`, `relion_topaz_train`.
 
+### `relion_live` — Live preprocessing (RELION)
+RELION · GPU optional. In: none. Out: micrographs: micrographs, all_micrographs: micrographs, rejected: micrographs, movies: movies, coordinates: coordinates, particles: particles.
+
+Processes the movies while they are being collected, as CryoSPARC Live: at every cycle the new movies of the folder are imported, motion-corrected, CTF-estimated, sorted on thresholds and, if asked, picked and extracted (RELION's jobs with --only_do_unfinished). The panel follows the session: counts, rate, CTF fit, defocus, motion and ice, the exposures and the picks. 'Stop after this cycle' ends the job with its micrographs, picks and particles for the next jobs.
+Usually followed by: `relion_curate`, `relion_class2d`, `relion_pick_inspect`, `relion_extract`.
+
 ### `relion_motioncorr` — Motion correction (RELION)
 RELION · GPU optional. In: movies: movies. Out: micrographs: micrographs.
 

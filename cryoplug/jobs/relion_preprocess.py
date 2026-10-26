@@ -12,6 +12,7 @@ import json
 import os
 import re
 import struct
+import time
 from pathlib import Path
 from typing import Any
 
@@ -180,6 +181,8 @@ class RelionImport(JobType):
               help="Letters, digits and '-' only. Data sets imported separately keep their own optics groups."),
         Param("beamtilt_x", "float", 0.0, label="Beam tilt X", unit="mrad", advanced=True),
         Param("beamtilt_y", "float", 0.0, label="Beam tilt Y", unit="mrad", advanced=True),
+        Param("settle", "int", 0, label="Skip files changed in the last", unit="s", min=0, advanced=True,
+              help="Files still being written during a collection are left out. 0 = take every file."),
     ]
     outputs = [OutputDef("movies", "movies", "Movies"), OutputDef("micrographs", "micrographs", "Micrographs")]
 
@@ -195,6 +198,9 @@ class RelionImport(JobType):
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
         files = find_movies(p["movies"])
+        if int(p.get("settle") or 0) > 0:
+            cutoff = time.time() - int(p["settle"])
+            files = [f for f in files if f.stat().st_mtime <= cutoff]
         if not files:
             raise JobError(f"No file matches {p['movies']} (give a wildcard such as /data/Movies/*.tiff, or the folder)")
         movies = p["kind"] == "movies"

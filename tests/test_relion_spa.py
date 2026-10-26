@@ -5,6 +5,7 @@ auto-refine, mask, CTF refinement, polishing, local resolution, subsets, multi-b
 from __future__ import annotations
 
 import json
+import time
 
 import numpy as np
 import pytest
@@ -458,6 +459,79 @@ def test_relion_spa_validation(manager, spa):
     log = _command(manager, puid, mc)
     assert "--use_motioncor2 --motioncor2_exe" in log and "MotionCor2" in log and "--gpu 0" in log
     assert "--float16" not in log and "--grouping_for_ps" not in log
+
+
+def _live(manager, puid, juid):
+    path = manager.project_dir(puid) / juid / "report.json"
+    try:
+        sections = json.loads(path.read_text()).get("sections", [])
+    except (OSError, ValueError):  # not written yet (or being written)
+        return {}
+    return next((s for s in sections if s["kind"] == "live"), {})
+
+
+def _wait_for(manager, puid, juid, cond, timeout=180):
+    from cryoplug.scheduler import Scheduler
+    sched = Scheduler(manager)
+    end = time.time() + timeout
+    while time.time() < end:
+        sched.tick()
+        job = manager.job(puid, juid)
+        if job["status"] in ("failed", "killed"):
+            raise AssertionError(f"{job['error']}\n{log_of(manager, puid, juid)}")
+        if cond(job):
+            return job
+        time.sleep(0.3)
+    raise TimeoutError(f"{manager.job(puid, juid)['status']}: {_live(manager, puid, juid)}")
+
+
+def test_live_preprocessing(manager, movies, tmp_path):
+    """Live processing: the movies arriving in a folder are imported, motion-corrected, CTF-estimated, sorted, picked
+    and extracted at every cycle, only the new ones (--only_do_unfinished); Stop ends the job with its outputs."""
+    import shutil
+    folder = tmp_path / "session" / "Movies"
+    folder.mkdir(parents=True)
+
+    def arrive(*names):
+        for name in names:
+            tmp = folder / f".part_{name}"
+            shutil.copy(movies["folder"] / name, tmp)
+            tmp.replace(folder / name)  # complete at once, as a movie written by the microscope software
+    puid = manager.create_project("Live")["uid"]
+    job = manager.create_job(puid, "relion_live", {
+        "movies": str(folder / "*.mrc"), "pixel_size": 1.0, "dose_per_frame": 1.5, "gain": str(movies["gain"]),
+        "patches_x": 1, "patches_y": 1, "threads": 2, "mpi": 1, "interval": 2, "settle": 0, "max_ctf_resolution": 8.0,
+        "picking": "log", "diameter_min": 50, "diameter_max": 70, "extract": True, "box": 64, "rescale": 32}, {})
+    manager.queue_job(puid, job["uid"])
+    uid = job["uid"]
+    live = _wait_for(manager, puid, uid, lambda j: _live(manager, puid, uid).get("status") == "waiting for movies")
+    assert live["status"] == "running"
+    arrive("mic_001.mrc", "mic_002.mrc")
+    _wait_for(manager, puid, uid, lambda j: (_live(manager, puid, uid).get("counts") or {}).get("particles", 0) > 0)
+    counts = _live(manager, puid, uid)["counts"]
+    assert counts["movies"] == 2 and counts["ctf"] == 2 and counts["accepted"] == 2
+    arrive("mic_003.mrc", "mic_004.mrc")
+    _wait_for(manager, puid, uid, lambda j: (_live(manager, puid, uid).get("counts") or {}).get("ctf") == 4)
+    with pytest.raises(Exception, match="does not take"):
+        manager.control_job(puid, uid, "pause")
+    asked = manager.control_job(puid, uid, "stop")
+    assert asked["message"].startswith("Stopping")
+    done = _wait_for(manager, puid, uid, lambda j: j["status"] == "completed")
+    o = _outs(done)
+    assert o["all_micrographs"]["meta"]["n_micrographs"] == 4 and o["micrographs"]["meta"]["n_micrographs"] == 3
+    assert o["rejected"]["meta"]["n_micrographs"] == 1  # the worst CTF fit (12 Å)
+    assert o["movies"]["meta"]["n_movies"] == 4 and o["coordinates"]["meta"]["n_particles"] > 0
+    assert o["particles"]["meta"]["n_particles"] > 0 and o["particles"]["meta"]["box"] == 32
+    final = _live(manager, puid, uid)
+    assert final["status"] == "stopped" and final["counts"]["movies"] == 4 and final["cycles"] >= 3
+    log = log_of(manager, puid, uid)
+    for prog in ("relion_run_motioncorr", "relion_run_ctffind", "relion_autopick", "relion_preprocess"):
+        assert any(prog in line and "--only_do_unfinished" in line for line in log.splitlines()), prog
+    report = {s.get("key"): s for s in json.loads((manager.project_dir(puid) / uid / "report.json").read_text())["sections"]}
+    assert report["CTF:exposures"]["kind"] == "exposures" and report["CTF:exposures"]["thresholds"] == {"ctf_res": [None, 8.0]}
+    assert "Picking:picks" in report and "live_counts" in report
+    with pytest.raises(Exception, match="not running"):
+        manager.control_job(puid, uid, "stop")
 
 
 def test_relion_movies_to_map_workflow(manager, movies):
