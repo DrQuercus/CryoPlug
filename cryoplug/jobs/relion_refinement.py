@@ -16,7 +16,7 @@ from cryoplug import relion as rl
 from cryoplug.jobs import register
 from cryoplug.jobs.base import InputData, JobContext, JobError, JobType, OutputDef, Param, Slot, extra_args_param
 from cryoplug.jobs.relion import (
-    Progress, absolute_greyscale, finish_refinement, map_on_grid, outputs_of_refine, postprocess,
+    Progress, absolute_greyscale, finish_refinement, map_on_grid, outputs_of_refine, partial_refine_outputs, postprocess,
 )
 from cryoplug.jobs.relion_common import (
     SAMPLINGS, RelionJob, compute_params, continuation, continue_args, gpus, healpix, helical_check, helical_params,
@@ -84,10 +84,20 @@ class RelionRefine3D(RelionJob):
                OutputDef("map_sharp", "map", "Post-processed map"), OutputDef("mask", "mask", "Mask"),
                OutputDef("fsc", "fsc", "FSC"), OutputDef("particles", "particles", "Refined particles")]
     continuable = True
+    completable = True
 
     @classmethod
     def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
         return helical_check(params)
+
+    def finish_partial(self, ctx: JobContext) -> str:
+        parts = relion_particles(ctx, ctx.require("particles"))
+        mask_in = ctx.input("mask")
+        mask, mask_data = map_on_grid(ctx, mask_in, parts, "mask.mrc", mask=True) if mask_in else (None, None)
+        it, out = partial_refine_outputs(ctx)
+        finish_refinement(ctx, out, parts, (str(ctx.params["symmetry"]).strip() or "C1").upper(), mask, mask_data,
+                          Progress(ctx), kind="refine3d")
+        return f"iteration {it}"
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params

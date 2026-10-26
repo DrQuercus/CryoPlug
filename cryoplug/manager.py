@@ -598,6 +598,47 @@ class Manager:
                                queued_at=None, started_at=None, ended_at=None)
         return self.queue_job(puid, juid, lane, roots=roots)
 
+    def mark_complete(self, puid: str, juid: str) -> dict[str, Any]:
+        """A failed or killed iterative run made completed with the outputs of the last iteration it wrote, as
+        CryoSPARC's "Mark as complete": a 2D classification stopped early, a refinement that crashed near the end."""
+        with self.lock:
+            job = self.job(puid, juid)
+            jt = get_job_type(job["type"])
+            if not jt.completable:
+                raise ManagerError(f"{jt.title} cannot be marked as complete")
+            if job["status"] not in ("failed", "killed"):
+                raise ManagerError(f"Only a failed or killed job can be marked as complete (status: {job['status']})")
+            jdir = self.job_dir(puid, juid)
+            try:
+                spec = json.loads((jdir / "job.json").read_text())
+            except (OSError, ValueError):
+                raise ManagerError("The job never ran: nothing to use") from None
+            previous = job.get("message") or ""
+            self.db.update_job(puid, juid, message="Collecting the outputs of the last iteration…")
+        ctx = JobContext(spec, jdir)
+        ctx.outputs, ctx.highlights, ctx.report = [], [], {"sections": []}
+        ctx.log("Marking the job as complete: outputs of the last iteration written")
+        try:  # outside the lock: reading the particles of a large run takes a while
+            used = jt().finish_partial(ctx)
+        except JobError as exc:
+            ctx.log(str(exc), "error")
+            self.db.update_job(puid, juid, message=previous)
+            raise ManagerError(str(exc)) from None
+        except Exception as exc:
+            ctx.log(f"{type(exc).__name__}: {exc}", "error")
+            self.db.update_job(puid, juid, message=previous)
+            raise ManagerError(f"Could not use the last iteration: {type(exc).__name__}: {exc}") from None
+        with self.lock:
+            job = self.db.get_job(puid, juid)
+            if not job or job["status"] not in ("failed", "killed"):
+                raise ManagerError("The job changed meanwhile (cleared or run again): not marked as complete")
+            ctx.write_state(status="completed", error="", progress=1.0, message=f"Marked as complete ({used})",
+                            ended_at=job.get("ended_at") or time.time())
+            ctx.log(f"Job marked as complete ({used})")
+            self.sync_job_state(job)
+            self.db.update_job(puid, juid, status="completed", error="")  # a killed job too
+            return self.job(puid, juid)
+
     def clear_job(self, puid: str, juid: str) -> dict[str, Any]:
         with self.lock:
             job = self.job(puid, juid)

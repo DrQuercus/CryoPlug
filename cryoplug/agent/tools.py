@@ -1326,6 +1326,22 @@ def resume_job(s: Session, a: Args) -> str:
                      + _queue_state(s, p["uid"], s.job(p["uid"], job["uid"])))
 
 
+@tool("mark_job_complete", "Use the last iteration of a stopped run", """
+Mark a failed or killed iterative RELION job (2D or 3D classification, initial model, 3D auto-refine, local
+refinement) as complete with the outputs of the last iteration it wrote, as CryoSPARC's "Mark as complete": a 2D
+classification stopped early because the classes were good enough, or a refinement that crashed near the end (its
+map is then the average of the two half maps of that iteration). resume_job goes on with the run instead.""",
+      {"project": PROJECT, "job": JOB}, ("project", "job"), read_only=False, destructive=False, idempotent=False)
+def mark_job_complete(s: Session, a: Args) -> str:
+    p, job = project_and_job(s, a)
+    if job["status"] not in ("failed", "killed"):
+        raise ToolError(f"{job['uid']} is {job['status']}: only a failed or killed run can be marked as complete")
+    done = s.post(f"/api/projects/{p['uid']}/jobs/{job['uid']}/complete", {})
+    detail = s.job(p["uid"], job["uid"])
+    return "\n".join([f"{p['uid']}/{job['uid']}: {done.get('message') or 'completed'}."]
+                     + _job_summary(s, p["uid"], detail, []))
+
+
 @tool("clone_job", "Copy a job to run it again", """
 Copy a job (same type, inputs and parameters) as a new job in building state, optionally changing parameters,
 inputs or the title, and queueing it: to run it again with other settings while keeping the original.""",

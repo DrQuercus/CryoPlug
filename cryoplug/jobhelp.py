@@ -503,6 +503,9 @@ HELP: dict[str, dict[str, Any]] = {
             "T = 2 en 2D ; limiter la résolution de l'étape E (7-12 Å) évite le sur-ajustement des petites particules.",
             "Dans la galerie, cliquez des classes puis « Select these classes » : la sélection est créée et lancée.",
             "Filaments : « Helical processing » (diamètre du tube, recherche bimodale de ψ, décalages limités le long de l'axe).",
+            "Les classes suffisent avant la fin ? « Stop », puis « Mark as complete » : les moyennes et les particules de "
+            "la dernière itération écrite deviennent les sorties (VDAM écrit toutes les 10 itérations). « Resume » "
+            "relance un run arrêté de sa dernière itération.",
         ],
         "next": ["relion_select2d", "relion_class2d", "relion_particle_curate"],
     },
@@ -560,6 +563,8 @@ HELP: dict[str, dict[str, Any]] = {
             "Calcul en C1 puis symétrie appliquée : plus robuste que la symétrie imposée dès le départ.",
             "T = 4 et 200 mini-lots, comme le GUI de RELION.",
             "La carte est sur l'échelle de gris absolue de RELION : les jobs 3D suivants s'en servent sans --firstiter_cc.",
+            "Arrêté ou tombé en route : « Resume » reprend de la dernière itération, « Mark as complete » aligne et "
+            "symétrise le modèle de cette itération.",
         ],
         "next": ["relion_class3d_global", "relion_hetero_refine", "relion_refine3d"],
     },
@@ -584,7 +589,8 @@ HELP: dict[str, dict[str, Any]] = {
             "vue de chaque classe.",
             'Filaments : « Helical processing » avec twist et montée initiaux (et leur recherche locale).',
             "Un run en échec ou tué (mémoire, nœud perdu, temps de file dépassé) se relance de sa dernière itération : "
-            "« Resume » (le « Continue » de RELION, fichiers gardés, sorties sous run_ct<itération>).",
+            "« Resume » (le « Continue » de RELION, fichiers gardés, sorties sous run_ct<itération>) ; « Mark as "
+            "complete » le termine avec les sorties de cette itération (comme dans CryoSPARC).",
         ],
         "next": ["relion_refine3d", "relion_class3d_global", "relion_hetero_refine", "relion_particle_curate"],
     },
@@ -629,7 +635,8 @@ HELP: dict[str, dict[str, Any]] = {
             "Blush (RELION 5) pour les particules petites ou flexibles.",
             "Filaments : « Helical processing » impose la symétrie hélicoïdale (twist, montée) et peut l'affiner (recherche locale).",
             "Un run en échec ou tué (mémoire, nœud perdu, temps de file dépassé) se relance de sa dernière itération : "
-            "« Resume » (le « Continue » de RELION, fichiers gardés, sorties sous run_ct<itération>).",
+            "« Resume » (le « Continue » de RELION, fichiers gardés, sorties sous run_ct<itération>) ; « Mark as "
+            "complete » le termine avec les sorties de cette itération (comme dans CryoSPARC).",
         ],
         "next": ["relion_mask_create", "relion_ctf_refine", "relion_polish", "relion_postprocess", "relion_locres",
                  "relion_multibody", "relion_dynamight", "relion_local_refine"],

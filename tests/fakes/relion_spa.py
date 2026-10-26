@@ -632,10 +632,10 @@ def model_general(dim: int, k: int, box: int, apix: float, res: float) -> rl.Sta
                         [[str(dim), "2", str(box), f"{res:.6f}", f"{apix:.6f}", str(k)]], loop=False)
 
 
-def optimiser(path: str, data: str, model: str, root: str, halves: bool = False) -> None:
+def optimiser(path: str, data: str, model: str, root: str, halves: bool = False, grad: bool = False) -> None:
     t = rl.StarTable("optimiser_general", ["rlnOutputRootName", "rlnModelStarFile", "rlnExperimentalDataStarFile",
-                                           "rlnDoSplitRandomHalves"], [[root, model, data, "1" if halves else "0"]],
-                     loop=False)
+                                           "rlnDoSplitRandomHalves", "rlnDoStochasticGradientDescent"],
+                     [[root, model, data, "1" if halves else "0", "1" if grad else "0"]], loop=False)
     rl.write_star(path, [t])
 
 
@@ -644,16 +644,38 @@ def iterations_to_write(n: int, grad: bool, every: int) -> list[int]:
 
 
 def class2d(a: dict) -> None:
-    root = str(a["--o"])
-    tables = rl.read_star(str(a["--i"]))
+    k, n_iter = int(a.get("--K", 1)), int(a.get("--iter", 25))
+    class2d_iterations(str(a["--o"]), rl.read_star(str(a["--i"])), k, 1, n_iter, "--grad" in a,
+                       int(a.get("--grad_write_iter", 10)))
+
+
+def class2d_continue(a: dict) -> None:
+    """relion_refine --continue of a 2D classification: the iterations after the one given, under <root>_ct<it>."""
+    opt_path = str(a["--continue"])
+    m = re.search(r"_it(\d+)_optimiser\.star$", opt_path)
+    if not m:
+        die("--continue needs the optimiser.star of an iteration (_itNNN_optimiser.star)")
+    it = int(m.group(1))
+    opt = rl.read_star(opt_path)["optimiser_general"]
+    root = opt.value("rlnOutputRootName")
+    out = str(a.get("--o", "OLD_ctX"))
+    if out in ("OLD_ctX", root):
+        out = f"{root}_ct{it}"
+    n_iter = int(a.get("--iter", it + 3))
+    if n_iter <= it:
+        die(f"Nothing to do: the run is at iteration {it} of {n_iter}")
+    k = len(rl.read_star(opt.value("rlnModelStarFile"))["model_classes"].rows)
+    class2d_iterations(out, rl.read_star(opt.value("rlnExperimentalDataStarFile")), k, it + 1, n_iter,
+                       opt.value("rlnDoStochasticGradientDescent") == "1", 10)
+
+
+def class2d_iterations(root: str, tables: dict, k: int, first: int, n_iter: int, grad: bool, every: int) -> None:
     box, apix = rl.grid_from_star(tables)
     images = particle_images(tables)
-    k, n_iter = int(a.get("--K", 1)), int(a.get("--iter", 25))
-    grad = "--grad" in a
     labels = kmeans_classes(images, k)
     ptab = rl.particle_table(tables)
-    written = iterations_to_write(n_iter, grad, int(a.get("--grad_write_iter", 10)))
-    for it in range(1, n_iter + 1):
+    written = iterations_to_write(n_iter, grad, every)
+    for it in range(first, n_iter + 1):
         print(f" {'Gradient optimisation' if grad else 'Expectation'} iteration {it} of {n_iter}")
         if it not in written:
             continue
@@ -682,7 +704,7 @@ def class2d(a: dict) -> None:
         ptab.set_column("rlnMaxValueProbDistribution", np.clip(stats.beta(4, 3, len(labels)), 0, 1))
         ptab.set_column("rlnNrOfSignificantSamples", stats.integers(1, 60, len(labels)))
         rl.write_star(f"{last}_data.star", list(tables.values()))
-        optimiser(f"{last}_optimiser.star", f"{last}_data.star", f"{last}_model.star", root)
+        optimiser(f"{last}_optimiser.star", f"{last}_data.star", f"{last}_model.star", root, grad=grad)
 
 
 def blob_map(box: int, apix: float, shift: float = 0.0) -> np.ndarray:
@@ -752,7 +774,10 @@ def refine_spa(argv: list[str], legacy) -> None:
     a = parse(argv, "relion_refine")
     if "--continue" in a and "--multibody_masks" in a:
         return multibody(a)
-    if "--continue" in a:  # a run continued from an iteration (relion.py)
+    if "--continue" in a:  # a run continued from an iteration (relion.py; 2D classification here)
+        opt = rl.read_star(str(a["--continue"]))["optimiser_general"] if os.path.exists(str(a["--continue"])) else None
+        if opt is not None and "@" in str(rl.read_star(opt.value("rlnModelStarFile"))["model_classes"].column("rlnReferenceImage")[0]):
+            return class2d_continue(a)
         return legacy(argv)
     need(a, "--o")
     if "--grad" in a and _mpi() > 1:

@@ -198,6 +198,7 @@ class JobType:
     interactive: ClassVar[bool] = False
     controls: ClassVar[tuple[str, ...]] = ()  # requests a running job takes (e.g. "stop": finish after the current cycle)
     continuable: ClassVar[bool] = False  # a failed or killed run can go on from where it stopped (its files kept)
+    completable: ClassVar[bool] = False  # a failed or killed run can be marked as complete (see finish_partial)
     software: ClassVar[list[str]] = []  # names used in the methods draft
     params: ClassVar[list[Param]] = []
     inputs: ClassVar[list[Slot]] = []
@@ -221,6 +222,7 @@ class JobType:
             "interactive": cls.interactive,
             "controls": list(cls.controls),
             "continuable": cls.continuable,
+            "completable": cls.completable,
             "admin_only": cls.admin_only,
             "params": [p.to_dict() for p in cls.params],
             "inputs": [s.to_dict() for s in cls.inputs],
@@ -294,6 +296,11 @@ class JobType:
     # ---------------------------------------------------------- execution
     def run(self, ctx: "JobContext") -> None:
         raise NotImplementedError
+
+    def finish_partial(self, ctx: "JobContext") -> str:
+        """Iterative jobs (``completable``): the outputs of a failed or killed run from the last iteration it wrote, as
+        CryoSPARC's "Mark as complete" (run by the server, not by a worker). Returns what was used ("iteration 12")."""
+        raise JobError(f"{self.title} cannot be marked as complete")
 
     def prepare(self, ctx: "JobContext") -> bool | None:
         """Interactive jobs: prepare the session, then the job waits for the user. True: nothing left for the user

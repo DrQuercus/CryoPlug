@@ -169,6 +169,8 @@ class RelionClass2D(RelionJob):
     ]
     outputs = [OutputDef("classes", "class_averages", "2D class averages"),
                OutputDef("particles", "particles", "Classified particles")]
+    continuable = True
+    completable = True
 
     @classmethod
     def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
@@ -182,6 +184,15 @@ class RelionClass2D(RelionJob):
         diameter = mask_diameter(ctx, parts)
         vdam = p["algorithm"] == "vdam"
         iters = int(p["vdam_batches"] if vdam else p["em_iterations"])
+        cont = continuation(ctx)
+        if cont:  # a failed or killed run goes on from its last iteration, to the iterations asked
+            opt, it, root = cont
+            if it >= iters:
+                raise JobError(f"The run already reached iteration {it} of {iters}: nothing to continue")
+            ctx.progress(0.03, f"relion_refine: {p['classes']} classes, continued from iteration {it} to {iters}")
+            run_relion(ctx, continue_args(ctx, p, opt, root) + ["--iter", str(iters)], on_line=LiveClasses(ctx, iters))
+            self.finish(ctx)
+            return
         args = [*relion_command(ctx, "relion_refine", 1 if vdam else p["mpi"]), "--o", ctx.rel(ctx.path("run"))]
         if vdam:
             args += ["--grad", "--class_inactivity_threshold", "0.1", "--grad_write_iter", "10"]
@@ -219,6 +230,13 @@ class RelionClass2D(RelionJob):
             ["Mask diameter", f"{diameter:g} Å"], ["T", f"{p['tau2_fudge']:g}"]])
         ctx.progress(0.03, f"relion_refine: {p['classes']} classes")
         run_relion(ctx, args, on_line=LiveClasses(ctx, iters))
+        self.finish(ctx)
+
+    def finish_partial(self, ctx: JobContext) -> str:
+        return f"iteration {self.finish(ctx)}"
+
+    def finish(self, ctx: JobContext) -> int:
+        """Class averages and particles of the last iteration written."""
         it, files = rl.iteration_files(ctx.job_dir)
         missing = [f.name for f in files.values() if not f.exists()] if files else ["run_itNNN_optimiser.star"]
         if missing:
@@ -227,14 +245,16 @@ class RelionClass2D(RelionJob):
         class_section(ctx, records, it, files, actions=True)
         thumb = gallery_thumbnail(ctx, files, records, "classes")
         empty = sum(1 for r in records if r["particles"] == 0)
+        n = sum(r["particles"] for r in records)
         ctx.add_highlight("Classes", f"{len(records) - empty} of {len(records)}" if empty else str(len(records)))
-        ctx.add_highlight("Particles", f"{sum(r['particles'] for r in records):,}")
+        ctx.add_highlight("Particles", f"{n:,}")
         ctx.add_output("classes", "class_averages", [files["classes"], files["model"], files["data"], files["optimiser"]],
                        f"{len(records)} class averages", meta=classes_output_meta(ctx, files, records, "class2d"),
                        thumbnail=thumb)
-        ctx.add_output("particles", "particles", files["data"], f"Classified particles ({parts['n']:,})",
+        ctx.add_output("particles", "particles", files["data"], f"Classified particles ({n:,})",
                        meta=particles_out_meta(ctx, files["data"], "class2d", optimiser=ctx.rel(files["optimiser"]),
                                                model=ctx.rel(files["model"])))
+        return it
 
 
 # ------------------------------------------------------------------ class selection
@@ -574,13 +594,26 @@ class RelionInitialModel(RelionJob):
     outputs = [OutputDef("map", "map", "Initial model"), OutputDef("maps", "volume_series", "Class maps"),
                OutputDef("particles", "particles", "Particles")]
     cpu_param = "threads"
+    continuable = True
+    completable = True
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
         parts = relion_particles(ctx, ctx.require("particles"))
         diameter = mask_diameter(ctx, parts)
+        iters = int(p["iterations"])
+        cont = continuation(ctx)
+        if cont:  # a failed or killed run goes on from its last iteration
+            opt, it, root = cont
+            if it >= iters:
+                raise JobError(f"The run already reached iteration {it} of {iters}: nothing to continue")
+            ctx.progress(0.03, f"relion_refine: initial model, continued from iteration {it} to {iters}")
+            run_relion(ctx, continue_args(ctx, p, opt, root) + ["--iter", str(iters)],
+                       on_line=Progress(ctx, total=iters, end=0.85))
+            self.finish(ctx)
+            return
         sym = (str(p["symmetry"]).strip() or "C1").upper()
-        iters, k = int(p["iterations"]), int(p["classes"])
+        k = int(p["classes"])
         args = [*relion_command(ctx, "relion_refine", 1), "--o", ctx.rel(ctx.path("run")), "--iter", str(iters),
                 "--grad", "--denovo_3dref", "--i", parts["ref"]]
         if p["ctf"]:
@@ -600,6 +633,16 @@ class RelionInitialModel(RelionJob):
         args += ctx.split_extra()
         ctx.progress(0.03, f"relion_refine: initial model, {k} class(es)")
         run_relion(ctx, args, on_line=Progress(ctx, total=iters, end=0.85))
+        self.finish(ctx)
+
+    def finish_partial(self, ctx: JobContext) -> str:
+        return f"iteration {self.finish(ctx)}"
+
+    def finish(self, ctx: JobContext) -> int:
+        """The model of the last iteration written, on the symmetry axes and symmetrised; the class maps and particles."""
+        p = ctx.params
+        sym = (str(p["symmetry"]).strip() or "C1").upper()
+        k = int(p["classes"])
         it, files = rl.iteration_files(ctx.job_dir)
         if not it or not files["model"].exists():
             raise JobError("relion_refine wrote no run_itNNN_model.star (see the log)")
@@ -634,6 +677,7 @@ class RelionInitialModel(RelionJob):
         if files["data"].exists():
             ctx.add_output("particles", "particles", files["data"], f"Particles ({total:,})",
                            meta=particles_out_meta(ctx, files["data"], "inimodel", optimiser=ctx.rel(files["optimiser"])))
+        return it
 
 
 # ------------------------------------------------------------------ 3D classification
@@ -646,6 +690,7 @@ class RelionClass3DGlobal(RelionJob):
                    "searches, local ones, or none (classification with the poses kept). Every class gives a map and "
                    "its particles; Blush regularisation helps small or flexible particles.")
     continuable = True
+    completable = True
     inputs = [
         Slot("particles", ("particles",), "Particles"),
         Slot("map", ("map",), "Reference map", help="An initial model or a refined map: low-pass filtered by RELION.",
@@ -769,6 +814,14 @@ class RelionClass3DGlobal(RelionJob):
         if not it or not files["data"].exists():
             raise JobError("relion_refine wrote no run_itNNN_data.star (see the log)")
         class3d_outputs(ctx, files, it, k, sym)
+
+    def finish_partial(self, ctx: JobContext) -> str:
+        it, files = rl.iteration_files(ctx.job_dir)
+        if not it or not files["data"].exists():
+            raise JobError("No iteration was written: nothing to use (clear the job and run it again)")
+        k = len(rl.model_classes(files["model"])) if files["model"].exists() else int(ctx.params.get("classes") or 1)
+        class3d_outputs(ctx, files, it, k, (str(ctx.params.get("symmetry") or "").strip() or "C1").upper())
+        return f"iteration {it}"
 
 
 def class3d_outputs(ctx: JobContext, files: dict[str, Path], it: int, k: int, sym: str) -> None:

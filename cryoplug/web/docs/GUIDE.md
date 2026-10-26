@@ -374,9 +374,14 @@ une par ligne) et le mode *cluster* sépare les particules en groupes d'une stat
 
 ### 2.7 Conseils
 
-- Un **3D auto-refine** ou une **3D classification** en échec ou tué (mémoire, nœud perdu, temps de file dépassé) se
-  relance de sa dernière itération avec **Resume** dans l'en-tête du job : c'est le *Continue* de RELION
-  (`relion_refine --continue`), les fichiers sont gardés et les sorties écrites sous `run_ct<itération>`.
+- Une **classification 2D ou 3D**, un **modèle initial** ou un **3D auto-refine** en échec ou tué (mémoire, nœud perdu,
+  temps de file dépassé) se relance de sa dernière itération avec **Resume** dans l'en-tête du job : c'est le
+  *Continue* de RELION (`relion_refine --continue`), les fichiers sont gardés et les sorties écrites sous
+  `run_ct<itération>`.
+- **Mark as complete** (comme dans CryoSPARC) termine un tel job arrêté avec les sorties de sa dernière itération
+  écrite : une classification 2D arrêtée parce que les classes suffisent déjà, un raffinement tombé près de la fin
+  (sa carte est alors la moyenne des deux demi-cartes de cette itération, la FSC est calculée entre elles). Les jobs
+  suivants peuvent les utiliser aussitôt ; *Clear* relance toujours tout depuis le début.
 - Une carte raffinée en C1 qui montre une symétrie : **Align to symmetry axes (RELION)** (relion_align_symmetry) la
   tourne et la recentre sur les axes du groupe ponctuel (convention de RELION, axe principal selon z), avec la
   symétrie imposée si besoin ; elle sert ensuite de référence à un 3D auto-refine lancé avec cette symétrie.

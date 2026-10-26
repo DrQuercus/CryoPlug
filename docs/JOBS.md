@@ -498,6 +498,7 @@ Trie les particules en moyennes de classes 2D (relion_refine) : VDAM, l'algorith
 - T = 2 en 2D ; limiter la résolution de l'étape E (7-12 Å) évite le sur-ajustement des petites particules.
 - Dans la galerie, cliquez des classes puis « Select these classes » : la sélection est créée et lancée.
 - Filaments : « Helical processing » (diamètre du tube, recherche bimodale de ψ, décalages limités le long de l'axe).
+- Les classes suffisent avant la fin ? « Stop », puis « Mark as complete » : les moyennes et les particules de la dernière itération écrite deviennent les sorties (VDAM écrit toutes les 10 itérations). « Resume » relance un run arrêté de sa dernière itération.
 
 **Étapes suivantes** : Select 2D classes, 2D classification (RELION), Curate particles (statistics)
 
@@ -526,7 +527,7 @@ Trie les particules en classes 3D contre une référence (relion_refine --K) : r
 - Les cartes des classes se jouent comme une série dans le visualiseur 3D.
 - Le rapport suit la part de chaque classe au fil des itérations (convergence) et montre les directions de vue de chaque classe.
 - Filaments : « Helical processing » avec twist et montée initiaux (et leur recherche locale).
-- Un run en échec ou tué (mémoire, nœud perdu, temps de file dépassé) se relance de sa dernière itération : « Resume » (le « Continue » de RELION, fichiers gardés, sorties sous run_ct<itération>).
+- Un run en échec ou tué (mémoire, nœud perdu, temps de file dépassé) se relance de sa dernière itération : « Resume » (le « Continue » de RELION, fichiers gardés, sorties sous run_ct<itération>) ; « Mark as complete » le termine avec les sorties de cette itération (comme dans CryoSPARC).
 
 **Étapes suivantes** : 3D auto-refine (RELION), 3D classification (RELION), Heterogeneous refinement (RELION), Curate particles (statistics)
 
@@ -658,7 +659,7 @@ Raffinement 3D gold-standard (relion_refine --auto_refine) : recherches globales
 - « Solvent-flattened FSC » (avec un masque) aide une petite particule dans une grande boîte.
 - Blush (RELION 5) pour les particules petites ou flexibles.
 - Filaments : « Helical processing » impose la symétrie hélicoïdale (twist, montée) et peut l'affiner (recherche locale).
-- Un run en échec ou tué (mémoire, nœud perdu, temps de file dépassé) se relance de sa dernière itération : « Resume » (le « Continue » de RELION, fichiers gardés, sorties sous run_ct<itération>).
+- Un run en échec ou tué (mémoire, nœud perdu, temps de file dépassé) se relance de sa dernière itération : « Resume » (le « Continue » de RELION, fichiers gardés, sorties sous run_ct<itération>) ; « Mark as complete » le termine avec les sorties de cette itération (comme dans CryoSPARC).
 
 **Étapes suivantes** : Mask creation (RELION), CTF refinement (RELION), Bayesian polishing (RELION), RELION post-processing, Local resolution (RELION), 3D multi-body refinement (RELION), DynaMight flexibility (RELION), RELION local refinement
 
@@ -684,6 +685,7 @@ Calcule une première carte 3D sans référence (relion_refine --grad --denovo_3
 - Calcul en C1 puis symétrie appliquée : plus robuste que la symétrie imposée dès le départ.
 - T = 4 et 200 mini-lots, comme le GUI de RELION.
 - La carte est sur l'échelle de gris absolue de RELION : les jobs 3D suivants s'en servent sans --firstiter_cc.
+- Arrêté ou tombé en route : « Resume » reprend de la dernière itération, « Mark as complete » aligne et symétrise le modèle de cette itération.
 
 **Étapes suivantes** : 3D classification (RELION), Heterogeneous refinement (RELION), 3D auto-refine (RELION)
 

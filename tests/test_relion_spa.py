@@ -1202,3 +1202,83 @@ def test_micrograph_pictures_and_sessions_over_the_api(manager, spa):
         d = client.get(f"/api/projects/{puid}/drift", params={"path": motion}).json()
         assert len(d["x"]) == len(d["y"]) == 6 and d["x"][0] == 0
         assert client.get(f"/api/projects/{puid}/drift", params={"path": mic}).status_code == 400
+
+
+def test_mark_complete_and_resume_2d(manager, spa):
+    """A stopped iterative run gives the outputs of its last iteration (CryoSPARC's Mark as complete); a 2D
+    classification goes on from its last iteration too."""
+    import os
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = _ref(ctf, "micrographs")
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1},
+                {"micrographs": mics})
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1},
+               {"micrographs": mics, "coordinates": _ref(pick, "coordinates")})
+    parts = _ref(ext, "particles")
+    MapVolume(data=np.random.default_rng(5).normal(0, 1, (32, 32, 32)).astype(np.float32), voxel=np.full(3, 2.0)).write(pdir / "ref.mrc")
+    ref = _ref(_run(manager, puid, "import_maps", {"map": str(pdir / "ref.mrc"), "compute_fsc": False}), "map")
+
+    def crash(job, keep, status="failed"):  # as if the run had stopped after iteration ``keep``
+        for f in (pdir / job["uid"]).iterdir():
+            m = re.match(r"run_(?:ct\d+_)?it(\d+)_", f.name)
+            if (m and int(m.group(1)) > keep) or re.match(r"run_(class001|half\d_class001_unfil|data|model|optimiser)\.", f.name):
+                os.unlink(f)
+        manager.db.update_job(puid, job["uid"], status=status, outputs=[], highlights=[], error="relion_refine exited with code 1")
+
+    # 2D classification: resumed (EM, 5 iterations, stopped after 2), then marked complete after a second stop
+    c2 = _run(manager, puid, "relion_class2d", {"classes": 3, "algorithm": "em", "em_iterations": 5, "threads": 1, "gpus": 0},
+              {"particles": parts})
+    with pytest.raises(Exception, match="failed or killed"):
+        manager.mark_complete(puid, c2["uid"])
+    crash(c2, 2)
+    manager.continue_job(puid, c2["uid"])
+    run_until_done(manager, puid, [c2["uid"]], timeout=180)
+    done = manager.job(puid, c2["uid"])
+    assert done["status"] == "completed", done["error"]
+    assert f"--continue {c2['uid']}/run_it002_optimiser.star --o {c2['uid']}/run_ct2" in _command(manager, puid, done)
+    assert "--iter 5" in _command(manager, puid, done)
+    assert _outs(done)["particles"]["path"].endswith("run_ct2_it005_data.star")
+
+    crash(c2, 3, status="killed")
+    marked = manager.mark_complete(puid, c2["uid"])
+    assert marked["status"] == "completed" and marked["error"] == "" and marked["message"] == "Marked as complete (iteration 3)"
+    out = _outs(marked)
+    assert out["particles"]["path"].endswith("run_ct2_it003_data.star") and out["classes"]["meta"]["n_classes"] == 3
+    assert "Job marked as complete (iteration 3)" in (pdir / c2["uid"] / "job.log").read_text()
+    with pytest.raises(Exception, match="failed or killed"):
+        manager.mark_complete(puid, c2["uid"])
+
+    # 3D auto-refine stopped at iteration 2: the map is the average of that iteration's half maps
+    r3 = _run(manager, puid, "relion_refine3d", {"threads": 1, "gpus": 0}, {"particles": parts, "map": ref})
+    crash(r3, 2)
+    marked = manager.mark_complete(puid, r3["uid"])
+    assert marked["status"] == "completed", marked
+    out = _outs(marked)
+    assert {"map", "half_maps", "particles"} <= set(out) and out["particles"]["path"].endswith("run_it002_data.star")
+    assert (pdir / r3["uid"] / "run_it002_halves_average.mrc").exists()
+    assert {h["label"]: h["value"] for h in marked["highlights"]}["Stopped at"] == "iteration 2"
+    assert any("FSC" in s["title"] for s in _sections(manager, puid, marked, "plot"))
+
+    # 3D classification and initial model
+    c3 = _run(manager, puid, "relion_class3d_global", {"classes": 2, "iterations": 4, "threads": 1, "gpus": 0},
+              {"particles": parts, "map": ref})
+    crash(c3, 2)
+    out = _outs(manager.mark_complete(puid, c3["uid"]))
+    assert out["map_1"]["path"].endswith("run_it002_class001.mrc") and out["particles"]["path"].endswith("run_it002_data.star")
+    ini = _run(manager, puid, "relion_initial_model", {"iterations": 20, "classes": 1, "symmetry": "C2", "threads": 1, "gpus": 0},
+               {"particles": parts})
+    manager.db.update_job(puid, ini["uid"], status="killed", outputs=[])
+    out = _outs(manager.mark_complete(puid, ini["uid"]))
+    assert out["map"]["meta"]["symmetry"] == "C2" and out["particles"]["path"].endswith("run_it020_data.star")
+
+    # jobs that cannot be marked complete, or with nothing written
+    sel = _run(manager, puid, "relion_select3d", {"mode": "list", "classes": "1"}, {"particles": _ref(c3, "particles")})
+    manager.db.update_job(puid, sel["uid"], status="failed")
+    with pytest.raises(Exception, match="cannot be marked as complete"):
+        manager.mark_complete(puid, sel["uid"])
+    empty = manager.create_job(puid, "relion_refine3d", {"threads": 1, "gpus": 0}, {"particles": parts, "map": ref})
+    manager.db.update_job(puid, empty["uid"], status="killed")
+    with pytest.raises(Exception, match="never ran"):
+        manager.mark_complete(puid, empty["uid"])
+    assert manager.job(puid, empty["uid"])["status"] == "killed"

@@ -22,7 +22,7 @@ import numpy as np
 from cryoplug import relion as rl
 from cryoplug.jobs import register
 from cryoplug.jobs.base import InputData, JobContext, JobError, JobType, OutputDef, Param, Slot, extra_args_param
-from cryoplug.mrc import MapVolume, fsc_to_emdb_xml
+from cryoplug.mrc import MapVolume, fsc, fsc_to_emdb_xml
 
 TOOL = "relion"
 LOCAL_STEPS = ["1.8°", "0.9°", "3.7°", "7.5°"]
@@ -325,6 +325,26 @@ def outputs_of_refine(ctx: JobContext, root: str = "run") -> dict[str, Path]:
     return found
 
 
+def partial_refine_outputs(ctx: JobContext, root: str = "run") -> tuple[int, dict[str, Path]]:
+    """An auto-refinement that stopped (Mark as complete): the half maps of the last iteration written, their average
+    as the map, and its particles and model (the halves were never joined in a last iteration)."""
+    it, stem = rl.iteration_stem(ctx.job_dir, root, suffix="_half1_model.star")
+    if not it:
+        raise JobError("No iteration was written: nothing to use (clear the job and run it again)")
+    out = {"half1": ctx.path(f"{stem}_half1_class001.mrc"), "half2": ctx.path(f"{stem}_half2_class001.mrc"),
+           "data": ctx.path(f"{stem}_data.star"), "model": ctx.path(f"{stem}_half1_model.star"),
+           "optimiser": ctx.path(f"{stem}_optimiser.star")}
+    missing = [f.name for f in out.values() if not f.exists()]
+    if missing:
+        raise JobError(f"Iteration {it} is incomplete ({', '.join(missing)} missing)")
+    a, b = MapVolume.read(out["half1"]), MapVolume.read(out["half2"])
+    out["map"] = ctx.path(f"{stem}_halves_average.mrc")
+    a.like(((a.data + b.data) / 2).astype(np.float32)).write(out["map"])
+    ctx.log(f"Iteration {it}: map = average of the two half maps ({out['half1'].name}, {out['half2'].name})")
+    ctx.add_highlight("Stopped at", f"iteration {it}")
+    return it, out
+
+
 # ------------------------------------------------------------- local refinement
 @register
 class RelionLocalRefine(RelionJob):
@@ -386,6 +406,7 @@ class RelionLocalRefine(RelionJob):
         OutputDef("fsc", "fsc", "FSC"),
         OutputDef("particles", "particles", "Refined particles"),
     ]
+    completable = True
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
@@ -434,12 +455,25 @@ class RelionLocalRefine(RelionJob):
         out = outputs_of_refine(ctx)
         finish_refinement(ctx, out, parts, sym, mask, mask_data, progress, kind="refine3d")
 
+    def finish_partial(self, ctx: JobContext) -> str:
+        parts = prepare_particles(ctx, ctx.require("particles"))
+        mask_in = ctx.input("mask")
+        mask, mask_data = map_on_grid(ctx, mask_in, parts, "mask.mrc", mask=True) if mask_in else (None, None)
+        it, out = partial_refine_outputs(ctx)
+        finish_refinement(ctx, out, parts, inherited_symmetry(ctx, parts, "map", "mask"), mask, mask_data, Progress(ctx),
+                          kind="refine3d")
+        return f"iteration {it}"
+
 
 def finish_refinement(ctx: JobContext, out: dict[str, Path], parts: dict[str, Any], sym: str, mask: Path | None,
                       mask_data: np.ndarray | None, progress: Progress, kind: str) -> None:
     """Outputs of an auto-refinement: FSC, optional post-processing, maps on the consensus grid, particles."""
     p = ctx.params
     model = rl.model_fsc(out["model"])
+    if not model.get("fsc") and out["half1"].exists() and out["half2"].exists():  # e.g. the halves of an iteration
+        a, b = MapVolume.read(out["half1"]), MapVolume.read(out["half2"])
+        freq, curve = fsc(a.data, b.data, a.voxel)
+        model["frequency"], model["fsc"] = freq[1:].tolist(), curve[1:].tolist()
     resolution = None
     if model.get("fsc"):
         resolution = rl.resolution_at(model["frequency"], model["fsc"])
@@ -677,6 +711,7 @@ class RelionClass3D(RelionJob):
         OutputDef("class_1", "particles", "Particles of class 1"),
         OutputDef("map_1", "map", "Map of class 1"),
     ]
+    completable = True
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
@@ -713,7 +748,15 @@ class RelionClass3D(RelionJob):
         progress = Progress(ctx, total=iters)
         ctx.progress(0.05, "relion_refine (classification)")
         run_relion(ctx, args, on_line=progress)
-        _it, stem = rl.iteration_stem(ctx.job_dir, suffix="_data.star")
+        self.finish(ctx, parts, sym, k)
+
+    def finish_partial(self, ctx: JobContext) -> str:
+        parts = prepare_particles(ctx, ctx.require("particles"))
+        return f"iteration {self.finish(ctx, parts, inherited_symmetry(ctx, parts, 'map'), int(ctx.params['classes']))}"
+
+    def finish(self, ctx: JobContext, parts: dict[str, Any], sym: str, k: int) -> int:
+        """Maps and particles of the classes of the last iteration written."""
+        it, stem = rl.iteration_stem(ctx.job_dir, suffix="_data.star")
         if not stem:
             raise JobError("RELION did not write any run_it###_data.star (see the log)")
         data_star = ctx.path(f"{stem}_data.star")
@@ -749,6 +792,7 @@ class RelionClass3D(RelionJob):
             ctx.log(f"Estimated resolution of class 1: {model['estimated_resolution']:.2f} Å")
         ctx.add_table("Classes", ["Class", "Particles", "Fraction"], rows)
         ctx.add_highlight("Classes", len(maps))
+        return it
 
 
 # ------------------------------------------------------------- post-processing

@@ -94,6 +94,7 @@ export const api = {
   killJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/kill`),
   clearJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/clear`),
   resumeJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/continue`, {}),
+  completeJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/complete`, {}),
   cloneJob: (p, j, body = {}) => request('POST', `/api/projects/${p}/jobs/${j}/clone`, inWorkspace(body)),
   cloneJobs: (p, body) => request('POST', `/api/projects/${p}/clone`, inWorkspace(body)),
   workspaces: (p) => request('GET', `/api/projects/${p}/workspaces`),

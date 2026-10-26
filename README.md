@@ -926,7 +926,7 @@ Un jeton se révoque dans *Settings › AI agents* ou avec `cryoplug user token 
 | `get_job`, `get_job_log`, `get_job_images`, `wait_for_jobs` | résultats (métriques, tableaux, courbes résumées et seuils franchis), journal, images, attente avec progression |
 | `kill_job`, `clear_job` | arrêter un job ; remettre en préparation un job en échec |
 | `control_job` | piloter un job « live » : arrêt après le cycle en cours (avec ses sorties), pause, reprise, nouvelles limites d'acceptation |
-| `resume_job` | relancer un raffinement ou une classification 3D RELION en échec depuis sa dernière itération (Continue de RELION) |
+| `resume_job`, `mark_job_complete` | relancer une classification, un modèle initial ou un raffinement RELION en échec depuis sa dernière itération (Continue de RELION), ou le terminer avec les sorties de cette itération (Mark as complete de CryoSPARC) |
 | `clone_jobs`, `create_workspace` | copier une chaîne de jobs (les copies reliées entre elles) ; ranger des jobs dans un workspace (`get_project workspace=W1`, étiquettes avec `update_job tags=`) |
 | `list_workflows`, `apply_workflow` | les chaînes complètes prêtes à l'emploi |
 | `browse_server_files`, `list_job_files`, `read_project_file`, `map_info` | trouver les données, lire les fichiers texte, en-tête d'une carte |
