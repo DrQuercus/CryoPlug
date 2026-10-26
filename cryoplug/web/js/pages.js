@@ -2,7 +2,7 @@
 import { api } from './api.js';
 import { browseFiles } from './filebrowser.js';
 import { navigate, setJobtypes, state } from './state.js';
-import { ago, avatar, btn, clear, confirmDialog, copyText, guard, h, icon, modal, popupMenu, shortPath, toast } from './ui.js';
+import { ago, avatar, btn, clear, confirmDialog, copyText, fmtSize, guard, h, icon, modal, popupMenu, shortPath, toast } from './ui.js';
 
 // Who may do what (the server checks again): administrators and owners manage a project, and without
 // accounts whoever opened CryoPlug may do everything.
@@ -49,7 +49,8 @@ export async function renderProjects(content) {
     p.description ? h('div', { class: 'project-card-desc' }, p.description) : null,
     h('div', { class: 'project-path', title: p.dir }, icon('folder'), h('span', {}, shortPath(p.dir, 40))),
     people,
-    h('div', { class: 'card-foot' }, h('span', {}, `${p.num_jobs} job${p.num_jobs === 1 ? '' : 's'}`), h('span', {}, `updated ${ago(p.updated_at)}`)));
+    h('div', { class: 'card-foot' }, h('span', { title: p.disk_bytes ? 'Disk used by the job folders' : null },
+      `${p.num_jobs} job${p.num_jobs === 1 ? '' : 's'}${p.disk_bytes ? ` · ${fmtSize(p.disk_bytes)}` : ''}`), h('span', {}, `updated ${ago(p.updated_at)}`)));
   });
   clear(content,
     h('div', { class: 'toolbar' }, btn('New project', () => newProjectDialog(), { cls: 'primary', ic: 'plus' }), h('span', { class: 'grow' }),

@@ -106,6 +106,7 @@ MIGRATIONS = (
     ("sessions", "label", "TEXT DEFAULT ''"),  # API tokens (scripts, AI agents) have one; browser sessions none
     ("jobs", "workspaces", "TEXT DEFAULT '[]'"),
     ("jobs", "tags", "TEXT DEFAULT '[]'"),
+    ("jobs", "disk_bytes", "INTEGER"),  # size of the job folder when it last changed (None: not measured)
 )
 
 JSON_FIELDS = {"params", "inputs", "outputs", "resources", "highlights", "gpus", "requested", "workspaces", "tags"}
@@ -124,6 +125,7 @@ JOB_COLUMNS = (
     "project_uid", "uid", "num", "type", "title", "status", "params", "inputs", "outputs", "lane",
     "resources", "highlights", "notes", "progress", "message", "error", "pid", "cluster_job_id",
     "gpus", "created_at", "queued_at", "started_at", "ended_at", "created_by", "requested", "workspaces", "tags",
+    "disk_bytes",
 )
 PROJECT_COLUMNS = ("uid", "num", "title", "description", "dir", "created_at", "updated_at", "archived", "job_counter",
                    "owner", "members")
@@ -207,15 +209,15 @@ class Database:
         sql += " ORDER BY num DESC"
         projects = [self._project_from_row(r) for r in self._all(sql)]
         counts = {
-            r["project_uid"]: (r["n"], r["active"])
+            r["project_uid"]: (r["n"], r["active"], r["bytes"])
             for r in self._all(
                 "SELECT project_uid, COUNT(*) AS n, "
-                "SUM(CASE WHEN status IN ('queued','launched','running','waiting') THEN 1 ELSE 0 END) AS active "
-                "FROM jobs GROUP BY project_uid"
+                "SUM(CASE WHEN status IN ('queued','launched','running','waiting') THEN 1 ELSE 0 END) AS active, "
+                "SUM(COALESCE(disk_bytes, 0)) AS bytes FROM jobs GROUP BY project_uid"
             )
         }
         for p in projects:
-            p["num_jobs"], p["num_active"] = counts.get(p["uid"], (0, 0))
+            p["num_jobs"], p["num_active"], p["disk_bytes"] = counts.get(p["uid"], (0, 0, 0))
         return projects
 
     def update_project(self, uid: str, **fields: Any) -> None:

@@ -1131,11 +1131,14 @@ def get_job(s: Session, a: Args) -> str:
     jt = s.jobtypes().get(job["type"], {})
     lines = [f"{p['uid']}/{job['uid']} “{job['title']}” — {job['type']} ({jt.get('title', '')}) — status {job['status']}"
              + (f" {float(job['progress']):.0%}" if job["status"] == "running" and job.get("progress") else "")]
-    lines.append(timing(job))
+    lines.append(timing(job) + (f"; folder {size(job['disk_bytes'])}" if job.get("disk_bytes") else ""))
     if job.get("message") and job["status"] not in ("completed",):
         lines.append(f"Message: {short(job['message'], 300)}")
     if job.get("notes"):
         lines.append(f"Notes: {short(job['notes'], 500)}")
+    if job.get("tags") or job.get("workspaces"):
+        lines.append(", ".join(x for x in (f"Tags: {', '.join(job.get('tags') or [])}" if job.get("tags") else "",
+                                           f"workspaces: {', '.join(job.get('workspaces') or [])}" if job.get("workspaces") else "") if x))
     if job.get("input_details"):
         lines.append("Inputs:")
         for slot, ref in job["input_details"].items():

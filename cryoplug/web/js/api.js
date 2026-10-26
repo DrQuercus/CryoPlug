@@ -95,6 +95,8 @@ export const api = {
   clearJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/clear`),
   resumeJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/continue`, {}),
   completeJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/complete`, {}),
+  clearIntermediate: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/clear-intermediate`, {}),
+  measureJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/measure`, {}),
   cloneJob: (p, j, body = {}) => request('POST', `/api/projects/${p}/jobs/${j}/clone`, inWorkspace(body)),
   cloneJobs: (p, body) => request('POST', `/api/projects/${p}/clone`, inWorkspace(body)),
   workspaces: (p) => request('GET', `/api/projects/${p}/workspaces`),

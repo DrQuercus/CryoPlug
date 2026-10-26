@@ -199,6 +199,9 @@ class JobType:
     controls: ClassVar[tuple[str, ...]] = ()  # requests a running job takes (e.g. "stop": finish after the current cycle)
     continuable: ClassVar[bool] = False  # a failed or killed run can go on from where it stopped (its files kept)
     completable: ClassVar[bool] = False  # a failed or killed run can be marked as complete (see finish_partial)
+    # regex of the per-iteration files of the job folder (group "it": the iteration): all but the last iteration are
+    # intermediate results, which can be cleared once the job is over (CryoSPARC's "Clear intermediate results")
+    intermediate: ClassVar[str] = ""
     software: ClassVar[list[str]] = []  # names used in the methods draft
     params: ClassVar[list[Param]] = []
     inputs: ClassVar[list[Slot]] = []
@@ -223,6 +226,7 @@ class JobType:
             "controls": list(cls.controls),
             "continuable": cls.continuable,
             "completable": cls.completable,
+            "intermediate": bool(cls.intermediate),
             "admin_only": cls.admin_only,
             "params": [p.to_dict() for p in cls.params],
             "inputs": [s.to_dict() for s in cls.inputs],
@@ -425,6 +429,25 @@ def phenix_fix(tail: Iterable[str], args: list[str]) -> str | None:
     if any(a.split("=", 1)[0].strip().split(".")[-1] == key for a in args if "=" in a):
         return None
     return f"{key}=True"
+
+
+def folder_size(path: str | Path) -> int:
+    """Bytes in a folder and its sub-folders; links are counted as links, never followed (imports link the raw data)."""
+    total, todo = 0, [str(path)]
+    while todo:
+        try:
+            with os.scandir(todo.pop()) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            todo.append(entry.path)
+                        else:
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
 
 
 class JobContext:

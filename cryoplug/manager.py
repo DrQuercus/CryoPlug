@@ -18,7 +18,7 @@ from cryoplug import tools as toolmod
 from cryoplug.config import SLURM_MEM_RE, SLURM_TIME_RE, Config, LaneConfig
 from cryoplug.db import Database
 from cryoplug.jobs import get_job_type
-from cryoplug.jobs.base import ACTIVE_STATUSES, JobContext, JobError, split_paths
+from cryoplug.jobs.base import ACTIVE_STATUSES, JobContext, JobError, folder_size, split_paths
 from cryoplug.lanes import make_lane
 from cryoplug.users import path_allowed
 
@@ -633,7 +633,7 @@ class Manager:
             if not job or job["status"] not in ("failed", "killed"):
                 raise ManagerError("The job changed meanwhile (cleared or run again): not marked as complete")
             ctx.write_state(status="completed", error="", progress=1.0, message=f"Marked as complete ({used})",
-                            ended_at=job.get("ended_at") or time.time())
+                            ended_at=job.get("ended_at") or time.time(), disk_bytes=folder_size(jdir))
             ctx.log(f"Job marked as complete ({used})")
             self.sync_job_state(job)
             self.db.update_job(puid, juid, status="completed", error="")  # a killed job too
@@ -649,8 +649,64 @@ class Manager:
                 _rm_contents(jdir)
             self.db.update_job(puid, juid, status="building", outputs=[], highlights=[], progress=0.0, message="",
                                error="", pid=None, cluster_job_id=None, gpus=[], queued_at=None, started_at=None,
-                               ended_at=None)
+                               ended_at=None, disk_bytes=folder_size(jdir) if jdir.exists() else 0)
             return self.job(puid, juid)
+
+    def clear_intermediate(self, puid: str, juid: str) -> dict[str, Any]:
+        """The intermediate results of a job that is over (CryoSPARC's "Clear intermediate results"): the files of every
+        iteration of a RELION run but the last one, unless an output uses them. The results, the report and Resume (which
+        needs only the last iteration) are kept."""
+        with self.lock:
+            job = self.job(puid, juid)
+            jt = get_job_type(job["type"])
+            if not jt.intermediate:
+                raise ManagerError(f"{jt.title} keeps no intermediate results")
+            if job["status"] not in ("completed", "failed", "killed"):
+                raise ManagerError(f"Only a job that is over can be cleaned (status: {job['status']})")
+            pdir, jdir = self.project_dir(puid), self.job_dir(puid, juid)
+            used = {(pdir / f).resolve() for o in job["outputs"] for f in [o.get("path"), o.get("thumbnail"), *(o.get("files") or [])] if f}
+            pattern = re.compile(jt.intermediate)
+            found = []
+            for f in jdir.iterdir() if jdir.exists() else []:
+                m = pattern.fullmatch(f.name)
+                if m and f.is_file() and not f.is_symlink():
+                    found.append((int(m.group("it")), f))
+            last = max((it for it, _ in found), default=0)
+            doomed = [f for it, f in found if it < last and f.resolve() not in used]
+            freed = 0
+            for f in doomed:
+                try:
+                    size = f.stat().st_size
+                    f.unlink()
+                    freed += size
+                except OSError:
+                    continue
+            size = folder_size(jdir)
+            self.db.update_job(puid, juid, disk_bytes=size)
+        if doomed:
+            JobContext({"uid": juid, "project_uid": puid}, jdir).log(
+                f"Intermediate results cleared: {len(doomed)} files of the iterations before {last} ({freed / 1e9:.2f} GB)")
+        return {"files": len(doomed), "freed_bytes": freed, "last_iteration": last, "disk_bytes": size}
+
+    def measure_job(self, puid: str, juid: str) -> int:
+        """Size of the job folder now (kept in the database)."""
+        size = folder_size(self.job_dir(puid, juid))
+        self.db.update_job(puid, juid, disk_bytes=size)
+        return size
+
+    def backfill_sizes(self, pause: float = 0.02) -> int:
+        """Measures the folders of the jobs that ended before their sizes were kept (in the background, at start)."""
+        measured = 0
+        for job in self.db.list_jobs(statuses=["completed", "failed", "killed"]):
+            if job.get("disk_bytes") is not None:
+                continue
+            try:
+                self.measure_job(job["project_uid"], job["uid"])
+                measured += 1
+            except Exception:  # a project folder gone: nothing to measure
+                continue
+            time.sleep(pause)
+        return measured
 
     def dependents(self, puid: str, juid: str) -> list[str]:
         return [j["uid"] for j in self.db.list_jobs(puid) if any(r["job"] == juid for r in j["inputs"].values())]
@@ -697,6 +753,8 @@ class Manager:
     def job_detail(self, puid: str, juid: str) -> dict[str, Any]:
         job = self.job(puid, juid)
         jdir = self.job_dir(puid, juid)
+        if job.get("disk_bytes") is None and job["status"] in ("completed", "failed", "killed"):
+            job["disk_bytes"] = self.measure_job(puid, juid)  # a job that ended before sizes were kept
         report_path = jdir / "report.json"
         job["report"] = {"sections": []}
         if report_path.exists():
@@ -871,6 +929,8 @@ class Manager:
             updates["ended_at"] = state["ended_at"]
         if state.get("error"):
             updates["error"] = str(state["error"])
+        if state.get("disk_bytes") is not None:
+            updates["disk_bytes"] = int(state["disk_bytes"])
         if status in ("waiting", "completed", "failed", "killed"):
             updates["gpus"] = []
         if job["status"] == "killed":  # do not resurrect a job the user killed

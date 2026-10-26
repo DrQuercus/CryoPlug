@@ -382,6 +382,10 @@ une par ligne) et le mode *cluster* sépare les particules en groupes d'une stat
   écrite : une classification 2D arrêtée parce que les classes suffisent déjà, un raffinement tombé près de la fin
   (sa carte est alors la moyenne des deux demi-cartes de cette itération, la FSC est calculée entre elles). Les jobs
   suivants peuvent les utiliser aussitôt ; *Clear* relance toujours tout depuis le début.
+- **Espace disque** : la taille de chaque job s'affiche dans son détail (*Disk usage*), le total du projet en haut à
+  droite et sur la page des projets. **Clear intermediate results** (détail, menu **⋯**, ou *Free space* sur une
+  sélection) supprime les fichiers de toutes les itérations d'un run RELION sauf la dernière — les demi-cartes et les
+  `run_itNNN_*` s'accumulent vite — en gardant les sorties, le rapport et *Resume*.
 - Une carte raffinée en C1 qui montre une symétrie : **Align to symmetry axes (RELION)** (relion_align_symmetry) la
   tourne et la recentre sur les axes du groupe ponctuel (convention de RELION, axe principal selon z), avec la
   symétrie imposée si besoin ; elle sert ensuite de référence à un 3D auto-refine lancé avec cette symétrie.

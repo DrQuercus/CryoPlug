@@ -6,7 +6,8 @@ import { importFromComputer } from './importer.js';
 import { builderHref, jobHref, navigate, refreshJobs, state, typeTitle } from './state.js';
 import { renderTree } from './tree.js';
 import {
-  ACTIVE, ago, btn, clear, confirmDialog, fmtTime, guard, h, icon, liveAgo, liveDuration, modal, popupMenu, runAction, statusChip, toast,
+  ACTIVE, ago, btn, clear, confirmDialog, fmtSize, fmtTime, guard, h, icon, liveAgo, liveDuration, modal, popupMenu, runAction, statusChip,
+  toast,
 } from './ui.js';
 import { currentWorkspace, inWorkspace, tagChip, tagsDialog, workspaceButton, workspacesDialog } from './workspaces.js';
 
@@ -115,7 +116,9 @@ function renderSummary() {
         title: on ? 'Show all the jobs' : `Show only the ${st} jobs`,
         onclick: () => { state.filter.status = on ? '' : st; renderProject(document.getElementById('content')); } }, `${n} ${st}`);
     });
-  clear(box, h('span', { class: 'muted small' }, `${jobs.length} job${jobs.length === 1 ? '' : 's'}${state.workspace ? ` in ${state.workspace}` : ''}`), items);
+  const bytes = jobs.reduce((sum, j) => sum + (j.disk_bytes || 0), 0);
+  clear(box, h('span', { class: 'muted small', title: bytes ? 'Disk used by the job folders (measured when each job ended)' : null },
+    `${jobs.length} job${jobs.length === 1 ? '' : 's'}${state.workspace ? ` in ${state.workspace}` : ''}${bytes ? ` · ${fmtSize(bytes)}` : ''}`), items);
 }
 
 export function renderJobs() {
@@ -204,6 +207,7 @@ const CAN = {
   queue: (j) => j.status === 'building',
   kill: (j) => ACTIVE.includes(j.status) || j.status === 'waiting',
   clear: (j) => ['completed', 'failed', 'killed'].includes(j.status),
+  trim: (j) => ['completed', 'failed', 'killed'].includes(j.status) && !!state.types[j.type]?.intermediate,
   delete: () => true,
 };
 
@@ -224,6 +228,7 @@ function selectionBar() {
       title: 'Copies of these jobs in building state; the inputs between them link the copies (a chain cloned as a chain)' }),
     btn('Workspaces…', () => workspacesDialog(jobs, renderJobs), { ic: 'workspace', title: 'Put these jobs in workspaces or take them out' }),
     btn('Tags…', () => tagsDialog(jobs, renderJobs), { ic: 'tag', title: 'Add or remove tags' }),
+    jobs.some(CAN.trim) ? act('trim', 'Free space', 'disk') : null,
     act('delete', 'Delete', 'trash', 'danger'),
     btn('Deselect', () => clearSelection(), { ic: 'x', title: 'Esc' }));
 }
@@ -245,12 +250,14 @@ async function cloneSelected(jobs) {
 
 async function bulk(kind, jobs) {
   const puid = state.project.uid;
-  const verb = { queue: 'Queue', kill: 'Stop', clear: 'Clear', delete: 'Delete' }[kind];
-  const past = { queue: 'Queued', kill: 'Stopped', clear: 'Cleared', delete: 'Deleted' }[kind];
+  const verb = { queue: 'Queue', kill: 'Stop', clear: 'Clear', trim: 'Free space of', delete: 'Delete' }[kind];
+  const past = { queue: 'Queued', kill: 'Stopped', clear: 'Cleared', trim: 'Cleaned', delete: 'Deleted' }[kind];
   const uids = new Set(jobs.map((j) => j.uid));
+  let freed = 0;
   if (kind !== 'queue') {
     let detail = '';
     if (kind === 'clear') detail = '\nTheir outputs and files are deleted; they go back to building.';
+    if (kind === 'trim') detail = '\nThe files of every iteration but the last are deleted; outputs, reports and Resume are kept.';
     if (kind === 'delete') {
       const outside = state.jobs.filter((j) => !uids.has(j.uid) && Object.values(j.inputs || {}).some((r) => uids.has(r.job)));
       detail = '\nTheir folders are deleted.'
@@ -266,6 +273,7 @@ async function bulk(kind, jobs) {
       if (kind === 'queue') await api.queueJob(puid, j.uid);
       else if (kind === 'kill') await api.killJob(puid, j.uid);
       else if (kind === 'clear') await api.clearJob(puid, j.uid);
+      else if (kind === 'trim') freed += (await api.clearIntermediate(puid, j.uid)).freed_bytes || 0;
       else await api.deleteJob(puid, j.uid, true);
     } catch (err) {
       failed.push(`${j.uid}: ${err.message}`);
@@ -273,7 +281,7 @@ async function bulk(kind, jobs) {
   }
   const done = order.length - failed.length;
   if (kind === 'delete') order.forEach((j) => state.selection.delete(j.uid));
-  if (done) toast(`${past} ${done} job${done > 1 ? 's' : ''}`, 'ok');
+  if (done) toast(`${past} ${done} job${done > 1 ? 's' : ''}${kind === 'trim' ? `: ${fmtSize(freed)} freed` : ''}`, 'ok');
   if (failed.length) toast(failed.join('\n'), 'error', 10000);
   await refreshJobs();
   renderJobs();

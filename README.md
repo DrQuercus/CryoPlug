@@ -320,6 +320,9 @@ section 6). La commande affiche les jobs d'import à créer.
   (cartes, arbre, compteurs) et reçoit les jobs créés. Un job peut être dans plusieurs workspaces.
 - **Étiquettes** : *Tags…* marque les jobs (« meilleure carte », « dataset 2 ») ; un clic sur une étiquette d'une
   carte filtre les jobs qui la portent.
+- **Espace disque** : taille de chaque job (détail), du projet (en haut à droite, page des projets) ; *Clear
+  intermediate results* / *Free space* supprime les itérations RELION intermédiaires (la dernière, les sorties et
+  *Resume* restent) ; *Mark as complete* termine un run arrêté avec sa dernière itération.
 - **N** nouveau job, **/** filtrer, **G** cartes ⇄ arbre, **Échap** vide la sélection ou ferme le détail,
   **?** liste des raccourcis.
 - Le bouton de **tri** (à droite des filtres) change l'ordre des cartes : les plus récents ou les plus anciens

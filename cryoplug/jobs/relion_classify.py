@@ -171,6 +171,7 @@ class RelionClass2D(RelionJob):
                OutputDef("particles", "particles", "Classified particles")]
     continuable = True
     completable = True
+    intermediate = rl.ITERATION_FILES
 
     @classmethod
     def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
@@ -596,6 +597,7 @@ class RelionInitialModel(RelionJob):
     cpu_param = "threads"
     continuable = True
     completable = True
+    intermediate = rl.ITERATION_FILES
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
@@ -691,6 +693,7 @@ class RelionClass3DGlobal(RelionJob):
                    "its particles; Blush regularisation helps small or flexible particles.")
     continuable = True
     completable = True
+    intermediate = rl.ITERATION_FILES
     inputs = [
         Slot("particles", ("particles",), "Particles"),
         Slot("map", ("map",), "Reference map", help="An initial model or a refined map: low-pass filtered by RELION.",

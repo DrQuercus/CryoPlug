@@ -224,6 +224,16 @@ const jobOps = {
     act(api.clearJob(state.project.uid, job.uid), 'Cleared');
   },
   resume: (job) => act(api.resumeJob(state.project.uid, job.uid), 'Queued again from its last iteration'),
+  async trim(job) {
+    if (!(await confirmDialog('Clear intermediate results', `Delete the files of every iteration of ${job.uid} but the last one?`
+      + '\nIts outputs, report and Resume are kept; the earlier iterations cannot be looked at again.', 'Clear', true))) return;
+    let res;
+    try { res = await guard(api.clearIntermediate(state.project.uid, job.uid)); } catch { return; }
+    toast(res.files ? `${res.files} files deleted, ${fmtSize(res.freed_bytes)} freed (iteration ${res.last_iteration} kept)`
+      : 'No intermediate results to clear', res.files ? 'ok' : 'info', 6000);
+    await refreshJobs();
+    await refreshDetail(true);
+  },
   async complete(job) {
     if (!(await confirmDialog('Mark as complete', `Use the outputs of the last iteration ${job.uid} wrote, as if it had finished there?`
       + '\nIts maps and particles become usable by other jobs; Clear still restarts it from the beginning.', 'Mark as complete'))) return;
@@ -275,6 +285,9 @@ export function jobMenuItems(job, anchor, { withOpen = false } = {}) {
     items.push({ key: 'complete', label: 'Mark as complete (last iteration)', ic: 'check', action: () => jobOps.complete(job) });
   }
   if (['completed', 'failed', 'killed'].includes(job.status)) items.push({ key: 'clear', label: 'Clear (back to building)', ic: 'undo', action: () => jobOps.clear(job) });
+  if (['completed', 'failed', 'killed'].includes(job.status) && state.types[job.type]?.intermediate) {
+    items.push({ key: 'trim', label: 'Clear intermediate results…', ic: 'disk', action: () => jobOps.trim(job) });
+  }
   items.push({ key: 'path', label: 'Copy folder path', ic: 'folder', action: () => copyText(job.job_dir || `${state.project.dir}/${job.uid}`) });
   items.push({ separator: true });
   items.push({ key: 'delete', label: 'Delete…', ic: 'trash', danger: true, action: () => jobOps.remove(job) });
@@ -529,8 +542,15 @@ function renderOverview(body) {
         editBtn('Put in workspaces', () => workspacesDialog([job], () => {}))))));
 
   // each key and value in its own element: adjacent text nodes would merge into a single grid cell
+  const over = ['completed', 'failed', 'killed'].includes(job.status);
+  const disk = h('span', { class: 'org-row' }, job.disk_bytes === null || job.disk_bytes === undefined ? '—' : fmtSize(job.disk_bytes),
+    over ? h('button', { class: 'icon-btn', type: 'button', title: 'Measure again', 'aria-label': 'Measure the job folder again',
+      onclick: async () => { try { await guard(api.measureJob(puid, job.uid)); } catch { return; } await refreshJobs(); await refreshDetail(true); } },
+    icon('refresh')) : null,
+    over && t?.intermediate ? h('button', { class: 'btn small', type: 'button', title: 'Delete the files of every iteration but the last one',
+      onclick: () => jobOps.trim(job) }, icon('disk'), 'Clear intermediate results') : null);
   const details = [['Job type', job.type], ['Created', fmtTime(job.created_at)], ['Started', fmtTime(job.started_at) || '—'],
-    ['Ended', fmtTime(job.ended_at) || '—'], ['GPUs', (job.gpus || []).join(', ') || '—'],
+    ['Ended', fmtTime(job.ended_at) || '—'], ['Disk usage', disk], ['GPUs', (job.gpus || []).join(', ') || '—'],
     ['Process', job.pid ? String(job.pid) : (job.cluster_job_id ? `cluster job ${job.cluster_job_id}` : '—')],
     ['Directory', h('span', { class: 'row' }, h('span', { class: 'mono', style: { wordBreak: 'break-all' } }, job.job_dir),
       h('button', { class: 'icon-btn', 'aria-label': 'Copy path', onclick: () => copyText(job.job_dir) }, icon('copy')))]];

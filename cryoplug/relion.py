@@ -25,6 +25,8 @@ from typing import Any, Iterable
 import numpy as np
 
 # Angular sampling of RELION's auto-refinement: label -> HEALPix order (as the RELION GUI maps them)
+# files of one iteration of relion_refine (run_it025_data.star, run_ct10_it012_half1_class001.mrc...)
+ITERATION_FILES = r"run(?:_ct\d+)?_it(?P<it>\d+)_.+"
 HEALPIX = {"30°": 0, "15°": 1, "7.5°": 2, "3.7°": 3, "1.8°": 4, "0.9°": 5, "0.5°": 6, "0.2°": 7}
 
 

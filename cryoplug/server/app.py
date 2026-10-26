@@ -5,6 +5,7 @@ import os
 import re
 import socket
 import stat
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,7 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     async def lifespan(app: FastAPI):
         if start_scheduler:
             scheduler.start()
+            threading.Thread(target=manager.backfill_sizes, name="sizes", daemon=True).start()
         yield
         scheduler.stop()
 
@@ -407,6 +409,15 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     def continue_job(puid: str, juid: str, request: Request, body: dict = Body(default={})) -> dict[str, Any]:
         """A failed or killed RELION refinement or classification queued again from its last iteration."""
         return manager.continue_job(puid, juid, (body or {}).get("lane"), roots=roots(request))
+
+    @app.post("/api/projects/{puid}/jobs/{juid}/clear-intermediate")
+    def clear_intermediate(puid: str, juid: str) -> dict[str, Any]:
+        """Disk space back: the files of every iteration of a finished RELION run but the last."""
+        return manager.clear_intermediate(puid, juid)
+
+    @app.post("/api/projects/{puid}/jobs/{juid}/measure")
+    def measure_job(puid: str, juid: str) -> dict[str, Any]:
+        return {"disk_bytes": manager.measure_job(puid, juid)}
 
     @app.post("/api/projects/{puid}/jobs/{juid}/complete")
     def mark_complete(puid: str, juid: str) -> dict[str, Any]:

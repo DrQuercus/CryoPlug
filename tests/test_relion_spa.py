@@ -1282,3 +1282,43 @@ def test_mark_complete_and_resume_2d(manager, spa):
     with pytest.raises(Exception, match="never ran"):
         manager.mark_complete(puid, empty["uid"])
     assert manager.job(puid, empty["uid"])["status"] == "killed"
+
+
+def test_clear_intermediate_results(manager, spa):
+    """Sizes of the job folders, and the files of every iteration but the last cleared (CryoSPARC's Clear intermediate
+    results), the outputs kept."""
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = _ref(ctf, "micrographs")
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1},
+                {"micrographs": mics})
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1},
+               {"micrographs": mics, "coordinates": _ref(pick, "coordinates")})
+    c2 = _run(manager, puid, "relion_class2d", {"classes": 3, "algorithm": "em", "em_iterations": 6, "threads": 1, "gpus": 0},
+              {"particles": _ref(ext, "particles")})
+    assert c2["disk_bytes"] and c2["disk_bytes"] > 1000  # measured by the worker when the job ended
+    jdir = pdir / c2["uid"]
+    before = sorted(f.name for f in jdir.glob("run_it*"))
+    assert any(n.startswith("run_it001_") for n in before) and any(n.startswith("run_it006_") for n in before)
+
+    res = manager.clear_intermediate(puid, c2["uid"])
+    after = sorted(f.name for f in jdir.glob("run_it*"))
+    assert res["last_iteration"] == 6 and res["files"] == len(before) - len(after) and res["freed_bytes"] > 0
+    assert after and all(n.startswith("run_it006_") for n in after)
+    job = manager.job(puid, c2["uid"])
+    assert job["disk_bytes"] == res["disk_bytes"] < c2["disk_bytes"]
+    for out in job["outputs"]:
+        assert all((pdir / f).exists() for f in out["files"])
+    assert "Intermediate results cleared" in (jdir / "job.log").read_text()
+    again = manager.clear_intermediate(puid, c2["uid"])
+    assert again["files"] == 0 and again["freed_bytes"] == 0
+    assert any(p["uid"] == puid and p["disk_bytes"] > 0 for p in manager.db.list_projects())
+
+    with pytest.raises(Exception, match="keeps no intermediate results"):
+        manager.clear_intermediate(puid, ext["uid"])
+    pending = manager.create_job(puid, "relion_class2d", {"threads": 1, "gpus": 0}, {"particles": _ref(ext, "particles")})
+    with pytest.raises(Exception, match="Only a job that is over"):
+        manager.clear_intermediate(puid, pending["uid"])
+    # a job that ended before the sizes were kept is measured when its details are read
+    manager.db.update_job(puid, ext["uid"], disk_bytes=None)
+    assert manager.job_detail(puid, ext["uid"])["disk_bytes"] > 0 and manager.job(puid, ext["uid"])["disk_bytes"] > 0

@@ -85,6 +85,7 @@ class RelionRefine3D(RelionJob):
                OutputDef("fsc", "fsc", "FSC"), OutputDef("particles", "particles", "Refined particles")]
     continuable = True
     completable = True
+    intermediate = rl.ITERATION_FILES
 
     @classmethod
     def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
@@ -899,6 +900,7 @@ class RelionMultiBody(RelionJob):
     ]
     outputs = [OutputDef("particles", "particles", "Particles"), OutputDef("body_1", "map", "Body 1"),
                OutputDef("motion_1", "volume_series", "Motion 1"), OutputDef("selected", "particles", "Selected particles")]
+    intermediate = rl.ITERATION_FILES
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params

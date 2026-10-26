@@ -17,7 +17,7 @@ from pathlib import Path
 
 from cryoplug import __version__
 from cryoplug.jobs import get_job_type
-from cryoplug.jobs.base import JobContext, JobError, JobKilled
+from cryoplug.jobs.base import JobContext, JobError, JobKilled, folder_size
 
 
 def _raise_killed(signum, frame):  # pragma: no cover - signal handler
@@ -85,6 +85,8 @@ def run_worker(job_dir: str | Path) -> int:
         fields["ended_at"] = time.time()
     if final == "completed":
         fields["progress"] = 1.0
+    if final != "waiting":
+        fields["disk_bytes"] = folder_size(job_dir)
     ctx.write_state(**fields)
     ctx.log(f"Job {final}")
     return 0 if final in ("completed", "waiting") else 1

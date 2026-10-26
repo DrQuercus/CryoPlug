@@ -407,6 +407,7 @@ class RelionLocalRefine(RelionJob):
         OutputDef("particles", "particles", "Refined particles"),
     ]
     completable = True
+    intermediate = rl.ITERATION_FILES
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
@@ -712,6 +713,7 @@ class RelionClass3D(RelionJob):
         OutputDef("map_1", "map", "Map of class 1"),
     ]
     completable = True
+    intermediate = rl.ITERATION_FILES
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
