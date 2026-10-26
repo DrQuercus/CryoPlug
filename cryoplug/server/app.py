@@ -625,6 +625,37 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
             raise HTTPException(400, f"Particle images not available: {exc}") from None
         return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
+    @app.get("/api/projects/{puid}/micrograph")
+    def micrograph_picture(puid: str, path: str, size: int = 1024, lowpass: float = 20.0, apix: float = 0.0) -> Response:
+        """A micrograph as a PNG: binned by ceil(largest side / size), low-pass filtered to ``lowpass`` Å, cached."""
+        from cryoplug.server import micrographview
+        p = manager.safe_path(puid, path.split(":")[0])
+        try:
+            png = micrographview.micrograph_png(manager.project_dir(puid), p, size, lowpass, apix)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(400, f"Cannot read {path}: {exc}") from None
+        return FileResponse(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.get("/api/projects/{puid}/ctf-image")
+    def ctf_picture(puid: str, path: str, size: int = 384) -> Response:
+        """The CTFFIND diagnostic image (power spectrum and fitted CTF) of a micrograph as a PNG, cached."""
+        from cryoplug.server import micrographview
+        p = manager.safe_path(puid, path.split(":")[0])
+        try:
+            png = micrographview.ctf_png(manager.project_dir(puid), p, size)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(400, f"Cannot read {path}: {exc}") from None
+        return FileResponse(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.get("/api/projects/{puid}/jobs/{juid}/session")
+    def get_session(puid: str, juid: str, name: str = "state") -> dict[str, Any]:
+        """Work in progress of an interactive tool (picks edited, exposures accepted...)."""
+        return manager.read_session(puid, juid, name)
+
+    @app.put("/api/projects/{puid}/jobs/{juid}/session")
+    def put_session(puid: str, juid: str, name: str = "state", body: dict = Body(...)) -> dict[str, Any]:
+        return manager.write_session(puid, juid, name, body)
+
     # ----------------------------------------------------------- workflows
     @app.post("/api/projects/{puid}/workflows/{wid}")
     def instantiate(puid: str, wid: str, request: Request, body: dict = Body(default={})) -> dict[str, Any]:

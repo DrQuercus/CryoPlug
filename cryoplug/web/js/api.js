@@ -100,6 +100,10 @@ export const api = {
   instantiate: (p, wid, body) => request('POST', `/api/projects/${p}/workflows/${wid}`, body),
 
   fileUrl: (p, path, download = false) => `/api/projects/${p}/file?path=${enc(path)}${download ? '&download=true' : ''}`,
+  micrographUrl: (p, path, size = 1024, lowpass = 20, apix = 0) => `/api/projects/${p}/micrograph?path=${enc(path)}&size=${size}&lowpass=${lowpass}&apix=${apix}`,
+  ctfImageUrl: (p, path, size = 384) => `/api/projects/${p}/ctf-image?path=${enc(path)}&size=${size}`,
+  session: (p, j, name = 'state') => request('GET', `/api/projects/${p}/jobs/${j}/session?name=${enc(name)}`),
+  saveSession: (p, j, name, data) => request('PUT', `/api/projects/${p}/jobs/${j}/session?name=${enc(name)}`, data),
   particleImagesUrl: (p, j, ids, size = 96) => `/api/projects/${p}/jobs/${j}/particle-images?ids=${ids.join(',')}&size=${size}`,
   // maps for the 3D viewer: maxBox voxels per side at most (0: full size), encoding f32 / i16 / i8, low-pass in A
   previewUrl: (p, path, maxBox, { encoding, lowpass } = {}) => `/api/projects/${p}/preview?path=${enc(path)}`

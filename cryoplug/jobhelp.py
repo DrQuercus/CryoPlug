@@ -324,9 +324,35 @@ HELP: dict[str, dict[str, Any]] = {
             "LoG : diamètres minimum et maximum encadrant la particule ; ajustez le seuil (σ) d'après l'image des particules repérées.",
             "Modèles 2D : recentrez les classes (option de « Select 2D classes ») ; distance minimale ≈ le diamètre.",
             "Topaz : le diamètre est obligatoire ; le seuil de figure de mérite se règle ensuite à l'extraction (-1 ou 0).",
-            "L'histogramme des figures de mérite aide à choisir ce seuil.",
+            "L'histogramme des figures de mérite aide à choisir ce seuil ; « Inspect and edit… » le règle sur les micrographies.",
         ],
-        "next": ["relion_extract"],
+        "next": ["relion_extract", "relion_pick_inspect"],
+    },
+    "relion_pick_inspect": {
+        "purpose": "Inspecte les particules repérées sur chaque micrographie et les corrige à la main (comme « Inspect Picks » "
+                   "et « Manual Picker » de CryoSPARC) : seuil de figure de mérite réglé sur son histogramme, particules "
+                   "retirées ou ajoutées d'un clic, zoom, déplacement, filtre passe-bas de l'affichage. Sans coordonnées en "
+                   "entrée, c'est un picking entièrement manuel.",
+        "when": [
+            "Après le picking automatique : choisir le seuil de figure de mérite en regardant les micrographies.",
+            "Picker à la main quelques centaines de particules pour entraîner Topaz ou faire de premières classes 2D.",
+            "Vérifier qu'un picking n'a pas pris la glace, le carbone ou les bords des trous.",
+        ],
+        "avoid": [
+            "Corriger des milliers de micrographies une à une : réglez plutôt le seuil puis nettoyez en 2D.",
+            "Un seuil choisi sur une seule micrographie : passez-en plusieurs (flèches ← →).",
+        ],
+        "inputs": "Les micrographies (avec CTF) et, si on inspecte un picking, ses coordonnées ; le diamètre est obligatoire "
+                  "pour un picking manuel.",
+        "tips": [
+            "Glissez sur l'histogramme pour le seuil ; « Hidden » montre en pointillés les particules sous le seuil et en rouge "
+            "celles retirées.",
+            "Le travail est enregistré au fil de l'eau : on peut fermer la page et revenir avant Done.",
+            "Les particules ajoutées à la main reçoivent une figure de mérite au-dessus de toutes les autres : un seuil "
+            "appliqué plus tard les garde.",
+            "Depuis un picking terminé, « Inspect and edit… » crée directement ce job avec le seuil affiché.",
+        ],
+        "next": ["relion_extract", "relion_topaz_train"],
     },
     "relion_topaz_train": {
         "purpose": "Entraîne un réseau Topaz sur ce jeu de données (relion_autopick --topaz_train) à partir de particules "

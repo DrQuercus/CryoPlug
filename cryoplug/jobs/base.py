@@ -783,6 +783,11 @@ class JobContext:
         lets the user pick classes (the Select 2D classes job, or a new selection from a 2D classification)."""
         self._section("classes2d", title, key=key, classes=classes, **data)
 
+    def add_tool(self, kind: str, title: str, data: str | Path, **extra: Any) -> None:
+        """An interactive tool of the job panel (pick inspector, exposure curation...) reading the file ``data``;
+        ``waiting=True`` while the job waits for the user, with a ``prompt`` telling what to do."""
+        self._section(kind, title, key=kind, data=self.rel(data), **extra)
+
     def add_latent(self, title: str, path: str | Path) -> None:
         """Interactive latent space explorer reading the JSON file at ``path`` (see jobs.heterogeneity)."""
         self._section("latent", title, path=self.rel(path))

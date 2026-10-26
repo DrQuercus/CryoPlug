@@ -1,7 +1,9 @@
 """RELION particle picking and extraction: relion_autopick (Laplacian-of-Gaussian, templates, Topaz), Topaz training,
+inspection and manual editing of the picks in the browser (as CryoSPARC's Inspect Picks and Manual Picker),
 relion_preprocess --extract (and re-extraction of refined particles, re-centred or re-scaled)."""
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -10,7 +12,7 @@ import numpy as np
 
 from cryoplug import relion as rl
 from cryoplug.jobs import register
-from cryoplug.jobs.base import JobContext, JobError, OutputDef, Param, Slot, extra_args_param
+from cryoplug.jobs.base import JobContext, JobError, JobType, OutputDef, Param, Slot, extra_args_param
 from cryoplug.jobs.relion_common import (
     SAMPLINGS, FileProgress, RelionJob, histogram, micrograph_gallery, mpi, particles_out_meta, relion_command,
     relion_particles, run_relion, sample, star_of, thumbnail_of,
@@ -36,6 +38,47 @@ def read_picks(ctx: JobContext, listing: Path) -> tuple[dict[str, np.ndarray], l
         if fom is not None:
             foms.extend(float(v) for v in fom)
     return picks, foms
+
+
+def picks_data(ctx: JobContext, mics_star: Path, listing: Path | None, name: str = "picks",
+               subset: list[str] | None = None) -> tuple[Path, dict[str, Any]]:
+    """The picks of every micrograph for the browser: ``<name>.bin`` (float32 x, y, figure of merit of each pick,
+    micrograph after micrograph) and ``<name>.json`` (micrographs: name, shape, offset and number of their picks)."""
+    from cryoplug.micrographs import micrograph_shape
+    tables = rl.read_star(mics_star)
+    names = subset if subset is not None else rl.micrograph_table(tables).column("rlnMicrographName")
+    picks: dict[str, tuple[np.ndarray, np.ndarray | None]] = {}
+    if listing is not None:
+        for mic, coords in rl.coordinate_files(listing):
+            path = ctx.abs(coords)
+            if path.exists():
+                picks[mic] = rl.read_coordinates(path)
+    entries, chunks, offset, has_fom, missing = [], [], 0, False, 0
+    for mic in names:
+        try:
+            shape = micrograph_shape(ctx.abs(mic))
+        except (OSError, ValueError):
+            missing += 1
+            continue
+        xy, fom = picks.get(mic, (np.zeros((0, 2)), None))
+        has_fom = has_fom or (fom is not None and len(xy) > 0)
+        block = np.zeros((len(xy), 3), dtype="<f4")
+        block[:, :2] = xy
+        block[:, 2] = fom if fom is not None else 0.0
+        chunks.append(block)
+        entries.append({"name": mic, "shape": list(shape), "offset": offset, "count": len(xy)})
+        offset += len(xy)
+    if missing:
+        ctx.warn(f"{missing} micrograph(s) could not be read and are left out")
+    binary = ctx.path(f"{name}.bin")
+    binary.write_bytes((np.concatenate(chunks) if chunks else np.zeros((0, 3), "<f4")).astype("<f4").tobytes())
+    allfom = np.concatenate([c[:, 2] for c in chunks]) if chunks and offset else np.zeros(0)
+    info = {"micrographs": entries, "binary": ctx.rel(binary), "apix": round(rl.micrograph_pixel_size(tables), 4),
+            "has_fom": has_fom, "n_picks": int(offset),
+            "fom_range": [round(float(allfom.min()), 4), round(float(allfom.max()), 4)] if has_fom and len(allfom) else None}
+    index = ctx.path(f"{name}.json")
+    index.write_text(json.dumps(info, separators=(",", ":")))
+    return index, info
 
 
 def pick_report(ctx: JobContext, listing: Path, mics_star: Path, diameter_a: float, method: str) -> dict[str, Any]:
@@ -69,6 +112,11 @@ def pick_report(ctx: JobContext, listing: Path, mics_star: Path, diameter_a: flo
         except Exception as exc:  # cosmetic
             ctx.warn(f"No thumbnail: {exc}")
     ctx.add_highlight("Particles", f"{total:,}")
+    try:  # browse the picks micrograph by micrograph in the job panel
+        index, _ = picks_data(ctx, mics_star, listing, subset=[m for m in names if m in picks])
+        ctx.add_tool("picks", "Picked particles", index, diameter_px=round(diameter_px, 2), editable=False)
+    except (OSError, ValueError) as exc:  # cosmetic
+        ctx.warn(f"No pick browser: {exc}")
     return {"n_particles": total, "n_micrographs": len(names), "picker": method,
             "diameter": diameter_a or None, "pixel_size": round(apix, 4) if apix else None,
             "micrographs": ctx.rel(mics_star), "relion": {"star": ctx.rel(listing), "kind": "autopick"},
@@ -235,6 +283,133 @@ class RelionAutopick(RelionJob):
         thumb = meta.pop("_thumbnail")
         ctx.add_output("coordinates", "coordinates", listing, f"{meta['n_particles']:,} particles picked", meta=meta,
                        thumbnail=thumb)
+
+
+# ------------------------------------------------------------------ inspection and manual picking
+@register
+class RelionPickInspect(JobType):
+    name = "relion_pick_inspect"
+    title = "Inspect picks / manual picking"
+    category = "Picking"
+    interactive = True
+    software = ["RELION"]
+    description = ("Shows every micrograph with its picked particles, as CryoSPARC's Inspect Picks and Manual Picker: "
+                   "a figure-of-merit threshold set on its histogram, particles removed or added with a click, zoom, pan "
+                   "and low-pass filter. Without picks, particles are picked by hand (a training set for Topaz). Writes "
+                   "the coordinate files RELION's extraction reads.")
+    inputs = [
+        Slot("micrographs", ("micrographs",), "Micrographs", help="Those the picks were made on."),
+        Slot("coordinates", ("coordinates",), "Picks", required=False,
+             help="Picks of an auto-picking job. Not connected: manual picking from scratch."),
+    ]
+    params = [
+        Param("diameter", "float", 0.0, label="Particle diameter", unit="Å", min=0,
+              help="Size of the circles. 0 = that of the picking (required for manual picking)."),
+        Param("min_fom", "float", -999.0, label="Starting threshold",
+              help="Figure of merit below which picks start hidden (set it on the histogram afterwards). -999 = all."),
+        Param("lowpass", "float", 20.0, label="Low-pass filter of the display", unit="Å", min=0, max=200,
+              help="The micrographs are shown filtered to this resolution (changeable in the viewer)."),
+        Param("max_micrographs", "int", 0, label="Micrographs shown", min=0,
+              help="0 = all. Manual picking of a training set: e.g. 30-50 micrographs spread over the data set."),
+    ]
+    outputs = [OutputDef("coordinates", "coordinates", "Picks")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        if "coordinates" not in connected and not float(params.get("diameter") or 0) > 0:
+            return ["Give the particle diameter (manual picking)"]
+        return []
+
+    def prepare(self, ctx: JobContext) -> bool:
+        p = ctx.params
+        mics_in = ctx.require("micrographs")
+        star, _ = star_of(ctx, mics_in)
+        coords = ctx.input("coordinates")
+        names = rl.micrograph_table(rl.read_star(star)).column("rlnMicrographName")
+        if coords:  # micrographs with picks only (those the picker left out stay out)
+            picked = {m for m, _ in rl.coordinate_files(coords.path)}
+            names = [m for m in names if m in picked] or names
+        if p["max_micrographs"] > 0:
+            names = sample(names, int(p["max_micrographs"]))
+        ctx.progress(0.2, f"Reading the picks of {len(names):,} micrographs")
+        index, info = picks_data(ctx, star, Path(coords.path) if coords else None, subset=names)
+        if not info["micrographs"]:
+            raise JobError("None of the micrographs could be read")
+        diameter = float(p["diameter"] or (coords.meta.get("diameter") if coords else 0) or 0)
+        if not diameter > 0:
+            raise JobError("Give the particle diameter")
+        apix = info["apix"] or 1.0
+        state = {"star": ctx.rel(star), "coordinates": ctx.rel(coords.path) if coords else None, "diameter": diameter,
+                 "index": ctx.rel(index)}
+        ctx.path("inspect.json").write_text(json.dumps(state, indent=1))
+        manual = coords is None
+        ctx.add_tool("picks", "Manual picking" if manual else "Inspect picks", index, waiting=True, editable=True,
+                     diameter_px=round(diameter / apix, 2), threshold=float(p["min_fom"]), lowpass=float(p["lowpass"]),
+                     manual=manual, prompt_title="Waiting for your picks" if manual else "Waiting for your inspection",
+                     prompt=("Click the particles on each micrograph (click again to remove), then Done." if manual else
+                             "Set the figure-of-merit threshold on the histogram, remove or add particles with a click, "
+                             "then Done."))
+        ctx.add_highlight("Micrographs", f"{len(info['micrographs']):,}")
+        if not manual:
+            ctx.add_highlight("Picked", f"{info['n_picks']:,}")
+        ctx.log("Waiting: inspect the picks in the job panel, then Done")
+        return False
+
+    def finalize(self, ctx: JobContext, choice: str | None) -> None:
+        state = json.loads(ctx.path("inspect.json").read_text())
+        try:
+            sent = json.loads(choice) if (choice or "").strip() else {}
+        except ValueError as exc:
+            raise JobError(f"Picks not understood: {exc}") from None
+        if not sent:  # Done without data: the work saved while the job waited
+            saved = ctx.path("session_picks.json")
+            sent = json.loads(saved.read_text()) if saved.exists() else {}
+        threshold = float(sent["threshold"]) if sent.get("threshold") is not None else -1e30
+        edits = sent.get("edits") or {}
+        info = json.loads(ctx.abs(state["index"]).read_text())
+        allpicks = np.frombuffer(ctx.abs(info["binary"]).read_bytes(), dtype="<f4").reshape(-1, 3)
+        out_dir = ctx.path("picks")
+        # picked by hand: a figure of merit above any automatic one (a later threshold keeps them)
+        hand_fom = max(1.0, float(info["fom_range"][1]) + 1.0) if info["has_fom"] and info.get("fom_range") else 1.0
+        pairs, total, kept_fom = [], 0, []
+        for mic in info["micrographs"]:
+            block = allpicks[mic["offset"]:mic["offset"] + mic["count"]]
+            edit = edits.get(mic["name"]) or {}
+            keep = block[:, 2] >= threshold if info["has_fom"] else np.ones(len(block), dtype=bool)
+            removed = np.array([int(i) for i in edit.get("removed") or []], dtype=int)
+            keep[removed[(removed >= 0) & (removed < len(block))]] = False
+            xy, fom = block[keep, :2].astype(np.float64), block[keep, 2].astype(np.float64)
+            added = np.array([[float(a[0]), float(a[1])] for a in edit.get("added") or []], dtype=np.float64).reshape(-1, 2)
+            h, w = mic["shape"]
+            added = added[(added[:, 0] >= 0) & (added[:, 0] < w) & (added[:, 1] >= 0) & (added[:, 1] < h)]
+            if len(added):
+                xy = np.vstack([xy, added])
+                fom = np.concatenate([fom, np.full(len(added), hand_fom)])
+            if not len(xy):
+                continue
+            name = out_dir / (re.sub(r"\.[A-Za-z0-9]+$", "", rl.pipeline_post(mic["name"])) + "_manualpick.star")
+            rl.write_coordinates(name, xy, fom)
+            pairs.append((mic["name"], ctx.rel(name)))
+            total += len(xy)
+            kept_fom.extend(fom.tolist())
+        if not total:
+            raise JobError("No particle left: lower the threshold or pick some particles")
+        listing = rl.write_coordinate_list(ctx.path("manualpick.star"), pairs)
+        n_edit = sum(len((e or {}).get("removed") or []) + len((e or {}).get("added") or []) for e in edits.values())
+        rows = [["Micrographs with particles", f"{len(pairs):,} of {len(info['micrographs']):,}"],
+                ["Particles", f"{total:,}"], ["Edited by hand", f"{n_edit:,}"]]
+        if info["has_fom"]:
+            rows.insert(2, ["Figure-of-merit threshold", f"{threshold:g}" if threshold > -1e29 else "none"])
+        ctx.add_table("Picks kept", ["", "Value"], rows)
+        meta = pick_report(ctx, listing, ctx.abs(state["star"]), state["diameter"],
+                           "manual" if state["coordinates"] is None else "inspected")
+        thumb = meta.pop("_thumbnail")
+        meta["relion"]["kind"] = "manualpick"
+        for sec in ctx.report.get("sections", []):  # the inspector is done: its picks are now read-only
+            if sec.get("kind") == "picks" and sec.get("waiting"):
+                sec["waiting"], sec["editable"] = False, False
+        ctx.add_output("coordinates", "coordinates", listing, f"{total:,} particles", meta=meta, thumbnail=thumb)
+        ctx.save_report()
 
 
 # ------------------------------------------------------------------ Topaz training

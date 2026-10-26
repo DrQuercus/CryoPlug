@@ -7,6 +7,7 @@ import { classGallery, forgetSelection } from './classes.js';
 import { computeRows } from './compute.js';
 import { helpSheet } from './help.js';
 import { latentExplorer } from './latent.js';
+import { pickInspector } from './picker.js';
 import { barChart, heatmap, lineChart } from './plots.js';
 import { builderHref, jobHref, navigate, refreshJobs, restricted, state, typeTitle } from './state.js';
 import {
@@ -14,7 +15,8 @@ import {
   statusChip, statusMark, toast,
 } from './ui.js';
 
-const D = { puid: null, uid: null, job: null, mode: 'panel', tab: 'overview', log: '', logOffset: 0, filesSub: '', autoscroll: true, busy: false, again: false };
+const D = { puid: null, uid: null, job: null, mode: 'panel', tab: 'overview', log: '', logOffset: 0, filesSub: '', autoscroll: true, busy: false, again: false,
+  wide: false };
 const container = () => document.getElementById(D.mode === 'page' ? 'content' : 'panel');
 
 // mode: 'panel' (right side) or 'page' (main area, next to the job builder).
@@ -22,6 +24,7 @@ export function openDetail(uid, mode = 'panel') {
   const puid = state.project?.uid || null;
   if (D.uid !== uid || D.mode !== mode || D.puid !== puid) {
     Object.assign(D, { puid, uid, mode, job: null, tab: 'overview', log: '', logOffset: 0, filesSub: '' });
+    setWide(D.wide);
     container().scrollTop = 0;
     renderLoading();
   }
@@ -42,6 +45,19 @@ function renderLoading() {
 export function closeDetail() {
   D.uid = null;
   D.job = null;
+  setWide(false);
+}
+
+// The panel widened over the job cards (galleries, micrographs, interactive tools), or back to its side.
+function setWide(on) {
+  D.wide = !!on;
+  const panel = document.getElementById('panel');
+  if (panel) panel.classList.toggle('wide', D.wide && D.mode === 'panel');
+}
+
+// An interactive tool asks for room: the panel is widened when it is shown.
+export function widenFor(job) {
+  if (D.mode === 'panel' && D.job && D.job.uid === job.uid && !D.wide) { setWide(true); renderHeaderOnly(); }
 }
 
 export function detailUid() {
@@ -158,6 +174,9 @@ function renderHeaderOnly() {
     h('div', { class: 'panel-title' },
       page ? btn('Jobs', () => navigate(closeHref()), { cls: 'small', ic: 'back', title: 'Back to the job cards (the builder stays open)' }) : null,
       h('span', { class: 'uid' }, job.uid), titleEl, statusChip(job.status),
+      page ? null : h('button', { class: 'icon-btn', 'aria-label': D.wide ? 'Narrow the panel' : 'Widen the panel',
+        title: D.wide ? 'Back to the side' : 'Widen over the job cards (galleries, micrographs)',
+        onclick: () => { setWide(!D.wide); renderHeaderOnly(); } }, icon(D.wide ? 'shrink' : 'expand')),
       page ? null : h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => navigate(closeHref()) }, icon('close'))),
     h('div', { class: 'panel-sub muted small' }, h('span', {}, typeTitle(job.type)), h('span', {}, `${verb} `, liveAgo(at)),
       jobDuration(job) ? h('span', { title: 'Run time' }, icon('clock'), liveDuration(job)) : null, job.lane ? h('span', {}, `lane ${job.lane}`) : null,
@@ -372,10 +391,11 @@ function renderOverview(body) {
     body.appendChild(h('div', { class: 'alert warn' }, 'Before queueing:', h('ul', { class: 'problems' }, job.problems.map((p) => h('li', {}, p)))));
   }
   if (job.status === 'waiting') {
-    const choosing = (job.report?.sections || []).some((sec) => sec.kind === 'classes2d' && sec.selectable && sec.waiting);
-    body.appendChild(choosing
-      ? h('div', { class: 'alert wait' }, h('b', {}, 'Waiting for your selection'),
-        h('div', { class: 'small', style: { marginTop: '4px' } }, 'Click the good classes below (sorted by number of particles or resolution), then Done.'))
+    const tool = (job.report?.sections || []).find((sec) => sec.waiting);
+    body.appendChild(tool
+      ? h('div', { class: 'alert wait' }, h('b', {}, tool.prompt_title || 'Waiting for you'),
+        h('div', { class: 'small', style: { marginTop: '4px' } }, tool.prompt
+          || 'Click the good classes below (sorted by number of particles or resolution), then Done.'))
       : interactivePanel(job));
   }
 
@@ -522,11 +542,33 @@ function reportSection(sec, puid, job) {
         .then(() => forgetSelection(puid, job.uid)),
       newSelection: classesOut ? (classes) => newSelectionJob(job, classesOut, classes) : null,
     })));
+  } else if (sec.kind === 'picks') {
+    wrap.append(h('div', { class: 'box' }, pickInspector(sec, {
+      puid, job,
+      finish: (payload) => act(api.finish(puid, job.uid, JSON.stringify(payload)), 'Picks saved'),
+      widen: () => widenFor(job),
+      newInspection: job.status === 'completed' && (job.outputs || []).some((o) => o.type === 'coordinates') && job.inputs?.micrographs
+        ? (threshold) => newPickInspection(job, threshold) : null,
+    })));
   } else if (sec.kind === 'image') {
     wrap.append(h('h4', {}, sec.title), h('a', { href: api.fileUrl(puid, sec.path), target: '_blank', rel: 'noopener' },
       h('img', { src: api.fileUrl(puid, sec.path), alt: sec.title, style: { maxWidth: '100%', borderRadius: '8px' } })));
   }
   return wrap;
+}
+
+// An inspection of the picks of a picking job, starting from the threshold looked at, queued at once.
+async function newPickInspection(job, threshold) {
+  const puid = state.project.uid;
+  const out = (job.outputs || []).find((o) => o.type === 'coordinates');
+  try {
+    const made = await guard(api.createJob(puid, { type: 'relion_pick_inspect',
+      params: threshold !== null && threshold !== undefined ? { min_fom: +threshold.toFixed(4) } : {},
+      inputs: { micrographs: job.inputs.micrographs, coordinates: { job: job.uid, output: out.name } }, queue: true }),
+    `Inspection of the picks of ${job.uid} queued`);
+    await refreshJobs();
+    navigate(jobHref(made.uid));
+  } catch { /* shown */ }
 }
 
 // A "Select 2D classes" job keeping the classes clicked in the gallery of a 2D classification, queued at once.

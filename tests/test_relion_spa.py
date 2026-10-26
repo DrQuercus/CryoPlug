@@ -368,3 +368,87 @@ def test_agents_read_the_2d_classes():
     kept = report_lines({"sections": [{"kind": "classes2d", "title": "2D classes", "classes": classes, "selected": [2, 3],
                                        "how": "clicked"}]})
     assert "kept: classes 2, 3 (clicked)" in kept[0]
+
+
+def test_inspect_picks_and_manual_picking(manager, spa):
+    """The pick inspector waits, keeps the picks above the threshold minus those removed plus those added by hand;
+    manual picking starts from nothing and also finishes from the work saved while it waited."""
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = _ref(ctf, "micrographs")
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1},
+                {"micrographs": mics})
+    browser = _sections(manager, puid, pick, "picks")[0]  # auto-picking shows its picks, read-only
+    assert not browser.get("waiting") and browser["diameter_px"] == 70.0
+    info = json.loads((pdir / browser["data"]).read_text())
+    raw = np.frombuffer((pdir / info["binary"]).read_bytes(), dtype="<f4").reshape(-1, 3)
+    assert len(raw) == info["n_picks"] == _outs(pick)["coordinates"]["meta"]["n_particles"]
+    assert info["micrographs"][0]["shape"] == [384, 384] and info["has_fom"]
+
+    insp = _run(manager, puid, "relion_pick_inspect", {}, {"micrographs": mics, "coordinates": _ref(pick, "coordinates")},
+                status="waiting")
+    tool = _sections(manager, puid, insp, "picks")[0]
+    assert tool["waiting"] and tool["editable"] and not tool["manual"] and tool["prompt"]
+    info = json.loads((pdir / tool["data"]).read_text())
+    raw = np.frombuffer((pdir / info["binary"]).read_bytes(), dtype="<f4").reshape(-1, 3)
+    first, second = info["micrographs"][0], info["micrographs"][1]
+    threshold = float(np.median(raw[:, 2]))
+    above = int((raw[:, 2] >= threshold).sum())
+    removed = [i for i in range(first["count"]) if raw[first["offset"] + i, 2] >= threshold][:2]
+    edits = {first["name"]: {"removed": removed, "added": []},
+             second["name"]: {"removed": [], "added": [[100.0, 120.0], [200.5, 50.0], [9999.0, 5.0]]}}  # the last is outside
+    done = manager.finish_interactive(puid, insp["uid"], json.dumps({"threshold": threshold, "edits": edits}))
+    out = _outs(done)["coordinates"]
+    assert done["status"] == "completed" and out["meta"]["n_particles"] == above - 2 + 2
+    assert out["meta"]["picker"] == "inspected" and out["meta"]["relion"]["kind"] == "manualpick"
+    pairs = dict(rl.coordinate_files(pdir / out["path"]))
+    xy, fom = rl.read_coordinates(pdir / pairs[second["name"]])
+    assert [100.0, 120.0] in xy.tolist() and fom.max() > raw[:, 2].max()  # picked by hand: above any automatic pick
+    assert pairs[second["name"]].endswith("mic_002_manualpick.star")
+    final = _sections(manager, puid, done, "picks")[-1]
+    assert not final.get("waiting")
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "mpi": 1}, {"micrographs": mics, "coordinates": _ref(done, "coordinates")})
+    assert _outs(ext)["particles"]["meta"]["n_particles"] > 0
+
+    # manual picking: a diameter is needed, the work saved while waiting is used by Done
+    bad = manager.create_job(puid, "relion_pick_inspect", {}, {"micrographs": mics})
+    with pytest.raises(Exception, match="particle diameter"):
+        manager.queue_job(puid, bad["uid"])
+    man = _run(manager, puid, "relion_pick_inspect", {"diameter": 60, "max_micrographs": 2}, {"micrographs": mics},
+               status="waiting")
+    tool = _sections(manager, puid, man, "picks")[0]
+    info = json.loads((pdir / tool["data"]).read_text())
+    assert tool["manual"] and len(info["micrographs"]) == 2 and info["n_picks"] == 0 and tool["diameter_px"] == 60.0
+    name = info["micrographs"][0]["name"]
+    manager.write_session(puid, man["uid"], "picks", {"threshold": None, "edits": {name: {"removed": [], "added": [[150, 150], [60, 300]]}}})
+    assert manager.read_session(puid, man["uid"], "picks")["edits"][name]["added"][1] == [60, 300]
+    done = manager.finish_interactive(puid, man["uid"], "")
+    assert _outs(done)["coordinates"]["meta"]["n_particles"] == 2 and _outs(done)["coordinates"]["meta"]["picker"] == "manual"
+    with pytest.raises(Exception, match="waiting"):
+        manager.write_session(puid, man["uid"], "picks", {})
+    with pytest.raises(Exception, match="Session names"):
+        manager.read_session(puid, man["uid"], "../x")
+
+
+def test_micrograph_pictures_and_sessions_over_the_api(manager, spa):
+    from fastapi.testclient import TestClient
+
+    from cryoplug.server.app import create_app
+    puid, mc, ctf = spa["puid"], spa["motioncorr"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mic = rl.micrograph_table(rl.read_star(pdir / _outs(mc)["micrographs"]["path"])).column("rlnMicrographName")[0]
+    ctf_img = rl.micrograph_table(rl.read_star(pdir / _outs(ctf)["micrographs"]["path"])).column("rlnCtfImage")[0]
+    app = create_app(manager.config, start_scheduler=False, manager=manager)
+    with TestClient(app, base_url="http://localhost:39500") as client:
+        r = client.get(f"/api/projects/{puid}/micrograph", params={"path": mic, "size": 256, "lowpass": 20})
+        assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.content[:4] == b"\x89PNG"
+        import struct
+        w, hgt = struct.unpack(">II", r.content[16:24])
+        assert (w, hgt) == (384 // 2, 384 // 2)  # binned by ceil(384 / 256) = 2, as the browser computes it
+        assert list((pdir / ".cryoplug_cache" / "micrographs").glob("*.png"))
+        r = client.get(f"/api/projects/{puid}/ctf-image", params={"path": ctf_img, "size": 128})
+        assert r.status_code == 200 and r.content[:4] == b"\x89PNG"
+        assert client.get(f"/api/projects/{puid}/micrograph", params={"path": "../etc/passwd"}).status_code == 404
+        r = client.put(f"/api/projects/{puid}/jobs/{mc['uid']}/session", params={"name": "picks"}, json={"a": 1})
+        assert r.status_code >= 400  # only a waiting job keeps a session
+        assert client.get(f"/api/projects/{puid}/jobs/{mc['uid']}/session", params={"name": "picks"}).json() == {}

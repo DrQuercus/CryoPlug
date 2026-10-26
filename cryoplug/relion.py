@@ -238,6 +238,35 @@ def coordinate_files(path: str | Path) -> list[tuple[str, str]]:
     return list(zip(table.column("rlnMicrographName"), table.column("rlnMicrographCoordinates")))
 
 
+def pipeline_post(name: str) -> str:
+    """What RELION keeps of an input name to name its outputs (decomposePipelineFileName): the part after a
+    ``/jobNNN/`` folder, else the whole name."""
+    m = re.search(r"/job\d{3}/(.+)$", name)
+    return m.group(1) if m else name
+
+
+def write_coordinates(path: str | Path, xy: np.ndarray, fom: np.ndarray | None = None) -> Path:
+    """A coordinate file as RELION's picking writes it (x, y in micrograph pixels, figure of merit)."""
+    xy = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
+    n = len(xy)
+    t = StarTable("")
+    t.set_column("rlnCoordinateX", xy[:, 0])
+    t.set_column("rlnCoordinateY", xy[:, 1])
+    t.set_column("rlnClassNumber", [0] * n)
+    t.set_column("rlnAutopickFigureOfMerit", np.zeros(n) if fom is None else np.asarray(fom, dtype=np.float64))
+    t.set_column("rlnAnglePsi", [-999.0] * n)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    return write_star(path, [t])
+
+
+def write_coordinate_list(path: str | Path, pairs: list[tuple[str, str]]) -> Path:
+    """The list of coordinate files of a picking job (``data_coordinate_files``): micrograph, its coordinates."""
+    t = StarTable("coordinate_files")
+    t.set_column("rlnMicrographName", [m for m, _ in pairs])
+    t.set_column("rlnMicrographCoordinates", [c for _, c in pairs])
+    return write_star(path, [t])
+
+
 def read_coordinates(path: str | Path) -> tuple[np.ndarray, np.ndarray | None]:
     """Particle positions (x, y in pixels of the micrograph) of a coordinate file, and their figure of merit."""
     tables = read_star(path)

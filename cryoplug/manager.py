@@ -740,6 +740,37 @@ class Manager:
                              compress_type=zipfile.ZIP_STORED if arcname.endswith((".mrc", ".map", ".ccp4")) else zipfile.ZIP_DEFLATED)
         return zpath
 
+    # Work in progress of an interactive tool in the browser (picks edited, exposures accepted or rejected...), saved
+    # while the job waits so that a reload or another browser picks it up again; read by the job when it finishes.
+    SESSION_NAME = re.compile(r"[a-z0-9_-]{1,40}")
+    SESSION_LIMIT = 64 * 1024 ** 2
+
+    def session_path(self, puid: str, juid: str, name: str) -> Path:
+        if not self.SESSION_NAME.fullmatch(name or ""):
+            raise ManagerError("Session names are lowercase letters, digits, '-' and '_'")
+        self.job(puid, juid)
+        return self.job_dir(puid, juid) / f"session_{name}.json"
+
+    def read_session(self, puid: str, juid: str, name: str = "state") -> dict[str, Any]:
+        path = self.session_path(puid, juid, name)
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def write_session(self, puid: str, juid: str, name: str, data: dict[str, Any]) -> dict[str, Any]:
+        path = self.session_path(puid, juid, name)
+        if self.job(puid, juid)["status"] != "waiting":
+            raise ManagerError("Only an interactive job waiting for you keeps work in progress")
+        text = json.dumps(data, separators=(",", ":"))
+        if len(text) > self.SESSION_LIMIT:
+            raise ManagerError("Too much data for one session")
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(text)
+        os.replace(tmp, path)
+        return {"saved": name, "bytes": len(text), "at": time.time()}
+
     def finish_interactive(self, puid: str, juid: str, choice: str | None = None) -> dict[str, Any]:
         with self.lock:
             job = self.job(puid, juid)

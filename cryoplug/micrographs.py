@@ -24,6 +24,13 @@ def read_image(path: str | Path, index: int | None = None) -> np.ndarray:
     return data
 
 
+def micrograph_shape(path: str | Path) -> tuple[int, int]:
+    """(height, width) of a micrograph, from its header (a stack: one of its images)."""
+    import mrcfile
+    with mrcfile.open(str(path).split(":")[0], permissive=True, header_only=True) as m:
+        return int(m.header.ny), int(m.header.nx)
+
+
 def preview(data: np.ndarray, size: int = 512, sigma: float = 1.2) -> tuple[np.ndarray, float]:
     """A micrograph made readable at ``size`` pixels: binned, smoothed, contrast-stretched (uint8). Returns the image
     and the binning factor (micrograph pixels per preview pixel)."""

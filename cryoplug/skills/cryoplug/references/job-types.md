@@ -75,7 +75,13 @@ Usually followed by: `relion_ctffind`.
 RELION · GPU optional. In: micrographs: micrographs, references?: class_averages, map?: map, topaz_model?: topaz_model. Out: coordinates: coordinates.
 
 Picks particles on the micrographs with relion_autopick: Laplacian-of-Gaussian blob detection (no template: the way to start a new data set), template matching against 2D class averages or projections of a 3D map, or Topaz (a neural network, general or trained on this data set).
-Usually followed by: `relion_extract`.
+Usually followed by: `relion_extract`, `relion_pick_inspect`.
+
+### `relion_pick_inspect` — Inspect picks / manual picking
+built-in · interactive: a person works in it. In: micrographs: micrographs, coordinates?: coordinates. Out: coordinates: coordinates.
+
+Shows every micrograph with its picked particles, as CryoSPARC's Inspect Picks and Manual Picker: a figure-of-merit threshold set on its histogram, particles removed or added with a click, zoom, pan and low-pass filter. Without picks, particles are picked by hand (a training set for Topaz). Writes the coordinate files RELION's extraction reads.
+Usually followed by: `relion_extract`, `relion_topaz_train`.
 
 ### `relion_extract` — Particle extraction (RELION)
 RELION. In: micrographs: micrographs, coordinates?: coordinates, particles?: particles. Out: particles: particles.
