@@ -491,6 +491,30 @@ Garde les particules des bonnes classes 2D. Comme dans CryoSPARC, le job affiche
 
 **Étapes suivantes** : 3D initial model (RELION), 2D classification (RELION), 3D classification (RELION), 3D auto-refine (RELION), Topaz training (RELION), Auto-picking (RELION)
 
+### Select 3D classes
+
+`relion_select3d` — intégré (aucun logiciel externe)
+
+Garde les particules des classes 3D cliquées dans une galerie des cartes de classes (projections selon z, y, x et coupe centrale), ou listées : réunit les bonnes classes d'une classification 3D ou d'un raffinement hétérogène ; les autres forment une seconde sortie.
+
+**Quand l'utiliser**
+
+- Après une classification 3D : réunir les classes de la bonne conformation avant le raffinement.
+- Après un raffinement hétérogène avec leurres : garder la classe de la protéine.
+
+**À éviter / pièges**
+
+- Des classes de conformations différentes réunies : la carte moyenne les mélange.
+
+**Entrées conseillées** : Les « Classified particles » d'une classification 3D ou d'un raffinement hétérogène (elles portent le modèle des classes).
+
+**Conseils**
+
+- Depuis la galerie d'une classification terminée, « Select these classes » crée et lance ce job.
+- Ouvrez les cartes des classes (sorties map_N) dans le visualiseur 3D pour juger les détails.
+
+**Étapes suivantes** : 3D auto-refine (RELION), 3D classification (RELION)
+
 ## Reconstruction (RELION)
 
 ### 3D auto-refine (RELION)
@@ -2192,6 +2216,29 @@ Lance n'importe quel programme sur les données du projet (script bash avec des 
 
 - Indiquez les motifs de sortie (ex. result*.mrc) pour récupérer cartes et modèles.
 
+### Downsample particles
+
+`relion_downsample` — intégré (aucun logiciel externe)
+
+Réduit la taille des images de particules par recadrage de Fourier (comme « Downsample Particles » de CryoSPARC) : 2D et 3D plus rapides à un pixel plus gros. Écrit de nouvelles piles et un fichier de particules RELION avec la nouvelle boîte et le nouveau pixel ; poses et décalages (en Å) sont gardés.
+
+**Quand l'utiliser**
+
+- Particules extraites à pleine taille : classification 2D, modèle initial et 3D à pixel réduit.
+
+**À éviter / pièges**
+
+- Le raffinement final à pixel réduit : la résolution est limitée à deux fois le nouveau pixel (Nyquist).
+
+**Entrées conseillées** : Des particules (RELION ou CryoSPARC).
+
+**Conseils**
+
+- Boîte paire ; nouveau pixel = ancien pixel × ancienne boîte / nouvelle boîte.
+- Pour revenir à pleine taille, ré-extrayez les particules (extraction avec « Particles to re-extract »).
+
+**Étapes suivantes** : 2D classification (RELION), 3D initial model (RELION), 3D classification (RELION)
+
 ### Join star files (RELION)
 
 `relion_join` — logiciel : `relion`
@@ -2260,6 +2307,53 @@ Combine les chaînes de plusieurs modèles (domaines ou sous-unités dockés sé
 
 **Étapes suivantes** : Real-space refinement (Phenix)
 
+### Particle sets (intersection, difference)
+
+`relion_particle_sets` — intégré (aucun logiciel externe)
+
+Compare deux jeux de particules (comme le « Particle Sets Tool » de CryoSPARC) : les particules présentes dans les deux, celles de A seulement et celles de B seulement. Les particules se reconnaissent à leur image ou à leur position sur la micrographie.
+
+**Quand l'utiliser**
+
+- Retirer d'un jeu les particules d'un autre (classes « poubelle », particules déjà traitées).
+- Garder les particules retenues par deux nettoyages indépendants (2D et 3D, deux pickings).
+
+**À éviter / pièges**
+
+- La correspondance par image entre particules ré-extraites : elles ont d'autres noms d'image ; prenez la position.
+
+**Entrées conseillées** : Deux jeux de particules (RELION ou CryoSPARC).
+
+**Conseils**
+
+- Position : distance d'environ un quart du diamètre ; les décalages de l'alignement sont pris en compte.
+- L'union des deux jeux se fait avec « Join star files ».
+
+**Étapes suivantes** : 3D auto-refine (RELION), 2D classification (RELION), Join star files (RELION)
+
+### Rebalance orientations
+
+`relion_rebalance` — intégré (aucun logiciel externe)
+
+Retire des particules dans les vues trop représentées (orientation préférentielle), comme « Rebalance Orientations » de CryoSPARC : les directions de vue sont découpées en cases d'aire à peu près égale et chaque case garde au plus le nombre de particules d'un percentile des cases.
+
+**Quand l'utiliser**
+
+- Carte étirée dans une direction, FSC directionnelle très anisotrope, quelques vues qui dominent la carte des directions de vue.
+
+**À éviter / pièges**
+
+- Un jeu déjà petit : retirer des particules coûte de la résolution ; mieux vaut collecter inclinée.
+
+**Entrées conseillées** : Des particules raffinées (avec leurs poses).
+
+**Conseils**
+
+- Cases de 10° et percentile 80 % pour commencer ; comparez les cartes des directions de vue avant et après.
+- Raffinez ensuite les particules gardées et comparez l'anisotropie (FSC directionnelle).
+
+**Étapes suivantes** : 3D auto-refine (RELION)
+
 ### Render images (ChimeraX)
 
 `chimerax_render` — logiciel : `chimerax`
@@ -2303,3 +2397,27 @@ relion_star_handler sur un jeu de particules ou de micrographies : retirer les p
 - Sélection par valeur : n'importe quelle étiquette (rlnCtfMaxResolution, rlnDefocusU...).
 
 **Étapes suivantes** : 3D auto-refine (RELION), 2D classification (RELION), Join star files (RELION)
+
+### Symmetry expansion (RELION)
+
+`relion_symmetry_expand` — logiciel : `relion`
+
+Copie chaque particule une fois par pose équivalente par symétrie (relion_particle_symmetry_expand), comme la « Symmetry Expansion » de CryoSPARC : chaque copie d'un complexe symétrique devient une particule. Expansion hélicoïdale le long de l'axe aussi.
+
+**Quand l'utiliser**
+
+- Classification ou raffinement focalisés d'une sous-unité d'un complexe symétrique, en C1.
+- Sous-unités qui diffèrent d'une copie à l'autre (occupation partielle d'un ligand).
+
+**À éviter / pièges**
+
+- Raffiner les copies avec la symétrie d'origine : les particules seraient comptées plusieurs fois.
+
+**Entrées conseillées** : Des particules raffinées avec la symétrie à développer.
+
+**Conseils**
+
+- Ensuite : soustraction du signal autour d'une sous-unité, puis classification 3D sans alignement ou raffinement local en C1.
+- Le nombre de particules est multiplié par l'ordre du groupe (14 pour D7).
+
+**Étapes suivantes** : RELION signal subtraction, 3D classification (RELION), RELION local refinement

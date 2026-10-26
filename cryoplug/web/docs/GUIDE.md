@@ -284,8 +284,22 @@ attendent, puis repartent seuls.
 - Plus court : dans la galerie d'une classification terminée, cliquez des classes puis **Select these classes** : la
   sélection est créée et lancée.
 - Mode *Automatic* : le class ranker de RELION garde les classes de score ≥ 0,5 (réglable).
+- En 3D, la classification et le **Heterogeneous refinement** montrent une galerie des cartes de classes (projections
+  selon z, y, x et coupe centrale) ; cliquez les bonnes classes puis **Select these classes** : **Select 3D classes**
+  réunit leurs particules. Le job peut aussi attendre vos clics, comme en 2D.
 
-### 2.5 Conseils
+### 2.5 Outils sur les particules
+
+| Besoin | Job |
+|---|---|
+| Particules communes à deux jeux, ou d'un jeu sans l'autre | **Particle sets (intersection, difference)** (par image ou par position) |
+| Réunir des jeux | **Join star files (RELION)** |
+| Orientation préférentielle | **Rebalance orientations** (cartes des vues avant / après) |
+| Images plus petites pour aller vite | **Downsample particles** (recadrage de Fourier) |
+| Une particule par sous-unité d'un complexe symétrique | **Symmetry expansion (RELION)** |
+| Doublons, sous-ensembles, sélection sur une colonne | **Subset selection (RELION)** |
+
+### 2.6 Conseils
 
 - Travaillez à pixel réduit pour la 2D, l'ab initio et la 3D ; avant le raffinement final, ré-extrayez à pleine
   échelle (entrée *Particles to re-extract* de l'extraction, recentrée sur les positions raffinées).

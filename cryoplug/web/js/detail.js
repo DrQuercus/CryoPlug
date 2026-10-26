@@ -536,12 +536,14 @@ function reportSection(sec, puid, job) {
   } else if (sec.kind === 'text') {
     wrap.append(h('h4', {}, sec.title), h('div', { class: sec.mono ? 'box mono' : 'box', style: { whiteSpace: 'pre-wrap', overflowX: 'auto' } }, sec.text));
   } else if (sec.kind === 'classes2d') {
-    const classesOut = (job.outputs || []).find((o) => o.type === 'class_averages' && o.name === 'classes');
+    // 2D: a "Select 2D classes" job of the class averages; 3D: the job the section names, of the output it names
+    const classesOut = sec.select_job ? (job.outputs || []).find((o) => o.name === (sec.select_output || 'particles'))
+      : (job.outputs || []).find((o) => o.type === 'class_averages' && o.name === 'classes');
     wrap.append(h('div', { class: 'box' }, classGallery(sec, {
       puid, job,
       finish: (classes) => act(api.finish(puid, job.uid, JSON.stringify({ classes })), `${classes.length} classes kept`)
         .then(() => forgetSelection(puid, job.uid)),
-      newSelection: classesOut ? (classes) => newSelectionJob(job, classesOut, classes) : null,
+      newSelection: classesOut ? (classes) => newSelectionJob(job, classesOut, classes, sec) : null,
     })));
   } else if (sec.kind === 'picks') {
     wrap.append(h('div', { class: 'box' }, pickInspector(sec, {
@@ -603,11 +605,11 @@ async function newCuration(job, out, limits) {
 }
 
 // A "Select 2D classes" job keeping the classes clicked in the gallery of a 2D classification, queued at once.
-async function newSelectionJob(job, out, classes) {
+async function newSelectionJob(job, out, classes, sec = {}) {
   const puid = state.project.uid;
   try {
-    const made = await guard(api.createJob(puid, { type: 'relion_select2d', params: { mode: 'list', classes: classes.join(', ') },
-      inputs: { classes: { job: job.uid, output: out.name } }, queue: true }), `${classes.length} classes of ${job.uid}: selection job queued`);
+    const made = await guard(api.createJob(puid, { type: sec.select_job || 'relion_select2d', params: { mode: 'list', classes: classes.join(', ') },
+      inputs: { [sec.select_input || 'classes']: { job: job.uid, output: out.name } }, queue: true }), `${classes.length} classes of ${job.uid}: selection job queued`);
     forgetSelection(puid, job.uid);
     await refreshJobs();
     navigate(jobHref(made.uid));

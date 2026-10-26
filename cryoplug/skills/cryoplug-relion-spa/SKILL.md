@@ -57,6 +57,14 @@ threshold, particles removed or added by hand, or manual picking) is for people 
   cryoDRGN jobs (`cryoplug-heterogeneity`); `relion_multibody` (rigid domains, needs ≥ 3 MPI processes) and
   `relion_dynamight` (continuous deformations, GPU) describe flexibility within RELION.
 
+## Particle utilities
+
+`relion_select3d` (classes of a 3D classification or heterogeneous refinement, `mode=list` as an agent),
+`relion_particle_sets` (A ∩ B, A − B, B − A, matched by image or by position), `relion_join` (union),
+`relion_rebalance` (caps over-represented views), `relion_downsample` (Fourier cropping to a smaller box),
+`relion_symmetry_expand` (one particle per symmetry copy, then `relion_subtract` / focused classification in C1),
+`relion_subset` (duplicates, splits, metadata ranges).
+
 ## Limits and pitfalls
 
 - Several sessions with different pixel sizes or detectors: import them separately, join with `relion_join`.

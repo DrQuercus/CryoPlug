@@ -564,12 +564,12 @@ def class_lines(sec: dict[str, Any], rows_shown: int) -> list[str]:
     """2D class averages: the largest classes with their particles, share and resolution, and the selection made."""
     classes = sorted(sec.get("classes") or [], key=lambda c: -(c.get("particles") or 0))
     total = sum(c.get("particles") or 0 for c in classes) or 1
-    head = f"[{sec.get('title', '')}] {len(classes)} class averages, {total:,} particles"
+    head = f"[{sec.get('title', '')}] {len(classes)} {'3D classes' if sec.get('three_d') else 'class averages'}, {total:,} particles"
     if sec.get("selected"):
         head += f"; kept: classes {', '.join(map(str, sec['selected']))}" + (f" ({sec['how']})" if sec.get("how") else "")
     elif sec.get("selectable") and sec.get("waiting"):
-        head += ("; WAITING for a person to click the good classes in the job panel (or create a relion_select2d "
-                 "job with mode=list)")
+        head += ("; WAITING for a person to click the good classes in the job panel (or create a "
+                 f"{'relion_select3d' if sec.get('three_d') else 'relion_select2d'} job with mode=list)")
     lines = [head, "  class | particles | share | resolution (Å)" + (" | score" if any("score" in c for c in classes) else "")]
     for c in classes[: max(rows_shown, 24)]:
         res = c.get("resolution")

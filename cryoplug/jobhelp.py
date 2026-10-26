@@ -440,6 +440,23 @@ HELP: dict[str, dict[str, Any]] = {
         "next": ["relion_initial_model", "relion_class2d", "relion_class3d_global", "relion_refine3d", "relion_topaz_train",
                  "relion_autopick"],
     },
+    "relion_select3d": {
+        "purpose": "Garde les particules des classes 3D cliquées dans une galerie des cartes de classes (projections selon "
+                   "z, y, x et coupe centrale), ou listées : réunit les bonnes classes d'une classification 3D ou d'un "
+                   "raffinement hétérogène ; les autres forment une seconde sortie.",
+        "when": [
+            "Après une classification 3D : réunir les classes de la bonne conformation avant le raffinement.",
+            "Après un raffinement hétérogène avec leurres : garder la classe de la protéine.",
+        ],
+        "avoid": ["Des classes de conformations différentes réunies : la carte moyenne les mélange."],
+        "inputs": "Les « Classified particles » d'une classification 3D ou d'un raffinement hétérogène (elles portent le "
+                  "modèle des classes).",
+        "tips": [
+            "Depuis la galerie d'une classification terminée, « Select these classes » crée et lance ce job.",
+            "Ouvrez les cartes des classes (sorties map_N) dans le visualiseur 3D pour juger les détails.",
+        ],
+        "next": ["relion_refine3d", "relion_class3d_global"],
+    },
     "relion_initial_model": {
         "purpose": "Calcule une première carte 3D sans référence (relion_refine --grad --denovo_3dref, VDAM) puis l'aligne "
                    "sur les axes de symétrie et applique la symétrie (relion_align_symmetry) : l'ab initio de RELION.",
@@ -612,6 +629,70 @@ HELP: dict[str, dict[str, Any]] = {
             "Sélection par valeur : n'importe quelle étiquette (rlnCtfMaxResolution, rlnDefocusU...).",
         ],
         "next": ["relion_refine3d", "relion_class2d", "relion_join"],
+    },
+    "relion_particle_sets": {
+        "purpose": "Compare deux jeux de particules (comme le « Particle Sets Tool » de CryoSPARC) : les particules "
+                   "présentes dans les deux, celles de A seulement et celles de B seulement. Les particules se reconnaissent "
+                   "à leur image ou à leur position sur la micrographie.",
+        "when": [
+            "Retirer d'un jeu les particules d'un autre (classes « poubelle », particules déjà traitées).",
+            "Garder les particules retenues par deux nettoyages indépendants (2D et 3D, deux pickings).",
+        ],
+        "avoid": ["La correspondance par image entre particules ré-extraites : elles ont d'autres noms d'image ; prenez la position."],
+        "inputs": "Deux jeux de particules (RELION ou CryoSPARC).",
+        "tips": [
+            "Position : distance d'environ un quart du diamètre ; les décalages de l'alignement sont pris en compte.",
+            "L'union des deux jeux se fait avec « Join star files ».",
+        ],
+        "next": ["relion_refine3d", "relion_class2d", "relion_join"],
+    },
+    "relion_rebalance": {
+        "purpose": "Retire des particules dans les vues trop représentées (orientation préférentielle), comme « Rebalance "
+                   "Orientations » de CryoSPARC : les directions de vue sont découpées en cases d'aire à peu près égale et "
+                   "chaque case garde au plus le nombre de particules d'un percentile des cases.",
+        "when": [
+            "Carte étirée dans une direction, FSC directionnelle très anisotrope, quelques vues qui dominent la carte "
+            "des directions de vue.",
+        ],
+        "avoid": ["Un jeu déjà petit : retirer des particules coûte de la résolution ; mieux vaut collecter inclinée."],
+        "inputs": "Des particules raffinées (avec leurs poses).",
+        "tips": [
+            "Cases de 10° et percentile 80 % pour commencer ; comparez les cartes des directions de vue avant et après.",
+            "Raffinez ensuite les particules gardées et comparez l'anisotropie (FSC directionnelle).",
+        ],
+        "next": ["relion_refine3d"],
+    },
+    "relion_downsample": {
+        "purpose": "Réduit la taille des images de particules par recadrage de Fourier (comme « Downsample Particles » de "
+                   "CryoSPARC) : 2D et 3D plus rapides à un pixel plus gros. Écrit de nouvelles piles et un fichier de "
+                   "particules RELION avec la nouvelle boîte et le nouveau pixel ; poses et décalages (en Å) sont gardés.",
+        "when": [
+            "Particules extraites à pleine taille : classification 2D, modèle initial et 3D à pixel réduit.",
+        ],
+        "avoid": ["Le raffinement final à pixel réduit : la résolution est limitée à deux fois le nouveau pixel (Nyquist)."],
+        "inputs": "Des particules (RELION ou CryoSPARC).",
+        "tips": [
+            "Boîte paire ; nouveau pixel = ancien pixel × ancienne boîte / nouvelle boîte.",
+            "Pour revenir à pleine taille, ré-extrayez les particules (extraction avec « Particles to re-extract »).",
+        ],
+        "next": ["relion_class2d", "relion_initial_model", "relion_class3d_global"],
+    },
+    "relion_symmetry_expand": {
+        "purpose": "Copie chaque particule une fois par pose équivalente par symétrie (relion_particle_symmetry_expand), "
+                   "comme la « Symmetry Expansion » de CryoSPARC : chaque copie d'un complexe symétrique devient une "
+                   "particule. Expansion hélicoïdale le long de l'axe aussi.",
+        "when": [
+            "Classification ou raffinement focalisés d'une sous-unité d'un complexe symétrique, en C1.",
+            "Sous-unités qui diffèrent d'une copie à l'autre (occupation partielle d'un ligand).",
+        ],
+        "avoid": ["Raffiner les copies avec la symétrie d'origine : les particules seraient comptées plusieurs fois."],
+        "inputs": "Des particules raffinées avec la symétrie à développer.",
+        "tips": [
+            "Ensuite : soustraction du signal autour d'une sous-unité, puis classification 3D sans alignement ou "
+            "raffinement local en C1.",
+            "Le nombre de particules est multiplié par l'ordre du groupe (14 pour D7).",
+        ],
+        "next": ["relion_subtract", "relion_class3d_global", "relion_local_refine"],
     },
     "relion_multibody": {
         "purpose": "Raffine séparément des corps rigides d'un complexe flexible, chacun avec son masque, à partir d'un "

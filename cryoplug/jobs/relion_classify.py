@@ -10,7 +10,7 @@ import numpy as np
 
 from cryoplug import relion as rl
 from cryoplug.jobs import register
-from cryoplug.jobs.base import JobContext, JobError, OutputDef, Param, Slot, extra_args_param
+from cryoplug.jobs.base import JobContext, JobError, JobType, OutputDef, Param, Slot, extra_args_param
 from cryoplug.jobs.relion import Progress, absolute_greyscale, map_on_grid
 from cryoplug.jobs.relion_common import (
     SAMPLINGS, RelionJob, compute_params, gpus, healpix, mask_diameter, mpi, particles_out_meta, refine_compute_params,
@@ -687,7 +687,154 @@ def class3d_outputs(ctx: JobContext, files: dict[str, Path], it: int, k: int, sy
                    meta=particles_out_meta(ctx, files["data"], "class3d", symmetry=sym, optimiser=ctx.rel(files["optimiser"]),
                                            model=ctx.rel(files["model"])))
     ctx.add_highlight("Classes", str(len(maps)))
+    if k > 1:
+        try:
+            records = class3d_records(ctx, files)
+            ctx.add_classes("3D classes", records, key="classes3d", particles=n, actions=True, three_d=True,
+                            select_job="relion_select3d", select_input="particles", select_output="particles")
+        except Exception as exc:  # cosmetic
+            ctx.warn(f"No gallery of the 3D classes: {exc}")
     refinement_diagnostics(ctx, files["data"], ctx.job_dir, per_class=k > 1)
+
+
+def map_tile(path: Path, size: int = 160) -> np.ndarray:
+    """A 3D class at a glance (uint8, square): projections along z, y and x and the central z slice, 2 × 2."""
+    from scipy import ndimage
+    data = MapVolume.read(path).data.astype(np.float32)  # z, y, x
+    half = size // 2
+    views = [data.mean(axis=0), data.mean(axis=1), data.mean(axis=2), data[data.shape[0] // 2]]
+    out = np.zeros((2 * half, 2 * half), dtype=np.uint8)
+    for i, v in enumerate(views):
+        lo, hi = np.percentile(v, [1, 99.7])
+        img = np.clip((v - lo) / ((hi - lo) or 1.0), 0, 1)[::-1]  # y up
+        img = ndimage.zoom(img, (half / img.shape[0], half / img.shape[1]), order=1)[:half, :half]
+        r, c = divmod(i, 2)
+        out[r * half:r * half + img.shape[0], c * half:c * half + img.shape[1]] = (img * 255).astype(np.uint8)
+    return out
+
+
+def class3d_records(ctx: JobContext, files: dict[str, Path], folder: str = "classes3d") -> list[dict[str, Any]]:
+    """Gallery records of the 3D classes of a run_itNNN_model.star: a 2 × 2 picture of each map, its particles and share."""
+    from cryoplug.imaging import write_png
+    infos = rl.model_classes(files["model"])
+    counts, total = class_counts(files["data"]) if files["data"].exists() else ({}, 0)
+    out_dir = ctx.path(folder)
+    out_dir.mkdir(exist_ok=True)
+    records = []
+    for info in infos:
+        c = info["class"]
+        path = ctx.abs(info["image"]) if info["image"] else None
+        if path is None or not path.exists():
+            continue
+        png = write_png(out_dir / f"class_{c:03d}.png", map_tile(path))
+        n = counts.get(c, int(round(info["distribution"] * total)))
+        records.append({"class": c, "image": ctx.rel(png), "map": ctx.rel(path), "particles": n,
+                        "fraction": round(n / total, 4) if total else round(info["distribution"], 4),
+                        "resolution": round(info["resolution"], 2) if info["resolution"] else None,
+                        "accuracy_rotations": round(info["accuracy_rotations"], 2) if info["accuracy_rotations"] else None,
+                        "accuracy_translations": round(info["accuracy_translations"], 2) if info["accuracy_translations"] else None})
+    return records
+
+
+# ------------------------------------------------------------------ 3D class selection
+@register
+class RelionSelect3D(JobType):
+    name = "relion_select3d"
+    title = "Select 3D classes"
+    category = "Classification"
+    interactive = True
+    software = ["RELION"]
+    description = ("Keeps the particles of the 3D classes clicked in a gallery of the class maps (or listed): merges the "
+                   "good classes of a 3D classification or a heterogeneous refinement, the others are an output too.")
+    inputs = [Slot("particles", ("particles",), "Classified particles", prefer=("particles",),
+                   help="The 'Classified particles' of a 3D classification or a heterogeneous refinement.")]
+    params = [
+        Param("mode", "choice", "interactive", choices=["interactive", "list"], label="Selection",
+              labels={"interactive": "Click the classes (the job waits for you)", "list": "The classes listed below"}),
+        Param("classes", "str", "", label="Classes to keep", placeholder="e.g. 1, 3", help="List mode: class numbers."),
+    ]
+    outputs = [OutputDef("particles", "particles", "Selected particles"), OutputDef("rejected", "particles", "Rejected particles")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        if params.get("mode") == "list":
+            try:
+                if not rl.parse_numbers(str(params.get("classes") or "")):
+                    return ["List the classes to keep (e.g. 1, 3)"]
+            except ValueError as exc:
+                return [str(exc)]
+        return []
+
+    @staticmethod
+    def source_files(ctx: JobContext) -> dict[str, Path]:
+        inp = ctx.require("particles")
+        rel = inp.meta.get("relion") or {}
+        if not rel.get("model") or not ctx.abs(rel["model"]).exists():
+            raise JobError("Connect the 'Classified particles' of a 3D classification or a heterogeneous refinement "
+                           "(they carry the model of the classes)")
+        return {"model": ctx.abs(rel["model"]), "data": Path(inp.files[0] if inp.files else inp.path)}
+
+    def prepare(self, ctx: JobContext) -> bool:
+        files = self.source_files(ctx)
+        ctx.progress(0.1, "Drawing the class maps")
+        records = class3d_records(ctx, files)
+        if not records:
+            raise JobError("No class map found (were the classification's files removed?)")
+        ctx.path("selection.json").write_text(json.dumps({"files": {k: ctx.rel(v) for k, v in files.items()}, "classes": records}))
+        if ctx.params["mode"] == "list":
+            self.select(ctx, rl.parse_numbers(ctx.params["classes"]), "listed")
+            return True
+        ctx.add_classes("3D classes", records, key="classes3d", selectable=True, waiting=True, three_d=True,
+                        particles=sum(r["particles"] for r in records))
+        ctx.add_highlight("Classes", str(len(records)))
+        ctx.log("Waiting: click the good classes in the job panel, then Done")
+        return False
+
+    def finalize(self, ctx: JobContext, choice: str | None) -> None:
+        try:
+            chosen = json.loads(choice or "{}").get("classes") if (choice or "").strip().startswith("{") else rl.parse_numbers(choice or "")
+        except (ValueError, AttributeError) as exc:
+            raise JobError(f"Selection not understood: {exc}") from None
+        if not chosen:
+            raise JobError("Select at least one class")
+        self.select(ctx, sorted({int(c) for c in chosen}), "clicked")
+
+    def select(self, ctx: JobContext, chosen: list[int], how: str) -> None:
+        state = json.loads(ctx.path("selection.json").read_text())
+        records = state["classes"]
+        known = {r["class"] for r in records}
+        wrong = [c for c in chosen if c not in known]
+        if wrong:
+            raise JobError(f"No class {', '.join(map(str, wrong))} (the classes are {', '.join(map(str, sorted(known)))})")
+        data = ctx.abs(state["files"]["data"])
+        tables = rl.read_star(data)
+        ptab = rl.particle_table(tables)
+        classes = np.array([int(float(c)) for c in ptab.column("rlnClassNumber")])
+        keep = np.isin(classes, chosen)
+        n_keep = int(keep.sum())
+        if not n_keep:
+            raise JobError("The selected classes hold no particle")
+        sel = rl.write_star(ctx.path("particles.star"), [t if t is not ptab else ptab.select(np.flatnonzero(keep)) for t in tables.values()],
+                            comment=f"Particles of 3D classes {', '.join(map(str, chosen))} of {ctx.rel(data)}")
+        ctx.add_output("particles", "particles", sel, f"{n_keep:,} selected particles",
+                       meta=particles_out_meta(ctx, sel, "select3d", classes=chosen))
+        if (~keep).any():
+            rej = rl.write_star(ctx.path("particles_rejected.star"),
+                                [t if t is not ptab else ptab.select(np.flatnonzero(~keep)) for t in tables.values()],
+                                comment="Particles of the 3D classes not selected")
+            ctx.add_output("rejected", "particles", rej, f"{int((~keep).sum()):,} rejected particles",
+                           meta=particles_out_meta(ctx, rej, "select3d"))
+        for r in records:
+            r["selected"] = r["class"] in chosen
+        ctx.add_classes("3D classes", records, key="classes3d", selected=chosen, how=how, three_d=True,
+                        particles=sum(r["particles"] for r in records))
+        ctx.highlights = [hl for hl in ctx.highlights if hl["label"] != "Classes"]
+        ctx.add_table("Selection", ["", "Value"], [
+            ["Classes kept", f"{len(chosen)} of {len(records)} ({how})"], ["Particles kept", f"{n_keep:,} of {len(ptab):,}"],
+            ["Class numbers", ", ".join(map(str, chosen))]])
+        ctx.add_highlight("Classes kept", f"{len(chosen)} / {len(records)}")
+        ctx.add_highlight("Particles", f"{n_keep:,}")
+        ctx.save_report()
 
 
 # ------------------------------------------------------------------ heterogeneous refinement

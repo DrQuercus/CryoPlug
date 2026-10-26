@@ -121,6 +121,12 @@ RELION · interactive: a person works in it. In: classes: class_averages. Out: p
 Keeps the particles of the good 2D classes. As in CryoSPARC, the job shows the class averages and waits: click the good classes (sorted by size or resolution), then Done. The classes can also be listed, or chosen automatically by RELION's class ranker. Gives the selected particles, the rejected ones, and the selected class averages (templates for picking).
 Usually followed by: `relion_initial_model`, `relion_class2d`, `relion_class3d_global`, `relion_refine3d`, `relion_topaz_train`, `relion_autopick`.
 
+### `relion_select3d` — Select 3D classes
+built-in · interactive: a person works in it. In: particles: particles. Out: particles: particles, rejected: particles.
+
+Keeps the particles of the 3D classes clicked in a gallery of the class maps (or listed): merges the good classes of a 3D classification or a heterogeneous refinement, the others are an output too.
+Usually followed by: `relion_refine3d`, `relion_class3d_global`.
+
 ## Reconstruction
 
 ### `relion_refine3d` — 3D auto-refine (RELION)
@@ -533,6 +539,12 @@ Shell (custom commands) · GPU optional · administrators only, not for agents. 
 
 Run any program on CryoPlug data (bash script template). Placeholders: {map} {map2} {half_map_a} {half_map_b} {model} {mask} {sequence} {job_dir} {resolution} {pixel_size} {gpus}. Files matching the output patterns are registered as outputs.
 
+### `relion_downsample` — Downsample particles
+built-in. In: particles: particles. Out: particles: particles.
+
+Smaller particle images by Fourier cropping, as CryoSPARC's Downsample Particles: faster 2D and 3D at a coarser pixel (the resolution limit becomes twice the new pixel size). Writes new stacks and a RELION particle file with the new box and pixel size; poses and shifts (in Å) are kept.
+Usually followed by: `relion_class2d`, `relion_initial_model`, `relion_class3d_global`.
+
 ### `relion_join` — Join star files (RELION)
 RELION. In: set_1: particles/micrographs/movies, set_2: particles/micrographs/movies, set_3?: particles/micrographs/movies, set_4?: particles/micrographs/movies. Out: particles: particles, micrographs: micrographs, movies: movies.
 
@@ -551,6 +563,18 @@ built-in. In: model: model. Out: model: model.
 Built-in model editing with gemmi: convert PDB/mmCIF, remove hydrogens/waters/ligands/alternative conformations, select or rename chains, reset B-factors and occupancies.
 Usually followed by: `phenix_real_space_refine`.
 
+### `relion_particle_sets` — Particle sets (intersection, difference)
+built-in. In: set_a: particles, set_b: particles. Out: both: particles, a_only: particles, b_only: particles.
+
+Compares two particle sets, as CryoSPARC's Particle Sets Tool: the particles in both, those of A only and those of B only. Particles are matched by image (the same extracted particle) or by position on the micrograph (particles picked or extracted twice). Join star files gives the union.
+Usually followed by: `relion_refine3d`, `relion_class2d`, `relion_join`.
+
+### `relion_rebalance` — Rebalance orientations
+built-in. In: particles: particles. Out: particles: particles, removed: particles.
+
+Removes particles from over-represented views (preferred orientation), as CryoSPARC's Rebalance Orientations: the viewing directions are cut in bins of about equal area and each bin keeps at most as many particles as a chosen percentile of the bins. The anisotropy of the map drops, at the cost of particles.
+Usually followed by: `relion_refine3d`.
+
 ### `chimerax_render` — Render images (ChimeraX)
 UCSF ChimeraX (+ ISOLDE). In: map?: map, model?: model. Out: images: files.
 
@@ -561,3 +585,9 @@ RELION. In: data: particles/micrographs. Out: particles: particles, micrographs:
 
 relion_star_handler on a particle or micrograph set: remove duplicated particles (closer than a distance after alignment: they inflate the FSC), split into subsets, keep the rows of a metadata range, or discard images with outlying statistics.
 Usually followed by: `relion_refine3d`, `relion_class2d`, `relion_join`.
+
+### `relion_symmetry_expand` — Symmetry expansion (RELION)
+RELION. In: particles: particles. Out: particles: particles.
+
+Copies every particle once per symmetry-related pose (relion_particle_symmetry_expand), as CryoSPARC's Symmetry Expansion: each copy of a symmetric complex becomes a particle, for focused classification or refinement of one subunit in C1. Helical expansion along the axis too.
+Usually followed by: `relion_subtract`, `relion_class3d_global`, `relion_local_refine`.

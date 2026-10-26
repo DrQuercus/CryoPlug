@@ -279,6 +279,22 @@ def test_relion_pipeline_movies_to_map(manager, spa):
     assert oh["class_1"]["meta"]["n_particles"] > oh["class_2"]["meta"]["n_particles"]
     assert [r[1] for r in next(s for s in _sections(manager, puid, het, "table") if s["title"] == "References")["rows"]] \
         == ["ref_1.mrc", "ref_2.mrc"]
+    # the gallery of the 3D classes, and the selection of classes (clicked, or listed)
+    (gal,) = [s for s in _sections(manager, puid, c3d, "classes2d")]
+    assert gal["three_d"] and gal["actions"] and gal["select_job"] == "relion_select3d" and len(gal["classes"]) == 2
+    assert (pdir / gal["classes"][0]["image"]).exists() and gal["classes"][0]["map"].endswith("_class001.mrc")
+    s3 = _run(manager, puid, "relion_select3d", {}, {"particles": _ref(c3d, "particles")}, status="waiting")
+    (waiting,) = _sections(manager, puid, s3, "classes2d")
+    assert waiting["selectable"] and waiting["waiting"] and waiting["three_d"]
+    done = manager.finish_interactive(puid, s3["uid"], json.dumps({"classes": [1]}))
+    o = _outs(done)
+    assert o["particles"]["meta"]["n_particles"] == o3["class_1"]["meta"]["n_particles"]
+    assert o["rejected"]["meta"]["n_particles"] == o3["class_2"]["meta"]["n_particles"]
+    listed = _run(manager, puid, "relion_select3d", {"mode": "list", "classes": "1, 2"}, {"particles": _ref(c3d, "particles")})
+    assert _outs(listed)["particles"]["meta"]["n_particles"] == n_sel and "rejected" not in _outs(listed)
+    bad = _run(manager, puid, "relion_select3d", {}, {"particles": _ref(sel, "particles")}, ok=False)
+    assert bad["status"] == "failed" and "Classified particles" in bad["error"]
+
     one = manager.create_job(puid, "relion_hetero_refine", {}, {"particles": _ref(sel, "particles"), "ref_1": _ref(c3d, "map_1")})
     with pytest.raises(Exception, match="Reference 2"):  # a class per reference: two at least
         manager.queue_job(puid, one["uid"])
@@ -294,6 +310,34 @@ def test_relion_pipeline_movies_to_map(manager, spa):
     assert ro["particles"]["meta"]["relion"]["optimiser"].endswith("run_optimiser.star")
     assert [s["title"] for s in _sections(manager, puid, ref, "heatmap")] == ["Viewing directions"]
     assert "Posterior precision of the poses" in {s["title"] for s in _sections(manager, puid, ref, "plot")}
+
+    # particle utilities: orientations rebalanced, sets compared, particles down-sampled, symmetry expanded
+    rb = _run(manager, puid, "relion_rebalance", {"bin_size": 30, "percentile": 50}, {"particles": _ref(ref, "particles")})
+    ob = _outs(rb)
+    n_kept, n_removed = ob["particles"]["meta"]["n_particles"], ob["removed"]["meta"]["n_particles"]
+    assert n_kept + n_removed == n_sel and n_removed > 0
+    assert [s["title"] for s in _sections(manager, puid, rb, "heatmap")] == ["Viewing directions before", "Viewing directions after"]
+    for match, extra in (("image", {}), ("position", {"distance": 5.0})):
+        sets = _run(manager, puid, "relion_particle_sets", {"match": match, **extra},
+                    {"set_a": _ref(ref, "particles"), "set_b": _ref(rb, "particles")})
+        os_ = _outs(sets)
+        assert os_["both"]["meta"]["n_particles"] == n_kept and os_["a_only"]["meta"]["n_particles"] == n_removed
+        assert "b_only" not in os_
+    ds = _run(manager, puid, "relion_downsample", {"box": 16}, {"particles": _ref(sel, "particles")})
+    od = _outs(ds)["particles"]
+    assert od["meta"]["box"] == 16 and od["meta"]["pixel_size"] == pytest.approx(4.0) and od["meta"]["n_particles"] == n_sel
+    first = rl.particle_table(rl.read_star(pdir / od["path"])).column("rlnImageName")[0]
+    import mrcfile
+    with mrcfile.open(str(pdir / first.split("@")[1])) as m:
+        assert m.data.shape[1:] == (16, 16) and float(m.voxel_size.x) == pytest.approx(4.0)
+    src = rl.particle_table(rl.read_star(pdir / _outs(sel)["particles"]["path"])).column("rlnImageName")[0]
+    with mrcfile.open(str(pdir / src.split("@")[1])) as m:
+        before = float(np.asarray(m.data[int(src.split("@")[0]) - 1]).mean())
+    with mrcfile.open(str(pdir / first.split("@")[1])) as m:
+        assert float(np.asarray(m.data[0]).mean()) == pytest.approx(before, abs=1e-3)  # pixel values kept
+    se = _run(manager, puid, "relion_symmetry_expand", {"symmetry": "C2"}, {"particles": _ref(ref, "particles")})
+    assert "relion_particle_symmetry_expand" in _command(manager, puid, se) and "--sym C2" in _command(manager, puid, se)
+    assert _outs(se)["particles"]["meta"]["n_particles"] == 2 * n_sel
     assert ref["resources"]["num_cpus"] == 6
 
     # mask around the refined map

@@ -57,6 +57,7 @@ def _load() -> None:
         refinement,
         relion,
         relion_classify,
+        relion_particles,
         relion_picking,
         relion_preprocess,
         relion_refinement,
