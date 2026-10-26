@@ -557,6 +557,30 @@ Construit le modèle initial 3D d'une fibre amyloïde à partir de ses classes 2
 
 **Étapes suivantes** : 3D auto-refine (RELION), 3D classification (RELION), Helical symmetry (RELION)
 
+### Average power spectra (2D classes)
+
+`average_power_spectra` — intégré (aucun logiciel externe)
+
+Spectres de puissance des particules de chaque classe 2D, tournés dans le repère de la classe et moyennés, comme « Average Power Spectra » de CryoSPARC : les lignes de couche d'un filament y ressortent bien mieux que dans le spectre de la moyenne de classe, pour indexer sa symétrie hélicale (torsion et montée).
+
+**Quand l'utiliser**
+
+- Filaments (amyloïdes, filaments protéiques) après une classification 2D : estimer la montée et la torsion.
+- Vérifier qu'une classe contient un seul type de filament (lignes de couche nettes et cohérentes).
+
+**À éviter / pièges**
+
+- Des particules globulaires : il n'y a pas de lignes de couche à voir.
+
+**Entrées conseillées** : Les particules d'une classification 2D (classe et angle psi) ; facultatif : les classes 2D, montrées à côté.
+
+**Conseils**
+
+- Choisissez les classes droites et nettes (« Classes ») ; 500 particules par classe suffisent souvent.
+- La première ligne de couche se lit à 1/montée (Å⁻¹) le long de l'axe ; puis Helical symmetry (RELION) affine twist et montée.
+
+**Étapes suivantes** : Helical symmetry (RELION), Amyloid initial model (RELION), Select 2D classes
+
 ### Heterogeneous refinement (RELION)
 
 `relion_hetero_refine` — logiciel : `relion`
@@ -2401,6 +2425,31 @@ Checklist automatique avant OneDep : cohérence cartes/demi-cartes/masque, modè
 **Étapes suivantes** : Deposition package, wwPDB validation report (OneDep)
 
 ## Utilitaires
+
+### Check particles (corrupt images)
+
+`check_particles` — intégré (aucun logiciel externe)
+
+Lit chaque image de particule et met de côté celles qui arrêteraient ou fausseraient un job, comme « Check For Corrupt Particles » de CryoSPARC : piles ou images manquantes, mauvaise taille de boîte, valeurs NaN ou infinies, images vides, et en option les valeurs extrêmes de moyenne ou d'écart-type.
+
+**Quand l'utiliser**
+
+- Un raffinement ou une classification s'arrête sur une erreur de lecture d'image ou des NaN.
+- Des particules importées d'ailleurs (autre disque, autre logiciel) dont on n'est pas sûr que toutes les piles soient là.
+- Après une extraction interrompue ou un disque plein.
+
+**À éviter / pièges**
+
+- Trier les bonnes et mauvaises particules sur leur contenu : c'est le rôle des classifications et de « Curate particles ».
+
+**Entrées conseillées** : Des particules (RELION ou CryoSPARC).
+
+**Conseils**
+
+- « Outliers beyond » à 8-10 σ ne retire que les images aberrantes (zones mortes, bords de carbone, cristaux de glace) ; 0 = seulement les images inutilisables.
+- Les chemins des images sont réécrits par rapport au dossier du projet : la sortie se lit depuis n'importe quel job.
+
+**Étapes suivantes** : 2D classification (RELION), 3D auto-refine (RELION), Restack particles, Curate particles (statistics)
 
 ### Curate particles (statistics)
 

@@ -133,6 +133,12 @@ RELION. In: classes: class_averages. Out: map: map, map_1: map.
 relion_helix_inimodel2d: a 3D initial model of an amyloid fibril from its 2D class averages, which are aligned into one long 2D image of a whole cross-over and turned around the axis by the cross-over distance (RELION's amyloid tutorial). One map per class; the reference of the helical 3D refinement.
 Usually followed by: `relion_refine3d`, `relion_class3d_global`, `relion_helix_toolbox`.
 
+### `average_power_spectra` — Average power spectra (2D classes)
+built-in. In: particles: particles, classes?: class_averages. Out: spectra: files.
+
+Power spectra of the particles of each 2D class, turned into the frame of the class and averaged, as CryoSPARC's Average Power Spectra: the layer lines of a filament stand out far better than in the spectrum of the class average, to index its helical symmetry (twist and rise).
+Usually followed by: `relion_helix_toolbox`, `relion_helix_inimodel2d`, `relion_select2d`.
+
 ### `relion_hetero_refine` — Heterogeneous refinement (RELION)
 RELION · GPU optional. In: particles: particles, ref_1: map, ref_2: map, ref_3?: map, ref_4?: map, ref_5?: map, ref_6?: map, ref_7?: map, ref_8?: map, mask?: mask. Out: maps: volume_series, particles: particles, map_1: map, class_1: particles.
 
@@ -575,6 +581,12 @@ Automated checklist before submitting to the wwPDB/EMDB: map/half-map/mask consi
 Usually followed by: `deposition_package`, `wwpdb_validation`.
 
 ## Utilities
+
+### `check_particles` — Check particles (corrupt images)
+built-in. In: particles: particles. Out: particles: particles, rejected: particles.
+
+Reads every particle image and sets aside those that would stop or spoil a job, as CryoSPARC's Check For Corrupt Particles: missing stacks or images, wrong box size, NaN or infinite values, blank images, and optionally extreme outliers of mean or spread (dead areas, carbon edges, ice crystals).
+Usually followed by: `relion_class2d`, `relion_refine3d`, `relion_restack`, `relion_particle_curate`.
 
 ### `relion_particle_curate` — Curate particles (statistics)
 built-in · interactive: a person works in it. In: particles: particles. Out: particles: particles, rejected: particles, cluster_1: particles, cluster_2: particles.

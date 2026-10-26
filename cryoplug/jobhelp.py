@@ -720,6 +720,39 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "next": ["relion_join", "relion_refine3d", "relion_reconstruct", "map_tools", "relion_local_refine"],
     },
+    "check_particles": {
+        "purpose": "Lit chaque image de particule et met de côté celles qui arrêteraient ou fausseraient un job, comme « Check "
+                   "For Corrupt Particles » de CryoSPARC : piles ou images manquantes, mauvaise taille de boîte, valeurs NaN "
+                   "ou infinies, images vides, et en option les valeurs extrêmes de moyenne ou d'écart-type.",
+        "when": [
+            "Un raffinement ou une classification s'arrête sur une erreur de lecture d'image ou des NaN.",
+            "Des particules importées d'ailleurs (autre disque, autre logiciel) dont on n'est pas sûr que toutes les piles soient là.",
+            "Après une extraction interrompue ou un disque plein.",
+        ],
+        "avoid": ["Trier les bonnes et mauvaises particules sur leur contenu : c'est le rôle des classifications et de « Curate particles »."],
+        "inputs": "Des particules (RELION ou CryoSPARC).",
+        "tips": [
+            "« Outliers beyond » à 8-10 σ ne retire que les images aberrantes (zones mortes, bords de carbone, cristaux de glace) ; 0 = seulement les images inutilisables.",
+            "Les chemins des images sont réécrits par rapport au dossier du projet : la sortie se lit depuis n'importe quel job.",
+        ],
+        "next": ["relion_class2d", "relion_refine3d", "relion_restack", "relion_particle_curate"],
+    },
+    "average_power_spectra": {
+        "purpose": "Spectres de puissance des particules de chaque classe 2D, tournés dans le repère de la classe et moyennés, "
+                   "comme « Average Power Spectra » de CryoSPARC : les lignes de couche d'un filament y ressortent bien mieux "
+                   "que dans le spectre de la moyenne de classe, pour indexer sa symétrie hélicale (torsion et montée).",
+        "when": [
+            "Filaments (amyloïdes, filaments protéiques) après une classification 2D : estimer la montée et la torsion.",
+            "Vérifier qu'une classe contient un seul type de filament (lignes de couche nettes et cohérentes).",
+        ],
+        "avoid": ["Des particules globulaires : il n'y a pas de lignes de couche à voir."],
+        "inputs": "Les particules d'une classification 2D (classe et angle psi) ; facultatif : les classes 2D, montrées à côté.",
+        "tips": [
+            "Choisissez les classes droites et nettes (« Classes ») ; 500 particules par classe suffisent souvent.",
+            "La première ligne de couche se lit à 1/montée (Å⁻¹) le long de l'axe ; puis Helical symmetry (RELION) affine twist et montée.",
+        ],
+        "next": ["relion_helix_toolbox", "relion_helix_inimodel2d", "relion_select2d"],
+    },
     "relion_helix_toolbox": {
         "purpose": "Outils de symétrie hélicale de RELION (relion_helix_toolbox) sur la carte d'un filament : recherche "
                    "locale de la torsion (twist) et de la montée (rise), puis imposition de la symétrie trouvée dans "

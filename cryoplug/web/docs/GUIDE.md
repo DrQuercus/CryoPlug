@@ -339,6 +339,8 @@ particules gardées.
 | Trier les particules sur leurs statistiques | **Curate particles (statistics)** (histogrammes, densité, images gardées / écartées) |
 | Réécrire un sous-ensemble dans ses propres piles | **Restack particles** (une pile par micrographie, recentrage arrondi) |
 | Micrographies communes à deux jeux, ou d'un jeu sans l'autre | **Particle sets** avec deux jeux de micrographies (par nom) |
+| Images corrompues, piles manquantes, NaN (un job qui s'arrête en lisant les particules) | **Check particles (corrupt images)** |
+| Lignes de couche d'un filament, pour indexer sa symétrie | **Average power spectra (2D classes)** (spectres des particules tournés dans le repère de la classe) |
 
 **Curate particles (statistics)** attend, comme le tri des micrographies, avec l'histogramme de chaque statistique des
 particules : probabilité de la meilleure pose, échantillons significatifs, contribution à la log-vraisemblance,

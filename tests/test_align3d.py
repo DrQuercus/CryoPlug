@@ -177,3 +177,76 @@ def test_orientation_diagnostics_cfar_and_scf(manager):
     even = _run(manager, puid, "directional_fsc", {"sampling": 30}, {"half_maps": {"job": iso["uid"], "output": "half_maps"}})
     assert float({h["label"]: h["value"] for h in even["highlights"]}["cFAR"]) > 0.7
     assert "SCF" not in {h["label"] for h in even["highlights"]}
+
+
+def test_check_particles_sets_corrupt_images_aside(manager):
+    p = manager.create_project("Check particles")
+    puid = p["uid"]
+    pdir = manager.project_dir(puid)
+    rng = np.random.default_rng(4)
+    imgs = rng.normal(0, 1, (30, 16, 16)).astype(np.float32)
+    imgs[3, 2, 2] = np.nan
+    imgs[7] = 0.0
+    imgs[11] *= 60.0  # extreme spread
+    with mrcfile.new(str(pdir / "good.mrcs"), overwrite=True) as mrc:
+        mrc.set_data(imgs)
+    rows = [f"{i + 1:06d}@good.mrcs" for i in range(30)] + ["000031@good.mrcs", "000001@gone.mrcs"]
+    (pdir / "check.star").write_text(
+        "data_optics\n\nloop_\n_rlnOpticsGroup #1\n_rlnOpticsGroupName #2\n_rlnImagePixelSize #3\n_rlnImageSize #4\n"
+        "_rlnImageDimensionality #5\n_rlnVoltage #6\n_rlnSphericalAberration #7\n_rlnAmplitudeContrast #8\n"
+        "1 opticsGroup1 1.0 16 2 300 2.7 0.1\n\ndata_particles\n\nloop_\n_rlnImageName #1\n_rlnOpticsGroup #2\n"
+        + "".join(f"{r} 1\n" for r in rows))
+    parts = _run(manager, puid, "import_particles", {"path": str(pdir / "check.star")})
+    job = _run(manager, puid, "check_particles", {"outlier_sigma": 8}, {"particles": {"job": parts["uid"], "output": "particles"}})
+    out = _outs(job)
+    assert out["particles"]["meta"]["n_particles"] == 27 and out["rejected"]["meta"]["n_particles"] == 5
+    table = next(s for s in __import__("json").loads((pdir / job["uid"] / "report.json").read_text())["sections"]
+                 if s["title"] == "Checks")
+    counts = {r[0]: r[1] for r in table["rows"]}
+    assert counts == {"Stack or image missing": "2", "NaN or infinite values": "1", "Blank (constant) image": "1",
+                      "Outlier (mean or spread)": "1", "Fine": "27"}
+    names = pt.star_column(pdir / out["particles"]["path"], "_rlnImageName")  # read from the project folder, as RELION
+    assert all((pdir / n.partition("@")[2]).is_file() for n in names) and names[0] == "000001@good.mrcs"
+    plain = _run(manager, puid, "check_particles", {}, {"particles": {"job": parts["uid"], "output": "particles"}})
+    assert _outs(plain)["particles"]["meta"]["n_particles"] == 28  # the outlier kept without the test
+
+
+def test_average_power_spectra_in_the_class_frame(manager):
+    """Particles of a striped class (layer lines along y) seen at random in-plane angles, made as RELION's projector
+    does (image(p) = class(Aᵀ p)): their power spectra turned back into the class frame add up on the ky axis."""
+    from scipy import ndimage
+    p = manager.create_project("Power spectra")
+    puid = p["uid"]
+    pdir = manager.project_dir(puid)
+    n, rng = 48, np.random.default_rng(5)
+    yy, xx = np.indices((n, n)) - n // 2
+    ref = (np.cos(2 * np.pi * yy / 6.0) * np.exp(-(xx ** 2 + yy ** 2) / (2 * 14.0 ** 2))).astype(np.float32)
+    psi = rng.uniform(-180, 180, 60)
+    imgs = []
+    for a in np.radians(psi):
+        rx = np.cos(a) * xx - np.sin(a) * yy  # Aᵀ (x, y)
+        ry = np.sin(a) * xx + np.cos(a) * yy
+        imgs.append(ndimage.map_coordinates(ref, [ry + n // 2, rx + n // 2], order=1) + rng.normal(0, 0.3, (n, n)))
+    with mrcfile.new(str(pdir / "fil.mrcs"), overwrite=True) as mrc:
+        mrc.set_data(np.stack(imgs).astype(np.float32))
+    rows = "".join(f"{i + 1:06d}@fil.mrcs 1 1 {a:.4f}\n" for i, a in enumerate(psi))
+    (pdir / "fil.star").write_text(
+        "data_optics\n\nloop_\n_rlnOpticsGroup #1\n_rlnOpticsGroupName #2\n_rlnImagePixelSize #3\n_rlnImageSize #4\n"
+        "_rlnImageDimensionality #5\n_rlnVoltage #6\n_rlnSphericalAberration #7\n_rlnAmplitudeContrast #8\n"
+        f"1 opticsGroup1 2.0 {n} 2 300 2.7 0.1\n\ndata_particles\n\nloop_\n_rlnImageName #1\n_rlnOpticsGroup #2\n"
+        "_rlnClassNumber #3\n_rlnAnglePsi #4\n" + rows)
+    parts = _run(manager, puid, "import_particles", {"path": str(pdir / "fil.star")})
+    job = _run(manager, puid, "average_power_spectra", {}, {"particles": {"job": parts["uid"], "output": "particles"}})
+    with mrcfile.open(str(pdir / _outs(job)["spectra"]["path"])) as mrc:
+        ps = np.asarray(mrc.data)[0]
+    c = n // 2
+    on_axis = ps[:, c - 1:c + 2].sum() / ps.sum()
+    assert on_axis > 0.5  # the layer lines line up on the ky axis
+    peak = np.unravel_index(int(np.argmax(ps)), ps.shape)
+    assert abs(peak[1] - c) <= 1 and abs(abs(peak[0] - c) - n / 6.0) <= 1.5
+    # the same particles without turning their spectra: no line
+    from cryoplug.jobs.relion_particles import aligned_power_spectrum
+    plain = sum(aligned_power_spectrum(im, 0.0) for im in imgs)
+    assert plain[:, c - 1:c + 2].sum() / plain.sum() < on_axis / 2
+    assert _run(manager, puid, "average_power_spectra", {"classes": "4"}, {"particles": {"job": parts["uid"], "output": "particles"}},
+                ok=False)["status"] == "failed"

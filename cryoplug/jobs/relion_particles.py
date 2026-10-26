@@ -201,6 +201,273 @@ class RelionRestack(JobType):
         ctx.add_output("particles", "particles", out, f"{n:,} restacked particles", meta=particles_out_meta(ctx, out, "restack"))
 
 
+# ------------------------------------------------------------------ check particles
+PROBLEMS = {1: "Stack or image missing", 2: "Wrong box size", 3: "NaN or infinite values", 4: "Blank (constant) image",
+            5: "Outlier (mean or spread)"}
+
+
+def image_checks(tables: dict[str, rl.StarTable], bases: list[Path], box: int, outlier_sigma: float = 0.0,
+                 progress=None) -> dict[str, Any]:
+    """Every image of a RELION particle table read and checked: ``problem`` (0 = fine, else a key of PROBLEMS), the mean
+    and standard deviation of the images read, and the stack of each particle found in ``bases`` (the folders its
+    relative paths may refer to: the image folder of the import, the project folder, the folder of the file).
+    Outliers: robust z-score (median, MAD) of the mean or of the spread above ``outlier_sigma``."""
+    import mrcfile
+    names = rl.particle_table(tables).column("rlnImageName")
+    n = len(names)
+    groups: dict[str, list[tuple[int, int]]] = {}
+    for i, value in enumerate(names):
+        number, _at, rel = str(value).partition("@")
+        try:
+            groups.setdefault(rel, []).append((i, int(number) - 1))
+        except ValueError:
+            groups.setdefault(rel, []).append((i, -1))
+    problem = np.zeros(n, dtype=np.int8)
+    mean, spread = np.full(n, np.nan), np.full(n, np.nan)
+    stacks: dict[str, Path | None] = {}
+    done = 0
+    for rel, items in groups.items():
+        rows = np.array([a for a, _ in items], dtype=np.int64)
+        index = np.array([b for _, b in items], dtype=np.int64)
+        done += len(rows)
+        candidates = [Path(rel)] if Path(rel).is_absolute() else [b / rel for b in bases]
+        path = stacks[rel] = next((c for c in candidates if rel and c.is_file()), None)
+        try:
+            mm = mrcfile.mmap(str(path), mode="r", permissive=True) if path else None
+        except (OSError, ValueError):
+            mm = None
+        if mm is None:
+            problem[rows] = 1
+            continue
+        with mm:
+            data = mm.data
+            if data is None:
+                problem[rows] = 1
+                continue
+            if data.ndim == 2:
+                data = data[np.newaxis]
+            if box and (data.shape[-1] != box or data.shape[-2] != box):
+                problem[rows] = 2
+                continue
+            inside = (index >= 0) & (index < data.shape[0])
+            problem[rows[~inside]] = 1
+            rows, index = rows[inside], index[inside]
+            order = np.argsort(index)  # read the stack in order
+            rows, index = rows[order], index[order]
+            for start in range(0, len(index), 256):
+                imgs = np.asarray(data[index[start:start + 256]], dtype=np.float32)
+                finite = np.isfinite(imgs).all(axis=(1, 2))
+                r = rows[start:start + 256]
+                problem[r[~finite]] = 3
+                if finite.any():
+                    good = imgs[finite]
+                    mean[r[finite]] = good.mean(axis=(1, 2))
+                    spread[r[finite]] = good.std(axis=(1, 2))
+        if progress:
+            progress(done / max(n, 1))
+    problem[(problem == 0) & (spread == 0)] = 4
+    if outlier_sigma > 0:
+        ok = problem == 0
+        for values in (mean, spread):
+            v = values[ok]
+            if len(v) < 10:
+                continue
+            med = np.median(v)
+            mad = 1.4826 * np.median(np.abs(v - med)) or 1e-12
+            problem[ok & (np.abs(values - med) / mad > outlier_sigma)] = 5
+    return {"problem": problem, "mean": mean, "std": spread, "stacks": stacks}
+
+
+@register
+class CheckParticles(JobType):
+    name = "check_particles"
+    title = "Check particles (corrupt images)"
+    category = "Utilities"
+    software = ["CryoPlug"]
+    description = ("Reads every particle image and sets aside those that would stop or spoil a job, as CryoSPARC's Check "
+                   "For Corrupt Particles: missing stacks or images, wrong box size, NaN or infinite values, blank images, "
+                   "and optionally extreme outliers of mean or spread (dead areas, carbon edges, ice crystals).")
+    inputs = [Slot("particles", ("particles",), "Particles")]
+    params = [
+        Param("outlier_sigma", "float", 0.0, label="Outliers beyond", unit="σ", min=0.0, max=100.0,
+              help="Robust z-score (median and MAD) of the mean or the standard deviation of the images; 0 = no outlier "
+                   "test (only images that cannot be used). 8-10 removes only the extreme ones."),
+    ]
+    outputs = [OutputDef("particles", "particles", "Good particles"), OutputDef("rejected", "particles", "Rejected particles")]
+
+    def run(self, ctx: JobContext) -> None:
+        inp = ctx.require("particles")
+        meta = inp.meta
+        star = Path(ctx.abs(meta["particles_file"])) if meta.get("particles_file") else Path(inp.files[0])
+        if star.suffix.lower() == ".star":  # read as it is: missing stacks are what this job reports
+            tables = rl.read_star(star)
+            bases = ([Path(meta["datadir"]).expanduser()] if meta.get("datadir") else []) + [ctx.project_dir, star.parent]
+        else:  # CryoSPARC particles: converted first
+            pin = relion_particles(ctx, inp)
+            star, tables, bases = Path(pin["star"]), pin["tables"], [ctx.project_dir]
+        box = rl.grid_from_star(tables)[0]
+        ptab = _main(tables)
+        ctx.progress(0.02, f"Reading {len(ptab):,} particle images")
+        checks = image_checks(tables, bases, int(box or 0), float(ctx.params["outlier_sigma"]),
+                              progress=lambda f: ctx.progress(0.02 + 0.9 * f, "Reading the particle images"))
+        # the images named so that the files written are read from the project folder, as RELION does
+        renamed = []
+        for value in ptab.column("rlnImageName"):
+            number, _at, rel = str(value).partition("@")
+            path = checks["stacks"].get(rel)
+            if path is not None:
+                try:
+                    rel = str(path.resolve().relative_to(ctx.project_dir.resolve()))
+                except ValueError:
+                    rel = str(path.resolve())
+            renamed.append(f"{number}@{rel}")
+        ptab.set_column("rlnImageName", renamed)
+        problem = checks["problem"]
+        bad = problem > 0
+        n, n_bad = len(problem), int(bad.sum())
+        rows = [[PROBLEMS[k], f"{int((problem == k).sum()):,}"] for k in PROBLEMS if (problem == k).any()]
+        rows.append(["Fine", f"{n - n_bad:,}"])
+        ctx.add_table("Checks", ["", "Particles"], rows)
+        finite = checks["std"][np.isfinite(checks["std"])]
+        if len(finite):
+            ctx.add_plot("Standard deviation of the images", [{"name": "Particles", **histogram(finite, bins=50)}],
+                         x_label="Standard deviation", y_label="Particles", style="bars")
+        keep = ~bad
+        if n_bad:
+            examples = [int(i) for i in np.flatnonzero(bad)[:8]]
+            ctx.log("Rejected (first ones): " + ", ".join(f"#{i + 1} {PROBLEMS[int(problem[i])]}" for i in examples))
+        good = _write_subset(ctx, tables, keep, "particles_checked.star", f"Particles that passed the checks ({star.name})")
+        ctx.add_output("particles", "particles", good, f"{n - n_bad:,} good particles", meta=particles_out_meta(ctx, good, "checked"))
+        if n_bad:
+            rej = _write_subset(ctx, tables, bad, "particles_rejected.star", f"Particles that failed the checks ({star.name})")
+            ctx.add_output("rejected", "particles", rej, f"{n_bad:,} rejected particles", meta=particles_out_meta(ctx, rej, "rejected"))
+        ctx.add_highlight("Good", f"{n - n_bad:,} of {n:,}", "good" if n_bad == 0 else "warn")
+        if n_bad:
+            ctx.add_highlight("Rejected", f"{n_bad:,}", "warn")
+
+
+# ------------------------------------------------------------------ average power spectra
+def aligned_power_spectrum(image: np.ndarray, psi: float) -> np.ndarray:
+    """Power spectrum (centred) of a particle image turned into the frame of its 2D class. RELION's projector reads the
+    reference at Aᵀ k for the Fourier pixel k of the image (A: the Euler matrix of rot = tilt = 0, psi; x = column, y =
+    row), so the reference's spectrum is the image's read at A q (shifts do not change a power spectrum)."""
+    from scipy import ndimage
+    img = np.asarray(image, dtype=np.float64)
+    ps = np.abs(np.fft.fftshift(np.fft.fft2(img - img.mean()))) ** 2
+    ps /= ps.sum() or 1.0
+    n = img.shape[0]
+    c = n // 2
+    qy, qx = np.indices(ps.shape, dtype=np.float64) - c
+    a = np.radians(psi)
+    sx = np.cos(a) * qx + np.sin(a) * qy
+    sy = -np.sin(a) * qx + np.cos(a) * qy
+    return ndimage.map_coordinates(ps, [sy + c, sx + c], order=1, mode="constant", cval=0.0)
+
+
+@register
+class AveragePowerSpectra(JobType):
+    name = "average_power_spectra"
+    title = "Average power spectra (2D classes)"
+    category = "Classification"
+    software = ["CryoPlug"]
+    description = ("Power spectra of the particles of each 2D class, turned into the frame of the class and averaged, as "
+                   "CryoSPARC's Average Power Spectra: the layer lines of a filament stand out far better than in the "
+                   "spectrum of the class average, to index its helical symmetry (twist and rise).")
+    inputs = [Slot("particles", ("particles",), "Classified particles",
+                   help="The particles of a 2D classification (their class and in-plane angle)."),
+              Slot("classes", ("class_averages",), "2D classes", required=False,
+                   help="Shown next to the spectra (else read from the classification of the particles).")]
+    params = [
+        Param("classes", "str", "", label="Classes", placeholder="e.g. 3, 7, 12 (empty: all)",
+              help="Class numbers; empty: every class with particles."),
+        Param("max_per_class", "int", 500, label="Particles per class", min=10, max=100000,
+              help="At most this many particles of each class are averaged (randomly chosen)."),
+    ]
+    outputs = [OutputDef("spectra", "files", "Average power spectra")]
+
+    def run(self, ctx: JobContext) -> None:
+        import mrcfile
+        from cryoplug.imaging import write_png
+        from cryoplug.micrographs import tile_sheet
+        from cryoplug.particles import ParticleImages
+        p = ctx.params
+        pin = relion_particles(ctx, ctx.require("particles"))
+        ptab = _main(pin["tables"])
+        if not ptab.has("rlnClassNumber"):
+            raise JobError("The particles have no 2D class (rlnClassNumber): use the particles of a 2D classification")
+        classes = np.array([int(float(c)) for c in ptab.column("rlnClassNumber")])
+        psi = ptab.floats("rlnAnglePsi") if ptab.has("rlnAnglePsi") else np.zeros(len(ptab))
+        wanted = sorted({int(x) for x in str(p["classes"]).replace(",", " ").split() if x.strip().isdigit()})
+        chosen = wanted or sorted(int(c) for c in np.unique(classes))
+        missing = [c for c in chosen if not (classes == c).any()]
+        if missing:
+            raise JobError(f"No particles in class{'es' if len(missing) > 1 else ''} {', '.join(map(str, missing))}")
+        images = ParticleImages(pin["star"], ctx.project_dir)
+        averages = self.class_images(ctx, pin)
+        rng = np.random.default_rng(0)
+        spectra, rows, tiles = [], [], []
+        try:
+            for k, c in enumerate(chosen):
+                members = np.flatnonzero(classes == c)
+                if len(members) > int(p["max_per_class"]):
+                    members = np.sort(rng.choice(members, int(p["max_per_class"]), replace=False))
+                total = None
+                for i in members:
+                    ps = aligned_power_spectrum(images.image(int(i)), float(psi[i]))
+                    total = ps if total is None else total + ps
+                spectra.append((total / len(members)).astype(np.float32))
+                rows.append([c, f"{int((classes == c).sum()):,}", f"{len(members):,}"])
+                ctx.progress(0.05 + 0.85 * (k + 1) / len(chosen), f"Class {c}: {len(members)} particles")
+                avg = averages.get(c)
+                if avg is not None and avg.shape == spectra[-1].shape:
+                    tiles.append(_stretch(avg))
+                tiles.append(_stretch(np.log(spectra[-1] + spectra[-1].max() * 1e-6), low=5.0))
+        finally:
+            images.close()
+        out = ctx.path("average_power_spectra.mrcs")
+        with mrcfile.new(str(out), overwrite=True) as mrc:
+            mrc.set_data(np.stack(spectra))
+            mrc.voxel_size = float(pin.get("pixel_size") or 1.0)
+        ctx.add_table("Classes", ["Class", "Particles", "Averaged"], rows)
+        png = write_png(ctx.path("average_power_spectra.png"), tile_sheet(tiles, per_row=6))  # pairs side by side
+        ctx.add_image("Class averages and the average power spectra of their particles" if len(tiles) > len(spectra)
+                      else "Average power spectra of the classes", png)
+        ctx.add_highlight("Classes", str(len(chosen)))
+        ctx.add_output("spectra", "files", out, f"Average power spectra of {len(chosen)} class{'es' if len(chosen) > 1 else ''}",
+                       meta={"classes": chosen, "box": int(spectra[0].shape[0])}, thumbnail=png)
+
+    @staticmethod
+    def class_images(ctx: JobContext, pin: dict[str, Any]) -> dict[int, np.ndarray]:
+        """The class averages, by class number: from the 2D classes input, else from the model of the classification."""
+        import mrcfile
+        stack = None
+        cls_in = ctx.input("classes")
+        if cls_in is not None and cls_in.files:
+            stack = Path(cls_in.files[0])
+        else:
+            model = (pin.get("meta") or {}).get("relion", {}).get("model")
+            if model and ctx.abs(model).exists():
+                try:
+                    ref = rl.model_classes(ctx.abs(model))[0]["image"]
+                    stack = ctx.abs(ref.partition("@")[2]) if "@" in ref else None
+                except (ValueError, IndexError):
+                    stack = None
+        if stack is None or not stack.exists():
+            return {}
+        try:
+            with mrcfile.open(str(stack), permissive=True) as mrc:
+                data = np.asarray(mrc.data, dtype=np.float32)
+        except (OSError, ValueError):
+            return {}
+        data = data if data.ndim == 3 else data[np.newaxis]
+        return {i + 1: data[i] for i in range(len(data))}
+
+
+def _stretch(img: np.ndarray, low: float = 1.0) -> np.ndarray:
+    lo, hi = np.percentile(img, [low, 99.5])
+    return (np.clip((img - lo) / ((hi - lo) or 1.0), 0, 1) * 255).astype(np.uint8)
+
+
 # ------------------------------------------------------------------ rebalance orientations
 def direction_bins(rot: np.ndarray, tilt: np.ndarray, step: float) -> np.ndarray:
     """Bin of each viewing direction on a sphere cut in bins of about equal area (``step`` degrees across)."""
