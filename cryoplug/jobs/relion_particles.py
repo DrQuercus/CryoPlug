@@ -318,3 +318,178 @@ class RelionSymmetryExpand(JobType):
         ctx.add_highlight("Particles", f"{n:,}")
         ctx.add_output("particles", "particles", out, f"{n:,} expanded particles",
                        meta=particles_out_meta(ctx, out, "symexpand", symmetry="C1", expanded_from=sym))
+
+
+# ------------------------------------------------------------------ optics groups
+NAME_LABEL = {"movies": "rlnMicrographMovieName", "micrographs": "rlnMicrographName", "particles": "rlnMicrographName"}
+EPU_SUFFIXES = ("_fractions", "_Fractions", "_EER", "_eer")
+
+
+def epu_base(name: str) -> str:
+    """The EPU name of a movie or micrograph (that of its .xml): without folder, extensions and _fractions/_EER."""
+    import re
+    stem = re.sub(r"\.(mrcs?|tiff?|eer)(\.(bz2|zst|xz))?$", "", Path(name).name, flags=re.IGNORECASE)
+    for suffix in EPU_SUFFIXES:
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)]
+    return stem
+
+
+def epu_beam_shift(path: Path) -> tuple[float, float] | None:
+    """The beam shift (image shift) of an EPU acquisition, from its XML (microscopeData/optics/BeamShift/_x, _y)."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError):
+        return None
+    for el in root.iter():
+        if el.tag.rsplit("}", 1)[-1] == "BeamShift":
+            vals = {c.tag.rsplit("}", 1)[-1]: c.text for c in el}
+            try:
+                return float(vals["_x"]), float(vals["_y"])
+            except (KeyError, TypeError, ValueError):
+                return None
+    return None
+
+
+@register
+class RelionOpticsGroups(JobType):
+    name = "relion_optics_groups"
+    title = "Optics groups (beam shift, file names)"
+    category = "Utilities"
+    software = ["RELION"]
+    description = ("Splits movies, micrographs or particles into optics groups, as CryoSPARC's Exposure Group "
+                   "Utilities: by the beam (image) shift of EPU's acquisition files (aberration-free image shift, "
+                   "clustered), by a part of the file names, or in groups of acquisition order. CTF refinement then "
+                   "fits the beam tilt and higher-order aberrations of each group.")
+    inputs = [Slot("data", ("movies", "micrographs", "particles"), "Movies, micrographs or particles")]
+    params = [
+        Param("method", "choice", "beam_shift", choices=["beam_shift", "filename", "order"], label="Groups from",
+              labels={"beam_shift": "Beam shift of EPU's XML files (clustered)", "filename": "A part of the file names",
+                      "order": "Acquisition order (equal groups)"}),
+        Param("xml_folder", "path", "", label="EPU folder", path_kind="dir", show_if="method=beam_shift",
+              help="Folder of EPU's XML files (searched with its sub-folders), e.g. the session's Images-Disc1."),
+        Param("groups", "int", 9, label="Number of groups", min=1, max=500, show_if="method=beam_shift|order",
+              help="Beam shift: the holes per stage position of the collection (9 for 3 × 3...)."),
+        Param("pattern", "str", r"GridSquare_(\d+)", label="Pattern of the file names", show_if="method=filename",
+              help="A regular expression with one group in brackets: names with the same group go together."),
+    ]
+    outputs = [OutputDef("particles", "particles", "Particles"), OutputDef("micrographs", "micrographs", "Micrographs"),
+               OutputDef("movies", "movies", "Movies")]
+
+    def run(self, ctx: JobContext) -> None:
+        import re
+        p = ctx.params
+        inp = ctx.require("data")
+        kind = inp.type
+        if kind == "particles":
+            src = relion_particles(ctx, inp)["star"]
+        else:
+            from cryoplug.jobs.relion_common import star_of
+            src = star_of(ctx, inp)[0]
+        tables = rl.read_star(src)
+        main = _main(tables) if kind == "particles" else rl.micrograph_table(tables)
+        label = NAME_LABEL[kind]
+        if not main.has(label):
+            raise JobError(f"The {kind} have no {label} column")
+        names = main.column(label)
+        n = len(names)
+        method = p["method"]
+        shifts = None
+        if method == "beam_shift":
+            folder = Path(str(p["xml_folder"]).strip() or ".").expanduser()
+            if not str(p["xml_folder"]).strip() or not folder.is_dir():
+                raise JobError("Give the folder of EPU's XML files (EPU folder)")
+            index = {epu_base(x.stem): x for x in folder.rglob("*.xml")}
+            shifts = np.full((n, 2), np.nan)
+            bases = [epu_base(nm) for nm in names]
+            cache: dict[str, tuple[float, float] | None] = {}
+            for i, b in enumerate(bases):
+                if b not in cache:
+                    cache[b] = epu_beam_shift(index[b]) if b in index else None
+                if cache[b] is not None:
+                    shifts[i] = cache[b]
+            found = np.isfinite(shifts[:, 0])
+            if not found.any():
+                raise JobError(f"No EPU XML file with a beam shift matches the {kind} in {folder} (e.g. "
+                               f"{bases[0]}.xml)")
+            if not found.all():
+                ctx.warn(f"{int((~found).sum()):,} of {n:,} without XML file: they join the nearest group of the others "
+                         "(no beam shift: group 1)")
+            from scipy.cluster.vq import kmeans2
+            k = max(1, min(int(p["groups"]), len(np.unique(shifts[found], axis=0))))
+            pts = shifts[found]
+            scale = pts.std(axis=0)
+            scale[scale == 0] = 1.0
+            centres, lab = kmeans2(pts / scale, k, seed=1, minit="++")
+            order = np.lexsort((centres[:, 0], -centres[:, 1]))  # numbered row by row, top left first
+            rank = np.empty(k, dtype=int)
+            rank[order] = np.arange(k)
+            group = np.zeros(n, dtype=int)
+            group[found] = rank[lab]
+            how = f"beam shift of EPU's XML files, {k} clusters"
+        elif method == "filename":
+            try:
+                rx = re.compile(str(p["pattern"]))
+            except re.error as exc:
+                raise JobError(f"Pattern: {exc}") from None
+            if rx.groups < 1:
+                raise JobError("The pattern needs a group in brackets, e.g. GridSquare_(\\d+)")
+            keys = []
+            for nm in names:
+                m = rx.search(nm)
+                keys.append(m.group(1) if m else "")
+            if not any(keys):
+                raise JobError(f"The pattern matches none of the names (e.g. {names[0]})")
+            uniq = sorted(set(keys), key=lambda s: (len(s), s))
+            lookup = {key: i for i, key in enumerate(uniq)}
+            group = np.array([lookup[key] for key in keys])
+            how = f"file names ({p['pattern']}), {len(uniq)} values"
+        else:
+            k = max(1, min(int(p["groups"]), n))
+            group = np.minimum(k - 1, (np.arange(n) * k) // max(1, n))
+            how = f"acquisition order, {k} groups"
+        # new groups: one per (former optics group, new group) present
+        old = np.array([int(float(v)) for v in main.column("rlnOpticsGroup")]) if main.has("rlnOpticsGroup") else np.ones(n, int)
+        optics = tables.get("optics")
+        if optics is None or not optics.rows:
+            raise JobError("The file has no optics table (RELION 3.1 or later)")
+        old_rows = {int(float(r[optics.labels.index("rlnOpticsGroup")])): r for r in optics.rows}
+        combos = sorted(set(zip(old.tolist(), group.tolist())))
+        number = {c: i + 1 for i, c in enumerate(combos)}
+        name_col = optics.labels.index("rlnOpticsGroupName") if "rlnOpticsGroupName" in optics.labels else None
+        group_col = optics.labels.index("rlnOpticsGroup")
+        new_rows = []
+        for (g, c), num in number.items():
+            row = list(old_rows.get(g) or optics.rows[0])
+            row[group_col] = str(num)
+            if name_col is not None:
+                row[name_col] = f"opticsGroup{num}"
+            new_rows.append(row)
+        optics.rows = new_rows
+        main.set_column("rlnOpticsGroup", [str(number[(g, c)]) for g, c in zip(old.tolist(), group.tolist())])
+        out = rl.write_star(ctx.path(f"{kind}.star"), list(tables.values()), comment=f"Optics groups from the {how}")
+        counts = np.bincount([number[(g, c)] for g, c in zip(old.tolist(), group.tolist())])[1:]
+        ctx.add_table("Optics groups", ["Group", kind.capitalize()], [[f"opticsGroup{i + 1}", f"{int(c):,}"] for i, c in enumerate(counts)])
+        ctx.add_highlight("Optics groups", str(len(combos)))
+        if shifts is not None:
+            series = []
+            for i in range(len(combos)):
+                sel = np.flatnonzero((np.array([number[(g, c)] for g, c in zip(old.tolist(), group.tolist())]) == i + 1)
+                                     & np.isfinite(shifts[:, 0]))
+                if len(sel):
+                    series.append({"name": f"opticsGroup{i + 1}", "x": [round(float(v), 6) for v in shifts[sel, 0]],
+                                   "y": [round(float(v), 6) for v in shifts[sel, 1]]})
+            ctx.add_plot("Beam shifts", series, x_label="Beam shift X", y_label="Beam shift Y", style="points",
+                         note="Each colour is an optics group; one cloud per hole of the image-shift pattern.")
+        if kind == "particles":
+            ctx.add_output("particles", "particles", out, f"{n:,} particles, {len(combos)} optics groups",
+                           meta=particles_out_meta(ctx, out, "optics", optics_groups=len(combos)))
+        elif kind == "micrographs":
+            from cryoplug.jobs.relion_common import micrograph_meta
+            passed = {k: v for k, v in inp.meta.items() if k in ("has_motion", "power_spectra", "motion_star")}
+            ctx.add_output("micrographs", "micrographs", out, f"{n:,} micrographs, {len(combos)} optics groups",
+                           meta=micrograph_meta(ctx, out, "optics", **passed))
+        else:
+            meta = {**inp.meta, "optics_groups": len(combos), "relion": {"star": ctx.rel(out), "kind": "optics"}}
+            ctx.add_output("movies", "movies", out, f"{n:,} movies, {len(combos)} optics groups", meta=meta)

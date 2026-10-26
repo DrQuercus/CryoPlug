@@ -438,6 +438,114 @@ def test_relion_pipeline_movies_to_map(manager, spa):
     assert {"half_maps", "map"} <= set(_outs(dm))
 
 
+def test_helical_options(manager, spa):
+    """The helical options of RELION's GUI in picking, extraction, 2D and 3D classification, auto-refine and masks."""
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = _ref(ctf, "micrographs")
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1},
+                {"micrographs": mics})
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1, "helical": True, "helical_rise": 4.75,
+                                                 "helical_outer_diameter": 60}, {"micrographs": mics, "coordinates": _ref(pick, "coordinates")})
+    assert ("--invert_contrast --helix --helical_outer_diameter 60 --helical_bimodal_angular_priors "
+            "--helical_cut_into_segments --helical_nr_asu 1 --helical_rise 4.75") in _command(manager, puid, ext)
+    parts = _ref(ext, "particles")
+    c2 = _run(manager, puid, "relion_class2d", {"classes": 2, "vdam_batches": 10, "threads": 1, "gpus": 0, "helical": True,
+                                                "helical_outer_diameter": 60}, {"particles": parts})
+    assert ("--helical_outer_diameter 60 --no_init_blobs --bimodal_psi --sigma_psi 2 --helix --helical_rise_initial 4.75 "
+            "--norm --scale") in _command(manager, puid, c2)
+    MapVolume(data=np.random.default_rng(5).normal(0, 1, (32, 32, 32)).astype(np.float32), voxel=np.full(3, 2.0)).write(pdir / "tube.mrc")
+    ref = _ref(_run(manager, puid, "import_maps", {"map": str(pdir / "tube.mrc"), "compute_fsc": False}), "map")
+    helix = {"helical": True, "helical_outer_diameter": 60, "helical_twist": -1.2, "helical_rise_initial": 4.75}
+    c3 = _run(manager, puid, "relion_class3d_global", {"classes": 2, "iterations": 2, "threads": 1, "gpus": 0, **helix},
+              {"particles": parts, "map": ref})
+    assert ("--sym C1 --norm --scale --helix --helical_outer_diameter 60 --helical_nr_asu 1 --helical_twist_initial -1.2 "
+            "--helical_rise_initial 4.75 --helical_z_percentage 0.3 --helical_keep_tilt_prior_fixed --sigma_tilt 5 "
+            "--sigma_psi 3.33333 --sigma_rot 0 --j 1") in _command(manager, puid, c3)
+    r3 = _run(manager, puid, "relion_refine3d", {"threads": 1, "gpus": 0, **helix, "helical_search": True, "helical_twist_min": -1.5,
+                                                 "helical_twist_max": -1.0, "helical_rise_min": 4.6, "helical_rise_max": 4.9},
+              {"particles": parts, "map": ref})
+    assert ("--helix --helical_outer_diameter 60 --helical_nr_asu 1 --helical_twist_initial -1.2 --helical_rise_initial 4.75 "
+            "--helical_z_percentage 0.3 --helical_symmetry_search --helical_twist_min -1.5 --helical_twist_max -1 "
+            "--helical_rise_min 4.6 --helical_rise_max 4.9 --sigma_tilt 5 --sigma_psi 3.33333 --sigma_rot 0 "
+            "--helical_keep_tilt_prior_fixed") in _command(manager, puid, r3)
+    mask = _run(manager, puid, "relion_mask_create", {"lowpass": 10, "threads": 1, "helical": True}, {"map": ref})
+    assert "--width_soft_edge 6 --helix --z_percentage 0.3 --j 1" in _command(manager, puid, mask)
+    # before queueing
+    for jtype, params in (("relion_refine3d", {"helical": True}),
+                          ("relion_class3d_global", {**helix, "helical_search": True}),
+                          ("relion_autopick", {"method": "log", "helical": True, "helical_rise": 4.75})):
+        job = manager.create_job(puid, jtype, params, {"particles": parts, "map": ref} if jtype != "relion_autopick" else {"micrographs": mics})
+        with pytest.raises(Exception, match="elical"):
+            manager.queue_job(puid, job["uid"])
+
+
+EPU_XML = """<?xml version="1.0" encoding="utf-8"?>
+<MicroscopeImage xmlns="http://schemas.datacontract.org/2004/07/Fei.SharedObjects" xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+<microscopeData><optics><BeamShift xmlns:a="http://schemas.datacontract.org/2004/07/Fei.Types"><a:_x>{x}</a:_x><a:_y>{y}</a:_y></BeamShift>
+</optics></microscopeData></MicroscopeImage>"""
+
+
+def test_optics_groups(manager, spa, tmp_path):
+    """Optics groups from the beam shift of EPU's XML files (clustered), from the file names, or from the order."""
+    puid, mc, ctf = spa["puid"], spa["motioncorr"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    xml = tmp_path / "Images-Disc1" / "GridSquare_7" / "Data"
+    xml.mkdir(parents=True)
+    for name, (x, y) in {"mic_001": (-0.21, -0.20), "mic_002": (-0.20, -0.21), "mic_003": (0.19, 0.20), "mic_004": (0.20, 0.21)}.items():
+        (xml / f"{name}.xml").write_text(EPU_XML.format(x=x, y=y))
+    mics = _ref(ctf, "micrographs")
+    bs = _run(manager, puid, "relion_optics_groups", {"method": "beam_shift", "xml_folder": str(tmp_path), "groups": 2},
+              {"data": mics})
+    out = _outs(bs)["micrographs"]
+    tables = rl.read_star(pdir / out["path"])
+    assert tables["optics"].column("rlnOpticsGroupName") == ["opticsGroup1", "opticsGroup2"]
+    groups = dict(zip([n.split("/")[-1] for n in tables["micrographs"].column("rlnMicrographName")],
+                      tables["micrographs"].column("rlnOpticsGroup")))
+    assert groups["mic_001.mrc"] == groups["mic_002.mrc"] != groups["mic_003.mrc"] == groups["mic_004.mrc"]
+    assert out["meta"]["optics_groups"] == 2 and out["meta"]["motion_star"]  # still known for polishing
+    plot = next(s for s in _sections(manager, puid, bs, "plot") if s["title"] == "Beam shifts")
+    assert plot["style"] == "points" and len(plot["series"]) == 2
+    order = _run(manager, puid, "relion_optics_groups", {"method": "order", "groups": 2}, {"data": _ref(mc, "micrographs")})
+    t2 = rl.read_star(pdir / _outs(order)["micrographs"]["path"])
+    assert t2["micrographs"].column("rlnOpticsGroup") == ["1", "1", "2", "2"]
+    names = _run(manager, puid, "relion_optics_groups", {"method": "filename", "pattern": r"mic_00([12])"},
+                 {"data": mics}, ok=False)
+    assert names["status"] == "completed"  # mic_003 and mic_004 without match: one group of their own
+    assert len(rl.read_star(pdir / _outs(names)["micrographs"]["path"])["optics"].rows) == 3
+    bad = _run(manager, puid, "relion_optics_groups", {"method": "beam_shift", "xml_folder": str(tmp_path / "nothing")},
+               {"data": mics}, ok=False)
+    assert bad["status"] == "failed" and "EPU" in bad["error"]
+
+
+def test_topaz_denoising_and_picks_on_denoised(manager, spa):
+    """topaz denoise on the micrographs; picks made on the denoised micrographs are extracted from the originals."""
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    den = _run(manager, puid, "relion_topaz_denoise", {"gpus": 0}, {"micrographs": _ref(ctf, "micrographs")})
+    log = _command(manager, puid, den)
+    assert f"relion_python_topaz denoise -o {den['uid']}/denoised -m unet -d -1 -s 1024 -p 500 " in log
+    out = _outs(den)["micrographs"]
+    names = rl.micrograph_table(rl.read_star(pdir / out["path"])).column("rlnMicrographName")
+    assert names[0] == f"{den['uid']}/denoised/mic_001.mrc" and (pdir / names[0]).exists()
+    assert out["meta"]["denoised"] and out["meta"]["has_ctf"] and out["meta"]["n_micrographs"] == 4
+    assert any(s["title"] == "Originals and denoised" for s in _sections(manager, puid, den, "image"))
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1},
+                {"micrographs": _ref(den, "micrographs")})
+    assert _outs(pick)["coordinates"]["meta"]["name_map"] == out["meta"]["name_map"]
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1},
+               {"micrographs": _ref(ctf, "micrographs"), "coordinates": _ref(pick, "coordinates")})
+    assert f"--coord_list {ext['uid']}/coordinates_originals.star" in _command(manager, puid, ext)
+    parts = rl.particle_table(rl.read_star(pdir / _outs(ext)["particles"]["path"]))
+    n_picks = _outs(pick)["coordinates"]["meta"]["n_particles"]
+    assert n_picks - 5 <= len(parts) <= n_picks  # those too close to the edges are left out
+    assert all("denoised" not in m for m in parts.column("rlnMicrographName"))
+    assert len(set(parts.column("rlnMicrographName"))) == 4
+    wrong = _run(manager, puid, "relion_extract", {"box": 64, "mpi": 1},
+                 {"micrographs": _ref(den, "micrographs"), "coordinates": _ref(pick, "coordinates")}, ok=False)
+    assert wrong["status"] == "failed" and "original micrographs" in wrong["error"]
+
+
 def test_relion_spa_validation(manager, spa):
     puid = spa["puid"]
     mics = _ref(spa["ctf"], "micrographs")

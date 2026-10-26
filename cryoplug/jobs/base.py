@@ -86,6 +86,7 @@ class Param:
     path_kind: str = "any"  # type=path: file | dir | any; type=str: "files" (paths separated by ';'), "name" (file name)
     labels: dict[str, str] | None = None  # choice / multichoice: the name shown for each value
     admin_only: bool = False  # with user accounts, only administrators may set it (it can run code on the server)
+    show_if: str = ""  # shown in the builder only when another parameter is set: "helical", or "picking=log|topaz"
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

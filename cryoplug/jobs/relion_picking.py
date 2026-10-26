@@ -14,8 +14,9 @@ from cryoplug import relion as rl
 from cryoplug.jobs import register
 from cryoplug.jobs.base import JobContext, JobError, JobType, OutputDef, Param, Slot, extra_args_param
 from cryoplug.jobs.relion_common import (
-    SAMPLINGS, FileProgress, RelionJob, histogram, micrograph_gallery, mpi, particles_out_meta, relion_command,
-    relion_particles, run_relion, sample, star_of, thumbnail_of,
+    SAMPLINGS, FileProgress, RelionJob, helical_extract_args, helical_params, histogram, micrograph_gallery,
+    micrograph_meta, mpi, particles_out_meta, relion_command, relion_particles, run_relion, sample, star_of,
+    thumbnail_of,
 )
 
 
@@ -190,6 +191,13 @@ class RelionAutopick(RelionJob):
               placeholder="relion_python_topaz", help="Default: relion_python_topaz, installed with RELION."),
         Param("topaz_args", "str", "", label="Other Topaz arguments", advanced=True, admin_only=True),
         mpi(4, help="Micrographs processed at the same time."),
+        *helical_params("autopick"),
+        Param("topaz_filaments", "bool", False, label="Topaz: pick filaments", advanced=True,
+              help="Topaz picks along filaments (RELION's --helix for Topaz)."),
+        Param("topaz_filament_threshold", "float", -5.0, label="Topaz filament threshold", advanced=True,
+              show_if="topaz_filaments"),
+        Param("topaz_hough_length", "float", -1.0, label="Topaz minimum filament length", unit="Å", advanced=True,
+              show_if="topaz_filaments", help="-1 = none."),
         Param("gpus", "int", 0, label="GPUs", min=0, max=16,
               help="Templates and Topaz can use GPUs (not the LoG picker)."),
         extra_args_param(),
@@ -199,6 +207,10 @@ class RelionAutopick(RelionJob):
     @classmethod
     def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
         method = params.get("method")
+        if params.get("helical") and method != "template":
+            return ["Helical segments are picked by template matching (Topaz: 'pick filaments')"]
+        if params.get("helical") and not (float(params.get("helical_rise") or 0) > 0 and float(params.get("helical_outer_diameter") or 0) > 0):
+            return ["Helical picking: give the tube diameter and the rise"]
         if method == "template" and "references" not in connected and "map" not in connected:
             return ["Template matching needs 2D templates or a 3D template"]
         if method == "log" and float(params.get("diameter_min") or 0) > float(params.get("diameter_max") or 0):
@@ -223,6 +235,10 @@ class RelionAutopick(RelionJob):
             args += ["--particle_diameter", f"{diameter:g}", "--topaz_extract"]
             if model:
                 args += ["--topaz_model", ctx.rel(model.path)]
+            if p["topaz_filaments"]:
+                args += ["--helix", "--topaz_threshold", f"{p['topaz_filament_threshold']:g}"]
+                if p["topaz_hough_length"] > 0:
+                    args += ["--helical_tube_length_min", f"{p['topaz_hough_length']:g}"]
             if str(p["topaz_args"]).strip():
                 args += ["--topaz_args", f" {p['topaz_args'].strip()} "]
             if gpu:
@@ -265,10 +281,19 @@ class RelionAutopick(RelionJob):
                 args += ["--highpass", f"{p['highpass']:g}"]
             if ref_apix:
                 args += ["--angpix_ref", f"{ref_apix:g}"]
-            args += ["--threshold", f"{p['threshold']:g}", "--min_distance", f"{p['min_distance']:g}",
+            # segments of filaments: one every nr_asu × rise along them (RELION's GUI)
+            min_distance = p["helical_nr_asu"] * p["helical_rise"] if p["helical"] else p["min_distance"]
+            args += ["--threshold", f"{p['threshold']:g}", "--min_distance", f"{min_distance:g}",
                      "--max_stddev_noise", f"{p['max_stddev_noise']:g}"]
             if p["min_avg_noise"] > -900:
                 args += ["--min_avg_noise", f"{p['min_avg_noise']:g}"]
+            if p["helical"]:
+                args.append("--helix")
+                if p["helical_amyloid"]:
+                    args.append("--amyloid")
+                args += ["--helical_tube_outer_diameter", f"{p['helical_outer_diameter']:g}",
+                         "--helical_tube_kappa_max", f"{p['helical_kappa_max']:g}",
+                         "--helical_tube_length_min", f"{p['helical_length_min']:g}"]
             if gpu:
                 args += ["--gpu", ""]
             diameter = diameter or float(p["min_distance"])
@@ -281,6 +306,8 @@ class RelionAutopick(RelionJob):
             raise JobError("relion_autopick wrote no autopick.star (see the log)")
         meta = pick_report(ctx, listing, star, diameter, label)
         thumb = meta.pop("_thumbnail")
+        if mics_in.meta.get("name_map"):  # picked on denoised micrographs: extracted from the originals
+            meta["name_map"] = mics_in.meta["name_map"]
         ctx.add_output("coordinates", "coordinates", listing, f"{meta['n_particles']:,} particles picked", meta=meta,
                        thumbnail=thumb)
 
@@ -405,11 +432,113 @@ class RelionPickInspect(JobType):
                            "manual" if state["coordinates"] is None else "inspected")
         thumb = meta.pop("_thumbnail")
         meta["relion"]["kind"] = "manualpick"
+        mics_meta = ctx.require("micrographs").meta
+        if mics_meta.get("name_map"):  # picked on denoised micrographs: extracted from the originals
+            meta["name_map"] = mics_meta["name_map"]
         for sec in ctx.report.get("sections", []):  # the inspector is done: its picks are now read-only
             if sec.get("kind") == "picks" and sec.get("waiting"):
                 sec["waiting"], sec["editable"] = False, False
         ctx.add_output("coordinates", "coordinates", listing, f"{total:,} particles", meta=meta, thumbnail=thumb)
         ctx.save_report()
+
+
+# ------------------------------------------------------------------ Topaz denoising
+DENOISE_CHUNK = 200  # micrographs per call of topaz denoise
+
+
+def name_map_of(ctx: JobContext, meta: dict[str, Any]) -> dict[str, str]:
+    """Denoised micrograph name -> original name, when the micrographs (or the picks made on them) were denoised."""
+    path = meta.get("name_map")
+    if not path or not ctx.abs(path).exists():
+        return {}
+    return json.loads(ctx.abs(path).read_text())
+
+
+@register
+class RelionTopazDenoise(RelionJob):
+    name = "relion_topaz_denoise"
+    title = "Denoise micrographs (Topaz)"
+    category = "Preprocessing"
+    gpu_param = "gpus"
+    cpu_param = ""
+    description = ("Denoises the micrographs with Topaz's pretrained network (topaz denoise), as CryoSPARC's Micrograph "
+                   "Denoiser: the particles stand out for picking, by eye or by program, and for inspection. The "
+                   "denoised micrographs keep the CTF of the originals; picks made on them are extracted from the "
+                   "originals (the extraction translates the names).")
+    inputs = [Slot("micrographs", ("micrographs",), "Micrographs", help="Motion-corrected micrographs (with CTF).")]
+    params = [
+        Param("model", "choice", "unet", choices=["unet", "unet-small", "fcnn", "affine"], label="Network",
+              labels={"unet": "U-net (default)", "unet-small": "Small U-net", "fcnn": "Fully convolutional", "affine": "Affine"},
+              help="Topaz's pretrained denoising models."),
+        Param("max_micrographs", "int", 0, label="Micrographs", min=0,
+              help="0 = all. A few dozen spread over the data set are enough to judge or train a picking."),
+        Param("patch_size", "int", 1024, label="Patch size", unit="px", min=0,
+              help="Denoised in patches of this size (less GPU memory). 0 = whole micrographs."),
+        Param("patch_padding", "int", 500, label="Patch padding", unit="px", min=0, advanced=True),
+        Param("topaz_exe", "str", "", label="Topaz executable", advanced=True, admin_only=True,
+              help="Empty: relion_python_topaz next to RELION."),
+        Param("gpus", "int", 1, label="GPUs", min=0, max=1, help="0 = on the CPU (slow)."),
+    ]
+    outputs = [OutputDef("micrographs", "micrographs", "Denoised micrographs")]
+
+    def run(self, ctx: JobContext) -> None:
+        p = ctx.params
+        mics_in = ctx.require("micrographs")
+        if mics_in.meta.get("denoised"):
+            raise JobError("These micrographs are already denoised")
+        star, _ = star_of(ctx, mics_in)
+        tables = rl.read_star(star)
+        table = rl.micrograph_table(tables)
+        names = table.column("rlnMicrographName")
+        rows = list(range(len(names)))
+        if p["max_micrographs"] > 0 and len(rows) > p["max_micrographs"]:
+            rows = sorted(names.index(m) for m in sample(names, int(p["max_micrographs"])))
+            table.rows = [table.rows[i] for i in rows]
+            names = [names[i] for i in rows]
+        # micrographs of the same file name in different folders go to different folders (topaz names by file name)
+        seen: dict[str, int] = {}
+        buckets: dict[int, list[str]] = {}
+        for nm in names:
+            stem = Path(nm).stem
+            k = seen.get(stem, 0)
+            seen[stem] = k + 1
+            buckets.setdefault(k, []).append(nm)
+        device = "0" if p["gpus"] > 0 else "-1"
+        new_names: dict[str, str] = {}
+        done = 0
+        for k, group in buckets.items():
+            out_dir = ctx.path("denoised" if k == 0 else f"denoised_{k + 1}")
+            for s in range(0, len(group), DENOISE_CHUNK):
+                chunk = group[s:s + DENOISE_CHUNK]
+                run_relion(ctx, [topaz_exe(ctx), "denoise", "-o", ctx.rel(out_dir), "-m", p["model"], "-d", device,
+                                 "-s", str(p["patch_size"]), "-p", str(p["patch_padding"]), *chunk])
+                for nm in chunk:
+                    new_names[nm] = f"{ctx.rel(out_dir)}/{Path(nm).stem}.mrc"
+                done += len(chunk)
+                ctx.progress(0.05 + 0.85 * done / len(names), f"{done:,} of {len(names):,} micrographs denoised")
+        missing = [d for d in new_names.values() if not ctx.abs(d).exists()]
+        if missing:
+            raise JobError(f"topaz denoise wrote no {missing[0]} ({len(missing)} missing; see the log)")
+        table.set_column("rlnMicrographName", [new_names[nm] for nm in names])
+        out = rl.write_star(ctx.path("micrographs_denoised.star"), list(tables.values()),
+                            comment=f"Denoised by Topaz ({p['model']}) from {ctx.rel(star)}")
+        name_map = ctx.path("denoised_names.json")
+        name_map.write_text(json.dumps({v: k for k, v in new_names.items()}, indent=0))
+        shown = sample(names, 2)
+        micrograph_gallery(ctx, [x for nm in shown for x in (nm, new_names[nm])], "denoised", "Originals and denoised")
+        thumb = None
+        try:
+            from cryoplug.micrographs import preview, read_image
+            thumb = thumbnail_of(ctx, preview(read_image(ctx.abs(new_names[names[0]])), 256)[0], "micrographs")
+        except Exception as exc:  # cosmetic
+            ctx.warn(f"No thumbnail: {exc}")
+        ctx.add_table("Denoising", ["", "Value"], [["Micrographs", f"{len(names):,}"], ["Network", p["model"]],
+                                                   ["Device", "GPU" if p["gpus"] > 0 else "CPU"]])
+        ctx.add_highlight("Denoised", f"{len(names):,}")
+        passed = {k: v for k, v in mics_in.meta.items() if k in ("has_motion", "power_spectra", "motion_star")}
+        meta = micrograph_meta(ctx, out, "denoise", denoised=True, name_map=ctx.rel(name_map), raw_micrographs=ctx.rel(star),
+                               **passed)
+        ctx.add_output("micrographs", "micrographs", out, f"{len(names):,} denoised micrographs", meta=meta, thumbnail=thumb)
 
 
 # ------------------------------------------------------------------ Topaz training
@@ -545,6 +674,7 @@ class RelionExtract(RelionJob):
         Param("float16", "bool", True, label="Write in float16"),
         Param("min_fom", "float", -999.0, label="Minimum figure of merit", advanced=True,
               help="Only particles picked with this autopick figure of merit or more (Topaz: e.g. -1). -999 = all."),
+        *helical_params("extract"),
         Param("recentre", "choice", "recentre", choices=["recentre", "keep", "reset"], label="Refined offsets",
               labels={"recentre": "Re-centre on the refined positions", "keep": "Keep the offsets",
                       "reset": "Reset the offsets to zero"},
@@ -567,6 +697,8 @@ class RelionExtract(RelionJob):
             return ["Box sizes must be even"]
         if box and scale > box:
             return ["The re-scaled box cannot be larger than the box"]
+        if params.get("helical") and not (float(params.get("helical_rise") or 0) > 0 and float(params.get("helical_outer_diameter") or 0) > 0):
+            return ["Helical segments: give the tube diameter and the rise"]
         return []
 
     def run(self, ctx: JobContext) -> None:
@@ -598,7 +730,16 @@ class RelionExtract(RelionJob):
                          "--recenter_z", f"{p['recentre_z']:g}"]
             source = f"{pin['n']:,} particles of {parts.source}"
         else:
-            args += ["--coord_list", ctx.rel(coords.path)]
+            coord_list = Path(coords.path)
+            translate = name_map_of(ctx, coords.meta)
+            if translate:  # picked on denoised micrographs
+                if mics_in.meta.get("denoised"):
+                    raise JobError("Extract from the original micrographs, not the denoised ones (the picks made on the "
+                                   "denoised micrographs are translated to the originals)")
+                pairs = [(translate.get(m, m), c) for m, c in rl.coordinate_files(coord_list)]
+                coord_list = rl.write_coordinate_list(ctx.path("coordinates_originals.star"), pairs)
+                ctx.log(f"Picks made on denoised micrographs: {len(pairs):,} coordinate files assigned to the originals")
+            args += ["--coord_list", ctx.rel(coord_list)]
             source = f"{int(coords.meta.get('n_particles') or 0):,} picks of {coords.source}"
         out = ctx.path("particles.star")
         args += ["--part_star", ctx.rel(out)]
@@ -619,6 +760,7 @@ class RelionExtract(RelionJob):
                      "--black_dust", f"{p['black_dust']:g}"]
         if p["invert_contrast"]:
             args.append("--invert_contrast")
+        args += helical_extract_args(p)
         args += ctx.split_extra()
         ctx.add_table("Extraction", ["Setting", "Value"], [
             ["Source", source], ["Micrographs", f"{n_mics:,}"],

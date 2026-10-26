@@ -103,6 +103,13 @@ export function lineChart(section) {
 
   const sg = s('g', { class: 'series' });
   series.forEach((sr, i) => {
+    if (section.style === 'points') { // a scatter plot: one dot per point
+      sr.x.forEach((x, k) => {
+        const y = sr.y[k];
+        if (Number.isFinite(x) && Number.isFinite(y)) sg.appendChild(s('circle', { cx: X(x).toFixed(1), cy: Y(y).toFixed(1), r: 3, fill: `var(--series-${i + 1})`, 'fill-opacity': 0.8, stroke: 'none' }));
+      });
+      return;
+    }
     let d = '';
     let pen = false;
     sr.x.forEach((x, k) => {

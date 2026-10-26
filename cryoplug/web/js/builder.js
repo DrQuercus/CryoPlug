@@ -199,6 +199,13 @@ export function renderBuilder() {
         e.target.textContent = b.showAdvanced ? '▾ Hide advanced parameters' : `▸ Advanced parameters (${adv.length})`;
       } }, b.showAdvanced ? '▾ Hide advanced parameters' : `▸ Advanced parameters (${adv.length})`), advBox);
     }
+    // parameters shown only when another one is set (the helical options once "Helical" is ticked...)
+    const showIf = () => {
+      for (const el of sec.querySelectorAll('[data-show-if]')) el.hidden = !paramShown(el.dataset.showIf, b.params);
+    };
+    showIf();
+    sec.addEventListener('input', showIf);
+    sec.addEventListener('change', showIf);
     // parameters setting the GPU count or the processes change what Compute shows
     const needs = new Set([t.gpu_param, ...cpuParams(t)].filter(Boolean).map((n) => `p-${n}`));
     if (needs.size) sec.addEventListener('input', (e) => { if (needs.has(e.target.id)) compute.render(); });
@@ -267,7 +274,21 @@ function renderInputs(flash = []) {
   clear(inputsBox, rows);
 }
 
+// "name": shown when that parameter is set (ticked, non-zero); "name=a|b": when it has one of these values.
+export function paramShown(cond, values) {
+  const [name, want] = cond.split('=');
+  const v = values[name];
+  if (want === undefined) return !!v && v !== '0' && v !== 'false' && v !== 'none';
+  return want.split('|').includes(String(v));
+}
+
 export function paramField(prm, values, idPrefix = 'p') {
+  const field = paramFieldInner(prm, values, idPrefix);
+  if (prm.show_if) field.dataset.showIf = prm.show_if;
+  return field;
+}
+
+function paramFieldInner(prm, values, idPrefix) {
   const id = `${idPrefix}-${prm.name}`;
   const v = values[prm.name];
   const set = (val) => { values[prm.name] = val; };

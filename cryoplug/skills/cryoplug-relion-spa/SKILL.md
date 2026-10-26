@@ -70,6 +70,11 @@ During a collection, `relion_live` runs steps 1–6 cycle after cycle on the mov
 `relion_symmetry_expand` (one particle per symmetry copy, then `relion_subtract` / focused classification in C1),
 `relion_subset` (duplicates, splits, metadata ranges).
 
+Also: `relion_optics_groups` (optics groups from EPU beam shifts, file names or acquisition order, before CTF
+refinement of AFIS data), `relion_topaz_denoise` (denoised micrographs for picking; extraction maps the picks back to
+the originals), and `helical=true` on autopick (templates), extraction, 2D/3D classification, auto-refine and mask
+creation for filaments (tube diameter, twist, rise, symmetry search).
+
 ## Limits and pitfalls
 
 - Several sessions with different pixel sizes or detectors: import them separately, join with `relion_join`.

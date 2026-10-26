@@ -307,7 +307,20 @@ attendent, puis repartent seuls.
 | Une particule par sous-unité d'un complexe symétrique | **Symmetry expansion (RELION)** |
 | Doublons, sous-ensembles, sélection sur une colonne | **Subset selection (RELION)** |
 
-### 2.6 Conseils
+### 2.6 Groupes d'optique, filaments, débruitage
+
+- **Optics groups (beam shift, file names)** répartit films, micrographies ou particules en groupes d'optique : par le
+  décalage de faisceau des fichiers XML d'EPU (collecte AFIS, un groupe par trou du motif), par une partie des noms de
+  fichiers (`GridSquare_(\d+)`…) ou par ordre d'acquisition. Le CTF refinement ajuste ensuite le beam tilt de chaque
+  groupe.
+- **Filaments** : la case *Helical processing* des jobs d'auto-picking (modèles), d'extraction, de classification 2D
+  et 3D, de raffinement 3D et de masque ajoute les options hélicoïdales de RELION (diamètre du tube, twist et montée,
+  recherche locale de la symétrie, priors d'angles) ; les options n'apparaissent qu'une fois la case cochée.
+- **Denoise micrographs (Topaz)** débruite les micrographies (réseau pré-entraîné de Topaz) pour picker à l'œil ou
+  automatiquement ; les picks faits sur les micrographies débruitées s'extraient des originales (l'extraction traduit
+  les noms).
+
+### 2.7 Conseils
 
 - Travaillez à pixel réduit pour la 2D, l'ab initio et la 3D ; avant le raffinement final, ré-extrayez à pleine
   échelle (entrée *Particles to re-extract* de l'extraction, recentrée sur les positions raffinées).

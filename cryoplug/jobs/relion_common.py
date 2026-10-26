@@ -347,3 +347,164 @@ def refinement_diagnostics(ctx: JobContext, data_star: Path, folder: Path | None
                            "y": [round(h["resolution"][c], 2) if h.get("resolution") and c < len(h["resolution"]) and h["resolution"][c] < 900 else None
                                  for h in shares]} for c in range(k)],
                          x_label="Iteration", y_label="Resolution (Å)")
+
+
+# ------------------------------------------------------------------ helical processing (RELION's GUI options)
+def _f(value: float) -> str:
+    return f"{value:g}"
+
+
+def helical_params(kind: str) -> list[Param]:
+    """The helical options of RELION's GUI for one kind of job (src/pipeline_jobs.cpp), shown once "Helical" is ticked:
+    'autopick' (template picking of segments), 'extract', 'class2d', '3d' (classification, refinement), 'mask'."""
+    s = "helical"
+    on = Param("helical", "bool", False, label="Helical processing",
+               help="Filaments (amyloids, helical assemblies), with RELION's helical options.")
+    outer = Param("helical_outer_diameter", "float", 200.0, label="Tube diameter", unit="Å", min=0, show_if=s,
+                  help="Outer diameter of the filament (a bit larger than it).")
+    asu = Param("helical_nr_asu", "int", 1, label="Asymmetric units per segment", min=1, max=100, show_if=s)
+    rise = Param("helical_rise", "float", 0.0, label="Helical rise", unit="Å", min=0, show_if=s)
+    if kind == "autopick":
+        return [on, outer, asu, rise,
+                Param("helical_kappa_max", "float", 0.1, label="Maximum curvature (kappa)", min=0, max=1, show_if=s,
+                      help="0.05-0.5: rigid to curved filaments."),
+                Param("helical_length_min", "float", -1.0, label="Minimum filament length", unit="Å", show_if=s,
+                      help="Shorter filaments are left out. -1 = none."),
+                Param("helical_amyloid", "bool", False, label="Amyloid picking", show_if=s)]
+    if kind == "extract":
+        return [on, outer, asu, rise,
+                Param("helical_bimodal", "bool", True, label="Bimodal angular priors", show_if=s,
+                      help="The polarity of the filament is unknown: in-plane angles ψ and ψ + 180° both possible.")]
+    if kind == "class2d":
+        return [on, outer,
+                Param("helical_bimodal", "bool", True, label="Bimodal in-plane angle search", show_if=s),
+                Param("helical_range_psi", "float", 6.0, label="In-plane angular search range", unit="°", min=0, max=90,
+                      show_if=s),
+                Param("helical_restrict_offsets", "bool", True, label="Restrict offsets along the filament", show_if=s,
+                      help="Offsets along the axis at most half the rise."),
+                Param("helical_rise", "float", 4.75, label="Helical rise", unit="Å", min=0, show_if=s,
+                      help="4.75 Å for amyloids (the distance between β-strands).")]
+    if kind == "mask":
+        return [on, Param("helical_z_percentage", "float", 30.0, label="Central part along the axis", unit="%", min=5,
+                          max=100, show_if=s, help="Part of the box height kept along the filament axis.")]
+    # 3d: classification and refinement
+    return [
+        on, Param("helical_inner_diameter", "float", -1.0, label="Inner tube diameter", unit="Å", show_if=s,
+                  help="Hollow filaments; -1 = solid."),
+        outer, asu,
+        Param("helical_twist", "float", 0.0, label="Initial twist", unit="°", show_if=s),
+        Param("helical_rise_initial", "float", 0.0, label="Initial rise", unit="Å", min=0, show_if=s),
+        Param("helical_z_percentage", "float", 30.0, label="Central part along the axis", unit="%", min=5, max=100,
+              show_if=s, help="Part of the box height used to impose the helical symmetry."),
+        Param("helical_keep_tilt", "bool", True, label="Keep the tilt prior fixed", show_if=s),
+        Param("helical_range_tilt", "float", 15.0, label="Tilt search range", unit="°", min=0, max=90, show_if=s),
+        Param("helical_range_psi", "float", 10.0, label="In-plane search range", unit="°", min=0, max=90, show_if=s),
+        Param("helical_range_rot", "float", -1.0, label="Rotation search range", unit="°", show_if=s, help="-1 = all."),
+        Param("helical_range_distance", "float", -1.0, label="Range of segment distances", unit="Å", show_if=s,
+              help="Restrains neighbouring segments of a filament. -1 = off."),
+        Param("helical_nstart", "int", 1, label="Start number (n-start)", min=1, max=20, show_if=s),
+        Param("helical_search", "bool", False, label="Local search of the helical symmetry", show_if=s),
+        Param("helical_twist_min", "float", 0.0, label="Twist search: min", unit="°", show_if="helical_search"),
+        Param("helical_twist_max", "float", 0.0, label="Twist search: max", unit="°", show_if="helical_search"),
+        Param("helical_twist_step", "float", 0.0, label="Twist search: step", unit="°", show_if="helical_search"),
+        Param("helical_rise_min", "float", 0.0, label="Rise search: min", unit="Å", show_if="helical_search"),
+        Param("helical_rise_max", "float", 0.0, label="Rise search: max", unit="Å", show_if="helical_search"),
+        Param("helical_rise_step", "float", 0.0, label="Rise search: step", unit="Å", show_if="helical_search"),
+    ]
+
+
+def helical_check(p: dict[str, Any]) -> list[str]:
+    """Problems of the helical options (before queueing)."""
+    if not p.get("helical"):
+        return []
+    problems = []
+    if not float(p.get("helical_outer_diameter") or 0) > 0:
+        problems.append("Helical: give the tube diameter")
+    if "helical_rise_initial" in p and not float(p.get("helical_rise_initial") or 0) > 0:
+        problems.append("Helical: give the initial rise")
+    if p.get("helical_search") and not (float(p.get("helical_twist_max") or 0) > float(p.get("helical_twist_min") or 0)
+                                        and float(p.get("helical_rise_max") or 0) > float(p.get("helical_rise_min") or 0)):
+        problems.append("Helical symmetry search: give twist and rise ranges (max > min)")
+    return problems
+
+
+def _sigma(value: float) -> str:
+    return _f(min(90.0, max(0.0, float(value))) / 3.0)
+
+
+def helical_symmetry_args(p: dict[str, Any]) -> list[str]:
+    args = ["--helix"]
+    if float(p["helical_inner_diameter"]) > 0:
+        args += ["--helical_inner_diameter", _f(p["helical_inner_diameter"])]
+    args += ["--helical_outer_diameter", _f(p["helical_outer_diameter"]), "--helical_nr_asu", str(p["helical_nr_asu"]),
+             "--helical_twist_initial", _f(p["helical_twist"]), "--helical_rise_initial", _f(p["helical_rise_initial"]),
+             "--helical_z_percentage", _f(float(p["helical_z_percentage"]) / 100.0)]
+    if p["helical_search"]:
+        args += ["--helical_symmetry_search", "--helical_twist_min", _f(p["helical_twist_min"]),
+                 "--helical_twist_max", _f(p["helical_twist_max"])]
+        if float(p["helical_twist_step"]) > 0:
+            args += ["--helical_twist_inistep", _f(p["helical_twist_step"])]
+        args += ["--helical_rise_min", _f(p["helical_rise_min"]), "--helical_rise_max", _f(p["helical_rise_max"])]
+        if float(p["helical_rise_step"]) > 0:
+            args += ["--helical_rise_inistep", _f(p["helical_rise_step"])]
+    return args
+
+
+def _helical_priors(p: dict[str, Any]) -> list[str]:
+    return ["--sigma_tilt", _sigma(p["helical_range_tilt"]), "--sigma_psi", _sigma(p["helical_range_psi"]),
+            "--sigma_rot", _sigma(p["helical_range_rot"])]
+
+
+def _helical_distance(p: dict[str, Any]) -> list[str]:
+    if float(p["helical_range_distance"]) > 0:
+        return ["--helical_sigma_distance", _f(float(p["helical_range_distance"]) / 3.0), "--helical_nstart", str(p["helical_nstart"])]
+    return []
+
+
+def helical_class3d_args(p: dict[str, Any], aligned: bool, local: bool) -> list[str]:
+    """3D classification (RELION's GUI order): symmetry, tilt prior, then the priors of global searches."""
+    if not p.get("helical"):
+        return []
+    args = helical_symmetry_args(p)
+    if p["helical_keep_tilt"]:
+        args.append("--helical_keep_tilt_prior_fixed")
+    if aligned and not local:
+        args += _helical_priors(p) + _helical_distance(p)
+    return args
+
+
+def helical_refine_args(p: dict[str, Any], local_differs: bool) -> list[str]:
+    """3D auto-refine (RELION's GUI order): symmetry, priors when the first sampling is not the local one, distance,
+    tilt prior."""
+    if not p.get("helical"):
+        return []
+    args = helical_symmetry_args(p)
+    if local_differs:
+        args += _helical_priors(p)
+    args += _helical_distance(p)
+    if p["helical_keep_tilt"]:
+        args.append("--helical_keep_tilt_prior_fixed")
+    return args
+
+
+def helical_class2d_args(p: dict[str, Any], aligned: bool) -> list[str]:
+    if not p.get("helical"):
+        return []
+    args = ["--helical_outer_diameter", _f(p["helical_outer_diameter"]), "--no_init_blobs"]
+    if aligned:
+        if p["helical_bimodal"]:
+            args.append("--bimodal_psi")
+        args += ["--sigma_psi", _sigma(p["helical_range_psi"])]
+        if p["helical_restrict_offsets"]:
+            args += ["--helix", "--helical_rise_initial", _f(p["helical_rise"])]
+    return args
+
+
+def helical_extract_args(p: dict[str, Any]) -> list[str]:
+    if not p.get("helical"):
+        return []
+    args = ["--helix", "--helical_outer_diameter", _f(p["helical_outer_diameter"])]
+    if p["helical_bimodal"]:
+        args.append("--helical_bimodal_angular_priors")
+    return args + ["--helical_cut_into_segments", "--helical_nr_asu", str(p["helical_nr_asu"]),
+                   "--helical_rise", _f(p["helical_rise"])]

@@ -387,6 +387,24 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "next": ["relion_extract", "relion_topaz_train"],
     },
+    "relion_topaz_denoise": {
+        "purpose": "Débruite les micrographies avec le réseau pré-entraîné de Topaz (topaz denoise), comme le « Micrograph "
+                   "Denoiser » de CryoSPARC : les particules ressortent pour le picking à l'œil ou automatique et pour "
+                   "l'inspection. Les picks faits sur les micrographies débruitées s'extraient des originales : "
+                   "l'extraction traduit les noms.",
+        "when": [
+            "Particules peu contrastées, petites ou en glace épaisse : picking manuel ou LoG sur micrographies débruitées.",
+            "Préparer un jeu d'entraînement Topaz par picking manuel.",
+        ],
+        "avoid": ["Estimer la CTF ou extraire sur les micrographies débruitées : le bruit y est modifié ; utilisez les originales."],
+        "inputs": "Les micrographies corrigées du mouvement (avec CTF).",
+        "tips": [
+            "« Micrographs » : quelques dizaines suffisent pour juger ou entraîner un picking.",
+            "GPU conseillé (sur CPU, plusieurs secondes par micrographie).",
+            "Connectez à l'extraction les micrographies originales et les picks faits sur les débruitées.",
+        ],
+        "next": ["relion_pick_inspect", "relion_autopick"],
+    },
     "relion_topaz_train": {
         "purpose": "Entraîne un réseau Topaz sur ce jeu de données (relion_autopick --topaz_train) à partir de particules "
                    "propres (celles des bonnes classes 2D) ou de coordonnées vérifiées ; le modèle sert ensuite à repicker "
@@ -421,6 +439,7 @@ HELP: dict[str, dict[str, Any]] = {
             "échelle avant le raffinement final.",
             "Boîtes paires uniquement ; la boîte réduite aussi.",
             "Topaz : un seuil de figure de mérite (-1 par exemple) écarte les mauvais picks.",
+            'Filaments : « Helical processing » découpe les filaments en segments (diamètre du tube, montée, unités asymétriques par segment).',
         ],
         "next": ["relion_class2d", "relion_initial_model", "relion_refine3d"],
     },
@@ -442,6 +461,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Masque circulaire un peu plus grand que la particule (0 = 90 % de la boîte).",
             "T = 2 en 2D ; limiter la résolution de l'étape E (7-12 Å) évite le sur-ajustement des petites particules.",
             "Dans la galerie, cliquez des classes puis « Select these classes » : la sélection est créée et lancée.",
+            "Filaments : « Helical processing » (diamètre du tube, recherche bimodale de ψ, décalages limités le long de l'axe).",
         ],
         "next": ["relion_select2d", "relion_class2d"],
     },
@@ -519,6 +539,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Les cartes des classes se jouent comme une série dans le visualiseur 3D.",
             "Le rapport suit la part de chaque classe au fil des itérations (convergence) et montre les directions de "
             "vue de chaque classe.",
+            'Filaments : « Helical processing » avec twist et montée initiaux (et leur recherche locale).',
         ],
         "next": ["relion_refine3d", "relion_class3d_global", "relion_hetero_refine"],
     },
@@ -561,6 +582,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Recherches locales à partir de 1,8° (le défaut du GUI de RELION).",
             "« Solvent-flattened FSC » (avec un masque) aide une petite particule dans une grande boîte.",
             "Blush (RELION 5) pour les particules petites ou flexibles.",
+            "Filaments : « Helical processing » impose la symétrie hélicoïdale (twist, montée) et peut l'affiner (recherche locale).",
         ],
         "next": ["relion_mask_create", "relion_ctf_refine", "relion_polish", "relion_postprocess", "relion_locres",
                  "relion_multibody", "relion_dynamight", "relion_local_refine"],
@@ -578,6 +600,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Filtre 15 Å, extension 3-5 px, bord doux 6-10 px.",
             "Seuil 0 = automatique (seuil d'Otsu de la carte filtrée) ; vérifiez le masque sur la carte dans le visualiseur.",
             "Masque dessiné à la main ou tiré d'un modèle : « Mask drawn in the 3D viewer » ou « Create mask ».",
+            "Filaments : « Helical processing » garde la partie centrale le long de l'axe (z %).",
         ],
         "next": ["relion_refine3d", "relion_ctf_refine", "relion_polish", "relion_postprocess", "relion_locres"],
     },
@@ -719,6 +742,25 @@ HELP: dict[str, dict[str, Any]] = {
             "Le nombre de particules est multiplié par l'ordre du groupe (14 pour D7).",
         ],
         "next": ["relion_subtract", "relion_class3d_global", "relion_local_refine"],
+    },
+    "relion_optics_groups": {
+        "purpose": "Répartit films, micrographies ou particules en groupes d'optique (comme les « Exposure Group "
+                   "Utilities » de CryoSPARC) : par le décalage de faisceau (image shift) lu dans les fichiers XML d'EPU "
+                   "et regroupé, par une partie des noms de fichiers, ou par ordre d'acquisition. Le CTF refinement "
+                   "ajuste ensuite le beam tilt et les aberrations de chaque groupe.",
+        "when": [
+            "Collecte avec image shift (AFIS) : chaque trou d'un motif a son propre beam tilt.",
+            "Plusieurs sessions ou grilles dans un même jeu : un groupe par session.",
+        ],
+        "avoid": ["Des groupes de quelques centaines de particules seulement : les aberrations s'estiment mal."],
+        "inputs": "Films, micrographies ou particules RELION ; pour le beam shift, le dossier des XML d'EPU.",
+        "tips": [
+            "Nombre de groupes = trous par position de platine (9 pour 3 × 3) ; vérifiez les nuages sur le graphe des "
+            "beam shifts.",
+            "Motif de nom : une expression régulière avec un groupe entre parenthèses, p. ex. GridSquare_(\\d+).",
+            "Faites-le tôt (sur les films ou micrographies) : les particules extraites héritent des groupes.",
+        ],
+        "next": ["relion_ctf_refine", "relion_motioncorr", "relion_extract"],
     },
     "relion_multibody": {
         "purpose": "Raffine séparément des corps rigides d'un complexe flexible, chacun avec son masque, à partir d'un "

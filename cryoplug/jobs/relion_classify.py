@@ -13,8 +13,9 @@ from cryoplug.jobs import register
 from cryoplug.jobs.base import JobContext, JobError, JobType, OutputDef, Param, Slot, extra_args_param
 from cryoplug.jobs.relion import Progress, absolute_greyscale, map_on_grid
 from cryoplug.jobs.relion_common import (
-    SAMPLINGS, RelionJob, compute_params, gpus, healpix, mask_diameter, mpi, particles_out_meta, refine_compute_params,
-    refinement_diagnostics, relion_command, relion_particles, run_relion, threads,
+    SAMPLINGS, RelionJob, compute_params, gpus, healpix, helical_check, helical_class2d_args, helical_class3d_args,
+    helical_params, mask_diameter, mpi, particles_out_meta, refine_compute_params, refinement_diagnostics, relion_command,
+    relion_particles, run_relion, threads,
 )
 from cryoplug.mrc import MapVolume
 
@@ -158,6 +159,7 @@ class RelionClass2D(RelionJob):
         Param("offset_range", "float", 5.0, label="Offset search range", unit="px", min=0, max=100),
         Param("offset_step", "float", 1.0, label="Offset search step", unit="px", min=0.1, max=10),
         Param("allow_coarser", "bool", False, label="Allow coarser sampling", advanced=True),
+        *helical_params("class2d"),
         *refine_compute_params(3),
         mpi(1, help="EM only (VDAM runs without MPI)."),
         threads(8),
@@ -171,7 +173,7 @@ class RelionClass2D(RelionJob):
     def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
         if params.get("algorithm") == "vdam" and int(params.get("mpi") or 1) > 1:
             return ["VDAM does not run with MPI: set 1 MPI process (more threads), or use EM"]
-        return []
+        return helical_check(params)
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
@@ -205,6 +207,7 @@ class RelionClass2D(RelionJob):
                      "--offset_step", f"{2 * p['offset_step']:g}"]
             if p["allow_coarser"]:
                 args.append("--allow_coarser_sampling")
+        args += helical_class2d_args(p, aligned=bool(p["align"]))
         args += ["--norm", "--scale", "--j", str(p["threads"])]
         if p["gpus"] > 0:
             args += ["--gpu", ""]
@@ -575,6 +578,7 @@ class RelionClass3DGlobal(RelionJob):
               help="v1.0 (Kimanius et al. 2024); amy-v1.0 for amyloid filaments."),
         Param("allow_coarser", "bool", False, label="Allow coarser sampling", advanced=True),
         Param("pad1", "bool", False, label="Skip padding", advanced=True),
+        *helical_params("3d"),
         *refine_compute_params(3),
         mpi(1),
         threads(8),
@@ -583,6 +587,10 @@ class RelionClass3DGlobal(RelionJob):
     ]
     outputs = [OutputDef("maps", "volume_series", "Class maps"), OutputDef("particles", "particles", "Classified particles"),
                OutputDef("map_1", "map", "Map of class 1"), OutputDef("class_1", "particles", "Particles of class 1")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        return helical_check(params)
 
     def references(self, ctx: JobContext, parts: dict[str, Any]) -> tuple[str, int, bool]:
         """The --ref of relion_refine, the number of classes, and whether the reference is on absolute greyscale."""
@@ -629,7 +637,9 @@ class RelionClass3DGlobal(RelionJob):
             args += ["--offset_range", f"{p['offset_range']:g}", "--offset_step", f"{2 * p['offset_step']:g}"]
             if p["allow_coarser"]:
                 args.append("--allow_coarser_sampling")
-        args += ["--sym", sym, "--norm", "--scale", "--j", str(p["threads"])]
+        args += ["--sym", sym, "--norm", "--scale"]
+        args += helical_class3d_args(p, aligned=p["alignment"] != "none", local=p["alignment"] == "local")
+        args += ["--j", str(p["threads"])]
         if p["gpus"] > 0:
             if p["alignment"] == "none":
                 ctx.log("No GPU without alignment (RELION cannot use GPUs when skipping alignments)")

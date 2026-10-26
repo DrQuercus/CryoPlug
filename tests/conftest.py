@@ -515,8 +515,33 @@ exit 0
                  "relion_motion_refine_mpi", "relion_star_handler", "relion_flex_analyse", "relion_python_dynamight"):
         (d / prog).symlink_to(relion)
     # programs RELION calls (the fake RELION only checks that they can be run)
-    for prog in ("ctffind", "MotionCor2", "relion_python_topaz"):
+    for prog in ("ctffind", "MotionCor2"):
         _script(d / prog, f'echo "fake {prog} $@"\n')
+    # Topaz: run by relion_autopick, and directly for denoising (topaz denoise -o DIR ... micrographs: DIR/<name>.mrc)
+    topaz = d / "relion_python_topaz"
+    topaz.write_text(f"""#!{sys.executable}
+import os, shutil, sys
+args = sys.argv[1:]
+print("fake relion_python_topaz", *args)
+if args and args[0] == "denoise":
+    out, mics, i, valued = "", [], 1, {{"-o", "--output", "-m", "--model", "-d", "--device", "-s", "--patch-size",
+                                       "-p", "--patch-padding", "--format", "--suffix"}}
+    while i < len(args):
+        if args[i] in valued:
+            out = args[i + 1] if args[i] in ("-o", "--output") else out
+            i += 2
+        elif args[i].startswith("-"):
+            sys.exit("topaz denoise: unknown option " + args[i])
+        else:
+            mics.append(args[i])
+            i += 1
+    if out and not os.path.exists(out):
+        os.makedirs(out)
+    for m in mics:
+        name = os.path.splitext(os.path.basename(m))[0]
+        shutil.copy(m, (out + os.sep + name if out else os.path.splitext(m)[0] + ".denoised") + ".mrc")
+""")
+    topaz.chmod(topaz.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     # Mimics LocScale 2.4.1 path handling: relative -o / -op are resolved against the folder of the first
     # input map (not the working directory), and the inputs are copied into the processing folder.
     _script(d / "locscale", """

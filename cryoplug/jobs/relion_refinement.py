@@ -19,8 +19,9 @@ from cryoplug.jobs.relion import (
     Progress, absolute_greyscale, finish_refinement, map_on_grid, outputs_of_refine, postprocess,
 )
 from cryoplug.jobs.relion_common import (
-    SAMPLINGS, RelionJob, compute_params, gpus, healpix, histogram, mask_diameter, mpi, particles_out_meta,
-    refine_compute_params, relion_command, relion_particles, run_relion, star_of, threads,
+    SAMPLINGS, RelionJob, compute_params, gpus, healpix, helical_check, helical_params, helical_refine_args, histogram,
+    mask_diameter, mpi, particles_out_meta, refine_compute_params, relion_command, relion_particles, run_relion, star_of,
+    threads,
 )
 from cryoplug.mrc import MapVolume
 
@@ -70,6 +71,7 @@ class RelionRefine3D(RelionJob):
         Param("pad1", "bool", False, label="Skip padding", advanced=True),
         Param("postprocess", "bool", True, label="Post-process with the mask"),
         Param("bfactor", "float", 0.0, label="Sharpening B-factor", unit="Å²", help="0 = automatic."),
+        *helical_params("3d"),
         *refine_compute_params(3),
         mpi(3, 3, help="At least 3 (a leader and one process per half set: RELION's requirement); with GPUs, 2 per "
                        "GPU plus one."),
@@ -80,6 +82,10 @@ class RelionRefine3D(RelionJob):
     outputs = [OutputDef("map", "map", "Refined map"), OutputDef("half_maps", "half_maps", "Half maps"),
                OutputDef("map_sharp", "map", "Post-processed map"), OutputDef("mask", "mask", "Mask"),
                OutputDef("fsc", "fsc", "FSC"), OutputDef("particles", "particles", "Refined particles")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        return helical_check(params)
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
@@ -114,6 +120,7 @@ class RelionRefine3D(RelionJob):
                  "--auto_local_healpix_order", str(healpix(p["local_from"])), "--offset_range", f"{p['offset_range']:g}",
                  "--offset_step", f"{2 * p['offset_step']:g}", "--sym", sym, "--low_resol_join_halves", "40",
                  "--norm", "--scale"]
+        args += helical_refine_args(p, local_differs=healpix(p["angular_step"]) != healpix(p["local_from"]))
         if str(p["relax_sym"]).strip():
             args += ["--relax_sym", str(p["relax_sym"]).strip().upper()]
         args += ["--j", str(p["threads"])]
@@ -151,6 +158,7 @@ class RelionMaskCreate(RelionJob):
         Param("extend", "int", 3, label="Extend the binary mask", unit="px", min=0, max=50),
         Param("soft_edge", "int", 6, label="Soft edge", unit="px", min=0, max=50,
               help="Raised-cosine edge (RELION's default 3; 5-10 pixels are usual)."),
+        *helical_params("mask"),
         threads(4),
         extra_args_param(),
     ]
@@ -170,7 +178,10 @@ class RelionMaskCreate(RelionJob):
         if p["lowpass"] > 0:
             args += ["--lowpass", f"{p['lowpass']:g}"]
         args += ["--ini_threshold", f"{threshold:.6g}", "--extend_inimask", str(p["extend"]),
-                 "--width_soft_edge", str(p["soft_edge"]), "--j", str(p["threads"]), *ctx.split_extra()]
+                 "--width_soft_edge", str(p["soft_edge"])]
+        if p["helical"]:  # a cylinder of the central part along z
+            args += ["--helix", "--z_percentage", f"{p['helical_z_percentage'] / 100:g}"]
+        args += ["--j", str(p["threads"]), *ctx.split_extra()]
         ctx.progress(0.1, "relion_mask_create")
         run_relion(ctx, args)
         if not out.exists():

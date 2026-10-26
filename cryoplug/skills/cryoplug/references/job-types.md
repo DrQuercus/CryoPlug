@@ -63,6 +63,12 @@ built-in · interactive: a person works in it. In: micrographs: micrographs. Out
 Keeps the micrographs whose CTF fit, defocus, astigmatism, motion or ice are within limits, as CryoSPARC's Manually Curate Exposures: the job waits with the distributions (limits dragged on the histograms), a scatter plot, the table of the micrographs and each micrograph with its CTF fit and drift, accepted or rejected one by one. Or applies the thresholds below at once. The rejected micrographs are an output too.
 Usually followed by: `relion_autopick`, `relion_pick_inspect`, `relion_topaz_train`.
 
+### `relion_topaz_denoise` — Denoise micrographs (Topaz)
+RELION · GPU optional. In: micrographs: micrographs. Out: micrographs: micrographs.
+
+Denoises the micrographs with Topaz's pretrained network (topaz denoise), as CryoSPARC's Micrograph Denoiser: the particles stand out for picking, by eye or by program, and for inspection. The denoised micrographs keep the CTF of the originals; picks made on them are extracted from the originals (the extraction translates the names).
+Usually followed by: `relion_pick_inspect`, `relion_autopick`.
+
 ### `relion_live` — Live preprocessing (RELION)
 RELION · GPU optional. In: none. Out: micrographs: micrographs, all_micrographs: micrographs, rejected: micrographs, movies: movies, coordinates: coordinates, particles: particles.
 
@@ -568,6 +574,12 @@ built-in. In: model: model. Out: model: model.
 
 Built-in model editing with gemmi: convert PDB/mmCIF, remove hydrogens/waters/ligands/alternative conformations, select or rename chains, reset B-factors and occupancies.
 Usually followed by: `phenix_real_space_refine`.
+
+### `relion_optics_groups` — Optics groups (beam shift, file names)
+built-in. In: data: movies/micrographs/particles. Out: particles: particles, micrographs: micrographs, movies: movies.
+
+Splits movies, micrographs or particles into optics groups, as CryoSPARC's Exposure Group Utilities: by the beam (image) shift of EPU's acquisition files (aberration-free image shift, clustered), by a part of the file names, or in groups of acquisition order. CTF refinement then fits the beam tilt and higher-order aberrations of each group.
+Usually followed by: `relion_ctf_refine`, `relion_motioncorr`, `relion_extract`.
 
 ### `relion_particle_sets` — Particle sets (intersection, difference)
 built-in. In: set_a: particles, set_b: particles. Out: both: particles, a_only: particles, b_only: particles.
