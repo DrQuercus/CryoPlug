@@ -1282,6 +1282,21 @@ def clear_job(s: Session, a: Args) -> str:
     return "\n".join([f"{p['uid']}/{job['uid']} cleared: back to building."] + _queue_state(s, p["uid"], detail))
 
 
+@tool("resume_job", "Resume a failed RELION run", """
+Queue a failed or killed RELION 3D auto-refine or 3D classification again from the last iteration it wrote, its files
+kept (RELION's Continue, relion_refine --continue): hours of work are not redone. For other jobs, or to change
+parameters, clear_job or clone_job instead. Check the error first (get_job): a run that failed for a reason that
+remains (memory, a wrong input) fails again.""",
+      {"project": PROJECT, "job": JOB}, ("project", "job"), read_only=False, destructive=False, idempotent=False)
+def resume_job(s: Session, a: Args) -> str:
+    p, job = project_and_job(s, a)
+    if job["status"] not in ("failed", "killed"):
+        raise ToolError(f"{job['uid']} is {job['status']}: only a failed or killed run is resumed")
+    after = s.post(f"/api/projects/{p['uid']}/jobs/{job['uid']}/continue", {})
+    return "\n".join([f"{p['uid']}/{job['uid']}: {after.get('message') or 'queued again'} ({after['status']})."]
+                     + _queue_state(s, p["uid"], s.job(p["uid"], job["uid"])))
+
+
 @tool("clone_job", "Copy a job to run it again", """
 Copy a job (same type, inputs and parameters) as a new job in building state, optionally changing parameters,
 inputs or the title, and queueing it: to run it again with other settings while keeping the original.""",

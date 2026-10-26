@@ -42,7 +42,7 @@ Reading the numbers:
 | Strong preferred orientation (ratio > 1.6) | `spisonet` (half maps + soft mask, GPU, tens of minutes) | deposit the original maps |
 | 4–6 Å, figures or domain fitting | `deepemhancer`, `emready`, `emmernet` | never as the only evidence |
 | Doubt about a detail (ligand, side chain) | compare 2–3 maps | workflow `map_enhancement` |
-| Simple global B-factor sharpening/blurring, low-pass, crop/pad, pixel size, mask | `map_tools` | built-in, fast |
+| Simple global B-factor sharpening/blurring, low-pass, crop/pad, pixel size, resampling, mask | `map_tools` | built-in, fast |
 
 Notes on parameters (check `describe_job_type` for the full lists):
 
@@ -51,8 +51,9 @@ Notes on parameters (check `describe_job_type` for the full lists):
 - `phenix_map_sharpening`: `method=shell` (half maps, or map + fitted model) or `b-factor` (single map);
   `anisotropic`, `local`. With Phenix 2 it replaces `phenix_auto_sharpen` and `phenix_local_aniso_sharpen`.
 - `spisonet`: needs half maps and a soft mask; its outputs (half maps, map, 3D FSC) are not independent.
-- `map_tools`: operations in order — `set_pixel_size`, `box` (crop/pad to a cubic box), `flip_hand`, `bfactor`
-  (negative sharpens), `lowpass`, `apply_mask`, `normalize`.
+- `map_tools`: operations in order — `set_pixel_size` (header only), `resample_pixel_size` (Fourier cropping or
+  padding) or the optional `reference` input (onto the grid of another map, to compare or combine maps), `box`
+  (crop/pad to a cubic box), `flip_hand`, `bfactor` (negative sharpens), `lowpass`, `apply_mask`, `normalize`.
 
 The workflow `map_enhancement` creates directional FSC + LocScale and optional spIsoNet, EMmerNet, DeepEMhancer,
 density modification, auto-sharpen and EMReady on the same half maps, for side-by-side comparison.

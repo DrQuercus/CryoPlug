@@ -88,8 +88,85 @@ def fsc_table(box, apix, res):
     return t, freq, fsc
 
 
+def continue_run(a):
+    """relion_refine --continue <root>_itNNN_optimiser.star: the run goes on from that iteration, under <root>_ct<NNN>
+    when --o is left out or repeats the root (MlOptimiser::parseContinue)."""
+    import re
+    opt_path = a["--continue"]
+    if not os.path.exists(opt_path):
+        die(f"Cannot read file {opt_path}")
+    m = re.search(r"_it(\d+)_optimiser\.star$", opt_path)
+    if not m:
+        die("--continue needs the optimiser.star of an iteration (_itNNN_optimiser.star)")
+    it = int(m.group(1))
+    opt = rl.read_star(opt_path)["optimiser_general"]
+    root = opt.value("rlnOutputRootName")
+    out = a.get("--o", "OLD_ctX")
+    if out in ("OLD_ctX", root):
+        out = f"{root}_ct{it}"
+    tables = rl.read_star(opt.value("rlnExperimentalDataStarFile"))
+    parts = check_images(tables)
+    box, apix = grid(tables)
+    rng = np.random.default_rng(3)
+    refs = [MapVolume.read(r) for r in rl.read_star(opt.value("rlnModelStarFile"))["model_classes"].column("rlnReferenceImage")]
+    if opt.value("rlnDoSplitRandomHalves") == "1":  # auto-refine: two more iterations, then the halves combined
+        if mpi_size() < 3:
+            die("Cannot split data into random halves without using MPI!")
+        res = 3.8
+        for n in (it + 1, it + 2):
+            print(f" Auto-refine: Iteration= {n}")
+            print(f" Auto-refine: Resolution= {res + 0.1 * (it + 2 - n):.4f} (no gain for 0 iter) ")
+            last = f"{out}_it{n:03d}"
+            models = []
+            for h in (1, 2):
+                refs[0].write(f"{last}_half{h}_class001.mrc")
+                classes = rl.StarTable("model_classes")
+                classes.set_column("rlnReferenceImage", [f"{last}_half{h}_class001.mrc"])
+                classes.set_column("rlnClassDistribution", [1.0])
+                rl.write_star(f"{last}_half{h}_model.star", [classes])
+                models.append(f"{last}_half{h}_model.star")
+            rl.write_star(f"{last}_data.star", list(tables.values()))
+            write_optimiser(f"{last}_optimiser.star", f"{last}_data.star", models[0], True, out, models[1])
+        print(" Auto-refine: Refinement has converged, entering last iteration where two halves will be combined...")
+        refs[0].write(f"{out}_class001.mrc")
+        for h in (1, 2):
+            refs[0].like(refs[0].data + rng.normal(0, 0.05, refs[0].data.shape).astype(np.float32)).write(f"{out}_half{h}_class001_unfil.mrc")
+        aligned(parts, rng)
+        rl.write_star(f"{out}_data.star", list(tables.values()))
+        curve, _f, _c = fsc_table(box, apix, res)
+        general = rl.StarTable("model_general", ["rlnCurrentResolution"], [[f"{res:.6f}"]], loop=False)
+        classes = rl.StarTable("model_classes")
+        classes.set_column("rlnReferenceImage", [f"{out}_class001.mrc"])
+        classes.set_column("rlnClassDistribution", [1.0])
+        classes.set_column("rlnEstimatedResolution", [res])
+        rl.write_star(f"{out}_model.star", [general, classes, curve])
+        write_optimiser(f"{out}_optimiser.star", f"{out}_data.star", f"{out}_model.star", False, out)
+        return
+    k = len(refs)
+    n_iter = int(a.get("--iter", it + 3))
+    if n_iter <= it:
+        die(f"Nothing to do: the run is at iteration {it} of {n_iter}")
+    for n in range(it + 1, n_iter + 1):
+        print(f" Expectation iteration {n} of {n_iter}")
+        classes = rl.StarTable("model_classes")
+        classes.set_column("rlnReferenceImage", [f"{out}_it{n:03d}_class{c:03d}.mrc" for c in range(1, k + 1)])
+        classes.set_column("rlnClassDistribution", [1.0 / k] * k)
+        classes.set_column("rlnEstimatedResolution", [7.0 + c for c in range(k)])
+        general = rl.StarTable("model_general", ["rlnCurrentResolution"], [["7.000000"]], loop=False)
+        rl.write_star(f"{out}_it{n:03d}_model.star", [general, classes])
+    last = f"{out}_it{n_iter:03d}"
+    for c in range(1, k + 1):
+        refs[c - 1].write(f"{last}_class{c:03d}.mrc")
+    n = len(parts)
+    parts.set_column("rlnClassNumber", np.arange(n) % k + 1)
+    rl.write_star(f"{last}_data.star", list(tables.values()))
+    write_optimiser(f"{last}_optimiser.star", f"{last}_data.star", f"{last}_model.star", False, out)
+
+
 def refine(argv):
     a = parse(argv, REFINE_OPTS)
+    if "--continue" in a:
+        return continue_run(a)
     for need in ("--o", "--i", "--ref"):
         if need not in a:
             die(f"missing {need}")
@@ -160,30 +237,31 @@ def refine(argv):
     # class shares drifting from even to uneven: class c ends with a share proportional to k - c + 1
     final = np.arange(k, 0, -1, dtype=float)
     final /= final.sum()
-    for it in range(1, n_iter + 1):
-        print(f" Expectation iteration {it} of {n_iter}")
-        w = it / n_iter
-        share = (1 - w) / k + w * final
-        classes = rl.StarTable("model_classes")
-        classes.set_column("rlnReferenceImage", [f"{root}_it{it:03d}_class{c:03d}.mrc" for c in range(1, k + 1)])
-        classes.set_column("rlnClassDistribution", share)
-        classes.set_column("rlnEstimatedResolution", [12.0 - 6.0 * w + c for c in range(k)])
-        general = rl.StarTable("model_general", ["rlnCurrentResolution"], [[f"{12.0 - 6.0 * w:.6f}"]], loop=False)
-        rl.write_star(f"{root}_it{it:03d}_model.star", [general, classes])
-    last = f"{root}_it{n_iter:03d}"
-    for c in range(1, k + 1):
-        z, y, x = np.indices(ref.data.shape) - box // 2
-        bump = np.exp(-((x - c) ** 2 + y ** 2 + z ** 2) / 8.0).astype(np.float32)
-        start = refs[c - 1] if refs else ref
-        start.like(start.data + 0.3 * bump).write(f"{last}_class{c:03d}.mrc")
     n = len(parts)
     counts = np.round(final * n).astype(int)
     counts[0] += n - counts.sum()
-    parts.set_column("rlnClassNumber", np.repeat(np.arange(1, k + 1), counts)[rng.permutation(n)])
+    labels = np.repeat(np.arange(1, k + 1), counts)[rng.permutation(n)]
     if "--skip_align" not in a:
         aligned(parts, rng)
-    rl.write_star(f"{last}_data.star", list(tables.values()))
-    write_optimiser(f"{last}_optimiser.star", f"{last}_data.star", f"{last}_model.star", False, root)
+    z, y, x = np.indices(ref.data.shape) - box // 2
+    for it in range(1, n_iter + 1):  # every iteration writes its maps, model, particles and optimiser
+        print(f" Expectation iteration {it} of {n_iter}")
+        w = it / n_iter
+        share = (1 - w) / k + w * final
+        stem = f"{root}_it{it:03d}"
+        classes = rl.StarTable("model_classes")
+        classes.set_column("rlnReferenceImage", [f"{stem}_class{c:03d}.mrc" for c in range(1, k + 1)])
+        classes.set_column("rlnClassDistribution", share)
+        classes.set_column("rlnEstimatedResolution", [12.0 - 6.0 * w + c for c in range(k)])
+        general = rl.StarTable("model_general", ["rlnCurrentResolution"], [[f"{12.0 - 6.0 * w:.6f}"]], loop=False)
+        rl.write_star(f"{stem}_model.star", [general, classes])
+        for c in range(1, k + 1):
+            bump = np.exp(-((x - c) ** 2 + y ** 2 + z ** 2) / 8.0).astype(np.float32)
+            start = refs[c - 1] if refs else ref
+            start.like(start.data + 0.3 * w * bump).write(f"{stem}_class{c:03d}.mrc")
+        parts.set_column("rlnClassNumber", labels if it == n_iter else rng.integers(1, k + 1, n))
+        rl.write_star(f"{stem}_data.star", list(tables.values()))
+        write_optimiser(f"{stem}_optimiser.star", f"{stem}_data.star", f"{stem}_model.star", False, root)
 
 
 def aligned(parts, rng):

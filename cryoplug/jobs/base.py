@@ -197,6 +197,7 @@ class JobType:
     cpu_param: ClassVar[str] = ""  # parameter(s) giving the number of processes ("mpi*threads": their product)
     interactive: ClassVar[bool] = False
     controls: ClassVar[tuple[str, ...]] = ()  # requests a running job takes (e.g. "stop": finish after the current cycle)
+    continuable: ClassVar[bool] = False  # a failed or killed run can go on from where it stopped (its files kept)
     software: ClassVar[list[str]] = []  # names used in the methods draft
     params: ClassVar[list[Param]] = []
     inputs: ClassVar[list[Slot]] = []
@@ -219,6 +220,7 @@ class JobType:
             "cpu_param": cls.cpu_param,
             "interactive": cls.interactive,
             "controls": list(cls.controls),
+            "continuable": cls.continuable,
             "admin_only": cls.admin_only,
             "params": [p.to_dict() for p in cls.params],
             "inputs": [s.to_dict() for s in cls.inputs],

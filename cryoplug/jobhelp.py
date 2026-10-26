@@ -583,6 +583,8 @@ HELP: dict[str, dict[str, Any]] = {
             "Le rapport suit la part de chaque classe au fil des itérations (convergence) et montre les directions de "
             "vue de chaque classe.",
             'Filaments : « Helical processing » avec twist et montée initiaux (et leur recherche locale).',
+            "Un run en échec ou tué (mémoire, nœud perdu, temps de file dépassé) se relance de sa dernière itération : "
+            "« Resume » (le « Continue » de RELION, fichiers gardés, sorties sous run_ct<itération>).",
         ],
         "next": ["relion_refine3d", "relion_class3d_global", "relion_hetero_refine", "relion_particle_curate"],
     },
@@ -626,6 +628,8 @@ HELP: dict[str, dict[str, Any]] = {
             "« Solvent-flattened FSC » (avec un masque) aide une petite particule dans une grande boîte.",
             "Blush (RELION 5) pour les particules petites ou flexibles.",
             "Filaments : « Helical processing » impose la symétrie hélicoïdale (twist, montée) et peut l'affiner (recherche locale).",
+            "Un run en échec ou tué (mémoire, nœud perdu, temps de file dépassé) se relance de sa dernière itération : "
+            "« Resume » (le « Continue » de RELION, fichiers gardés, sorties sous run_ct<itération>).",
         ],
         "next": ["relion_mask_create", "relion_ctf_refine", "relion_polish", "relion_postprocess", "relion_locres",
                  "relion_multibody", "relion_dynamight", "relion_local_refine"],
@@ -668,6 +672,23 @@ HELP: dict[str, dict[str, Any]] = {
             "Recherche de décalage ~10 Å et d'angle ~15° ; quelques dizaines d'itérations suffisent.",
         ],
         "next": ["relion_refine3d", "relion_class3d_global", "relion_helix_toolbox"],
+    },
+    "relion_align_symmetry": {
+        "purpose": "Tourne (et recentre) une carte raffinée sans symétrie pour que ses axes de symétrie soient ceux de RELION "
+                   "(relion_align_symmetry), comme les « Volume Alignment Tools » de CryoSPARC : la référence d'un "
+                   "raffinement symétrique ou d'une expansion de symétrie. La symétrie peut aussi être appliquée.",
+        "when": [
+            "Après un raffinement C1 qui montre une symétrie : aligner la carte avant de raffiner avec la symétrie.",
+            "Avant une expansion de symétrie, avec une carte venue d'un autre logiciel ou d'une autre convention.",
+        ],
+        "avoid": ["Une symétrie supposée sans la voir dans la carte C1 : vérifiez d'abord (classes 3D, carte C1)."],
+        "inputs": "Une carte (raffinée en C1, de préférence non affûtée).",
+        "tips": [
+            "Boîte de travail 64 px (Nyquist ~20 Å) : suffisant et rapide.",
+            "Puis 3D auto-refine avec cette carte et la symétrie (filtre initial 10-15 Å : la carte vient de ces particules).",
+            "« Rotation about z only » quand l'axe principal est déjà sur z (Cn).",
+        ],
+        "next": ["relion_refine3d", "relion_symmetry_expand", "relion_mask_create"],
     },
     "relion_helix_toolbox": {
         "purpose": "Outils de symétrie hélicale de RELION (relion_helix_toolbox) sur la carte d'un filament : recherche "
@@ -976,17 +997,24 @@ HELP: dict[str, dict[str, Any]] = {
         "next": ["spisonet", "locscale"],
     },
     "map_tools": {
-        "purpose": "Opérations simples sur une carte : taille de pixel, recadrage/agrandissement de boîte, inversion de main, "
-                   "B-factor global, filtre passe-bas, multiplication par un masque, normalisation.",
+        "purpose": "Opérations simples sur une carte, comme les « Volume Tools » de CryoSPARC : taille de pixel (en-tête), "
+                   "rééchantillonnage (autre taille de pixel par recadrage ou remplissage de Fourier, ou sur la grille "
+                   "d'une autre carte), recadrage/agrandissement de boîte, inversion de main, B-factor global, filtre "
+                   "passe-bas, multiplication par un masque, normalisation.",
         "when": [
             "La main est fausse (hélices gauches, ModelAngelo ne construit que des fragments) : « Flip handedness ».",
             "Boîte non cubique ou trop grande pour un logiciel : recadrer en boîte cubique.",
+            "Carte d'un autre jeu de données ou d'un autre logiciel à comparer : « Resample to pixel size » ou la grille "
+            "d'une autre carte (entrée « Grid of »).",
             "Carte filtrée à une résolution donnée pour une figure ou un ajustement grossier.",
         ],
-        "avoid": ["Recadrer la carte déposée sans recadrer de même les demi-cartes et le masque."],
-        "inputs": "Une carte ; le masque seulement pour « Multiply by mask ».",
+        "avoid": ["Recadrer la carte déposée sans recadrer de même les demi-cartes et le masque.",
+                  "Agrandir le pixel au-delà de la moitié de la résolution : les détails au-delà de Nyquist sont perdus."],
+        "inputs": "Une carte ; le masque seulement pour « Multiply by mask » ; une carte de référence pour sa grille.",
         "tips": [
-            "Les opérations s'enchaînent dans un ordre fixe : pixel → boîte → main → B-factor → filtre → masque → normalisation.",
+            "Les opérations s'enchaînent dans un ordre fixe : pixel → rééchantillonnage → boîte → main → B-factor → filtre "
+            "→ masque → normalisation.",
+            "« Set pixel size » ne change que l'en-tête (calibration fausse) ; « Resample » change la grille.",
             "B-factor négatif = affûtage, positif = flou.",
         ],
         "next": ["modelangelo_build", "cryoatom_build", "cryoatom_enhanced", "fit_in_map", "chimerax_fitmap"],

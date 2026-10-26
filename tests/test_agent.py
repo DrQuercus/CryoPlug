@@ -253,6 +253,8 @@ def test_agent_tools_end_to_end(app_client, manager, synthetic):
     assert call(s, "clear_job", project="P1", job="J2").error  # completed: refused
     assert "nothing to stop" in call(s, "kill_job", project="P1", job="J2").text
     assert "not running" in call(s, "control_job", project="P1", job="J2", action="stop").text
+    resumed = call(s, "resume_job", project="P1", job="J2")  # completed: nothing to resume
+    assert resumed.error and "failed or killed" in resumed.text
     call(s, "queue_job", project="P1", job="J3")
     killed = call(s, "kill_job", project="P1", job="J3")
     assert "queued → building" in killed.text

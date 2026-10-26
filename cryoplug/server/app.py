@@ -403,6 +403,11 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     def clear_job(puid: str, juid: str) -> dict[str, Any]:
         return manager.clear_job(puid, juid)
 
+    @app.post("/api/projects/{puid}/jobs/{juid}/continue")
+    def continue_job(puid: str, juid: str, request: Request, body: dict = Body(default={})) -> dict[str, Any]:
+        """A failed or killed RELION refinement or classification queued again from its last iteration."""
+        return manager.continue_job(puid, juid, (body or {}).get("lane"), roots=roots(request))
+
     @app.post("/api/projects/{puid}/jobs/{juid}/clone")
     def clone_job(puid: str, juid: str, request: Request) -> dict[str, Any]:
         return manager.clone_job(puid, juid, created_by=author(current_user(request)), roots=roots(request))

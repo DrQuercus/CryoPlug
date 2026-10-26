@@ -48,3 +48,25 @@ def test_composite_map_without_half_maps(manager, synthetic):
         "focused_1": {"job": filtered, "output": "map"}})
     assert {o["name"] for o in done["outputs"]} == {"map"}
     assert "No half maps found next to" in log_of(manager, puid, done["uid"])
+
+
+def test_map_operations_resample(manager, synthetic):
+    """Map operations resample a map to another pixel size (Fourier) or onto the grid of another map."""
+    from cryoplug.mrc import MapVolume
+    p = manager.create_project("Map operations")
+    puid = p["uid"]
+    imp = _run(manager, puid, "import_cryosparc", {"job_dir": str(synthetic["cryosparc_job"])})
+    src = {"job": imp["uid"], "output": "map_sharp"}
+    orig = MapVolume.read(manager.project_dir(puid) / next(o for o in imp["outputs"] if o["name"] == "map_sharp")["path"])
+    coarse = _run(manager, puid, "map_tools", {"resample_pixel_size": 2 * float(orig.voxel[0])}, {"map": src})
+    out = MapVolume.read(manager.project_dir(puid) / coarse["outputs"][0]["path"])
+    assert out.shape_xyz[0] == orig.shape_xyz[0] // 2 and abs(out.voxel[0] - 2 * orig.voxel[0]) < 1e-4
+    assert "resampled from" in log_of(manager, puid, coarse["uid"])
+    back = _run(manager, puid, "map_tools", {"lowpass": 0, "normalize": False},
+                {"map": {"job": coarse["uid"], "output": "map"}, "reference": src})
+    again = MapVolume.read(manager.project_dir(puid) / back["outputs"][0]["path"])
+    assert again.data.shape == orig.data.shape and abs(again.voxel[0] - orig.voxel[0]) < 1e-6
+    job = manager.create_job(puid, "map_tools", {"resample_pixel_size": 2.0}, {"map": src, "reference": src})
+    import pytest
+    with pytest.raises(Exception, match="not both"):
+        manager.queue_job(puid, job["uid"])

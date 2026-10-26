@@ -19,7 +19,8 @@ from cryoplug.jobs.relion import (
     Progress, absolute_greyscale, finish_refinement, map_on_grid, outputs_of_refine, postprocess,
 )
 from cryoplug.jobs.relion_common import (
-    SAMPLINGS, RelionJob, compute_params, gpus, healpix, helical_check, helical_params, helical_refine_args, histogram,
+    SAMPLINGS, RelionJob, compute_params, continuation, continue_args, gpus, healpix, helical_check, helical_params,
+    helical_refine_args, histogram,
     mask_diameter, mpi, particles_out_meta, refine_compute_params, relion_command, relion_particles, run_relion, star_of,
     threads,
 )
@@ -82,6 +83,7 @@ class RelionRefine3D(RelionJob):
     outputs = [OutputDef("map", "map", "Refined map"), OutputDef("half_maps", "half_maps", "Half maps"),
                OutputDef("map_sharp", "map", "Post-processed map"), OutputDef("mask", "mask", "Mask"),
                OutputDef("fsc", "fsc", "FSC"), OutputDef("particles", "particles", "Refined particles")]
+    continuable = True
 
     @classmethod
     def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
@@ -95,6 +97,20 @@ class RelionRefine3D(RelionJob):
         mask_in = ctx.input("mask")
         mask, mask_data = map_on_grid(ctx, mask_in, parts, "mask.mrc", mask=True) if mask_in else (None, None)
         sym = (str(p["symmetry"]).strip() or "C1").upper()
+        cont = continuation(ctx)
+        if cont:  # a failed or killed run goes on from its last iteration
+            opt, it, root = cont
+            args = continue_args(ctx, p, opt, root)
+            if p["auto_faster"]:
+                args += ["--auto_ignore_angles", "--auto_resol_angles"]
+            ctx.add_table("3D auto-refine", ["Setting", "Value"], [
+                ["Continued", f"from iteration {it} ({Path(opt).name})"],
+                ["Particles", f"{parts['n']:,} · box {parts['box']} px · {parts['pixel_size']:g} Å/px"], ["Symmetry", sym]])
+            progress = Progress(ctx)
+            ctx.progress(0.03, f"relion_refine (auto-refine, continued from iteration {it})")
+            run_relion(ctx, args, on_line=progress)
+            finish_refinement(ctx, outputs_of_refine(ctx, root), parts, sym, mask, mask_data, progress, kind="refine3d")
+            return
         diameter = mask_diameter(ctx, parts)
         args = [*relion_command(ctx, "relion_refine", p["mpi"]), "--o", ctx.rel(ctx.path("run")), "--auto_refine",
                 "--split_random_halves", "--i", parts["ref"], "--ref", ctx.rel(ref)]
@@ -197,6 +213,63 @@ class RelionMaskCreate(RelionJob):
                                              ["Extension / soft edge", f"{p['extend']} / {p['soft_edge']} px"],
                                              *[[k.replace("_", " ").capitalize(), f"{v:.3g}"] for k, v in stats.items()]])
         ctx.add_output("mask", "mask", out, "Mask", inherit=("map",), meta={"threshold": round(threshold, 6)})
+
+
+# ------------------------------------------------------------------ symmetry axes
+@register
+class RelionAlignSymmetry(JobType):
+    name = "relion_align_symmetry"
+    title = "Align to symmetry axes (RELION)"
+    category = "Map processing"
+    tool = "relion"
+    software = ["RELION"]
+    description = ("relion_align_symmetry: a map refined in C1 turned (and re-centred) so that its symmetry axes are "
+                   "RELION's standard ones, as CryoSPARC's Volume Alignment Tools: the reference of a symmetric "
+                   "refinement, or of a symmetry expansion. Optionally with the symmetry applied.")
+    inputs = [Slot("map", ("map",), "Map", help="A map refined without symmetry (C1).")]
+    params = [
+        Param("symmetry", "str", "C2", label="Symmetry", required=True, help="Point group: Cn, Dn, T, O, I (I1 to I4 conventions)."),
+        Param("apply_sym", "bool", False, label="Apply the symmetry", help="The aligned map symmetrised (--apply_sym)."),
+        Param("keep_centre", "bool", False, label="Keep the centre", help="Do not re-centre the map first (--keep_centre)."),
+        Param("only_rot", "bool", False, label="Rotation about z only", advanced=True,
+              help="The axis is already along z: search only the rotation around it (--only_rot)."),
+        Param("box_size", "int", 64, label="Working box", unit="px", min=32, max=512, advanced=True,
+              help="Small box (Nyquist about 20 Å) is usually enough."),
+        Param("nr_uniform", "int", 400, label="Orientations tried", min=10, max=100000, advanced=True),
+        Param("max_resolution", "float", -1.0, label="Highest resolution used", unit="Å", advanced=True, help="-1 = Nyquist of the working box."),
+        extra_args_param(),
+    ]
+    outputs = [OutputDef("map", "map", "Aligned map")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        sym = str(params.get("symmetry") or "").strip().upper()
+        if not re.fullmatch(r"C\d+|D\d+|T|O|I\d?", sym):
+            return ["Give a point group: Cn, Dn, T, O or I"]
+        if sym == "C1":
+            return ["C1 has no axis to align"]
+        return []
+
+    def run(self, ctx: JobContext) -> None:
+        p = ctx.params
+        inp = ctx.require("map")
+        sym = str(p["symmetry"]).strip().upper()
+        apix = float(MapVolume.read(inp.path, header_only=True).voxel[0])
+        out = ctx.path("aligned.mrc")
+        args = [ctx.program("relion", "relion_align_symmetry"), "--i", ctx.rel(inp.path), "--o", ctx.rel(out), "--sym", sym,
+                "--angpix", f"{apix:g}", "--box_size", str(p["box_size"]), "--nr_uniform", str(p["nr_uniform"])]
+        if p["max_resolution"] > 0:
+            args += ["--maxres", f"{p['max_resolution']:g}"]
+        for flag in ("keep_centre", "only_rot", "apply_sym"):
+            if p[flag]:
+                args.append(f"--{flag}")
+        ctx.progress(0.1, f"relion_align_symmetry ({sym})")
+        run_relion(ctx, args + ctx.split_extra())
+        if not out.exists():
+            raise JobError("relion_align_symmetry wrote no aligned map (see the log)")
+        meta = {**ctx.inherited_meta("map"), "symmetry": sym if p["apply_sym"] else "C1", "aligned_to": sym}
+        ctx.add_output("map", "map", out, f"Aligned to the {sym} axes" + (" (symmetrised)" if p["apply_sym"] else ""), meta=meta)
+        ctx.add_highlight("Symmetry axes", sym)
 
 
 # ------------------------------------------------------------------ helical symmetry tools

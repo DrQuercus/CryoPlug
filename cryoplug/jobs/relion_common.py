@@ -58,6 +58,32 @@ def compute_params(p: dict[str, Any], args: list[str], gpu: bool = True) -> list
     return args
 
 
+def continuation(ctx: JobContext, root: str = "run") -> tuple[str, int, str] | None:
+    """When a failed or killed run of relion_refine is continued (Manager.continue_job leaves continue.json in the job
+    folder): the optimiser.star of its last iteration (project-relative), that iteration, and the output root of the
+    continuation, <root>_ct<iteration> as RELION's GUI names it. None for a fresh run."""
+    marker = ctx.path("continue.json")
+    if not marker.exists():
+        return None
+    marker.unlink()
+    it, files = rl.iteration_files(ctx.job_dir, root)
+    if not it or not files["optimiser"].exists():
+        raise JobError("Nothing to continue: the job folder has no run_itNNN_optimiser.star (clear the job and run it again)")
+    ctx.log(f"Continuing from iteration {it} ({files['optimiser'].name})")
+    return ctx.rel(files["optimiser"]), it, f"{root}_ct{it}"
+
+
+def continue_args(ctx: JobContext, p: dict[str, Any], opt: str, out_root: str, mpi_param: str = "mpi") -> list[str]:
+    """relion_refine --continue: the optimiser of the last iteration, a new output root, and the compute options (the
+    others come from the optimiser; RELION's MlOptimiser::parseContinue)."""
+    args = [*relion_command(ctx, "relion_refine", p.get(mpi_param, 1)), "--continue", opt, "--o", ctx.rel(ctx.path(out_root))]
+    compute_params(p, args)
+    args += ["--j", str(p.get("threads", 1))]
+    if p.get("gpus", 0):
+        args += ["--gpu", ""]
+    return args
+
+
 def refine_compute_params(pool: int = 3) -> list[Param]:
     return [
         Param("pool", "int", pool, label="Pooled particles", min=1, max=100, advanced=True,
@@ -272,8 +298,8 @@ def iteration_history(folder: Path, root: str = "run") -> list[dict[str, Any]]:
     (``run_itNNN_model.star``; the first half set of an auto-refinement)."""
     import re
     found = []
-    for p in folder.glob(f"{root}_it*_model.star"):
-        m = re.fullmatch(rf"{re.escape(root)}_it(\d+)(_half1)?_model\.star", p.name)
+    for p in folder.glob(f"{root}*_it*_model.star"):  # those of a continued run too (<root>_ct<N>_it...)
+        m = re.fullmatch(rf"{re.escape(root)}(?:_ct\d+)?_it(\d+)(_half1)?_model\.star", p.name)
         if m:
             found.append((int(m.group(1)), p))
     out = []

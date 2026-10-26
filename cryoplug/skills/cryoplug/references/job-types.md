@@ -197,6 +197,12 @@ Usually followed by: `relion_local_refine`, `relion_class3d`, `cryodrgn_train`.
 
 ## Map processing
 
+### `relion_align_symmetry` — Align to symmetry axes (RELION)
+RELION. In: map: map. Out: map: map.
+
+relion_align_symmetry: a map refined in C1 turned (and re-centred) so that its symmetry axes are RELION's standard ones, as CryoSPARC's Volume Alignment Tools: the reference of a symmetric refinement, or of a symmetry expansion. Optionally with the symmetry applied.
+Usually followed by: `relion_refine3d`, `relion_symmetry_expand`, `relion_mask_create`.
+
 ### `spisonet` — Anisotropy correction (spIsoNet)
 spIsoNet · GPU. In: half_maps: half_maps, mask: mask. Out: half_maps: half_maps, map: map, fsc3d: map.
 
@@ -282,9 +288,9 @@ Local resolution map from the two half maps (phenix.local_resolution), its distr
 Usually followed by: `create_mask`, `locscale`, `mapmodel_validation`.
 
 ### `map_tools` — Map operations
-built-in. In: map: map, mask?: mask. Out: map: map.
+built-in. In: map: map, mask?: mask, reference?: map/mask. Out: map: map.
 
-Built-in map manipulations applied in order: set pixel size, crop/pad, flip handedness, global B-factor sharpening/blurring, low-pass filter, mask, normalisation.
+Built-in map manipulations applied in order, as CryoSPARC's Volume Tools: set pixel size, resample (to another pixel size, by Fourier cropping or padding, or onto the grid of another map), crop/pad, flip handedness, global B-factor sharpening/blurring, low-pass filter, mask, normalisation.
 Usually followed by: `modelangelo_build`, `cryoatom_build`, `cryoatom_enhanced`, `fit_in_map`, `chimerax_fitmap`.
 
 ### `phenix_map_sharpening` — Map sharpening (Phenix)

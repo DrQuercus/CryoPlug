@@ -5,6 +5,7 @@ auto-refine, mask, CTF refinement, polishing, local resolution, subsets, multi-b
 from __future__ import annotations
 
 import json
+import re
 import time
 
 import numpy as np
@@ -506,6 +507,14 @@ def test_helical_symmetry_toolbox_and_ctf_options(manager, spa):
     job = manager.create_job(puid, "relion_helix_toolbox", {"mode": "search"}, {})
     with pytest.raises(Exception, match="map of the filament"):
         manager.queue_job(puid, job["uid"])
+    # symmetry axes (relion_align_symmetry on its own)
+    al = _run(manager, puid, "relion_align_symmetry", {"symmetry": "d2", "apply_sym": True}, {"map": ref})
+    assert (f"relion_align_symmetry --i {_outs(cyl)['map']['path']} --o {al['uid']}/aligned.mrc --sym D2 --angpix 2 "
+            "--box_size 64 --nr_uniform 400 --apply_sym") in _command(manager, puid, al)
+    assert _outs(al)["map"]["meta"]["symmetry"] == "D2"
+    job = manager.create_job(puid, "relion_align_symmetry", {"symmetry": "C1"}, {"map": ref})
+    with pytest.raises(Exception, match="no axis"):
+        manager.queue_job(puid, job["uid"])
     # CTFFIND: tilt search and extra ice statistics (with the power spectra of motion correction)
     ctf = _run(manager, puid, "relion_ctffind", {"mpi": 1, "tilt_search": True, "extra_ice": True},
                {"micrographs": _ref(mc, "micrographs")})
@@ -560,6 +569,67 @@ def test_amyloid_initial_model(manager, spa):
     both = _run(manager, puid, "relion_helix_inimodel2d", {"crossover_distance": 600, "iterations": 2, "classes": 2},
                 {"classes": _ref(c2d, "classes")})
     assert {"map", "map_1", "map_2"} <= set(_outs(both))
+
+
+def test_continue_relion_runs(manager, spa):
+    """A failed or killed auto-refinement or 3D classification goes on from its last iteration (relion_refine
+    --continue, under run_ct<iteration> as RELION's GUI names it)."""
+    import os
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = _ref(ctf, "micrographs")
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1},
+                {"micrographs": mics})
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1},
+               {"micrographs": mics, "coordinates": _ref(pick, "coordinates")})
+    MapVolume(data=np.random.default_rng(5).normal(0, 1, (32, 32, 32)).astype(np.float32), voxel=np.full(3, 2.0)).write(pdir / "ref.mrc")
+    ref = _ref(_run(manager, puid, "import_maps", {"map": str(pdir / "ref.mrc"), "compute_fsc": False}), "map")
+    parts = _ref(ext, "particles")
+
+    def crash(job, keep):  # as if the run had stopped after iteration ``keep``: later files gone, the job failed
+        jdir = pdir / job["uid"]
+        for f in jdir.iterdir():
+            m = re.match(r"run_it(\d+)_", f.name)
+            if (m and int(m.group(1)) > keep) or re.match(r"run_(class001|half\d_class001_unfil|data|model|optimiser)\.", f.name):
+                os.unlink(f)
+        manager.db.update_job(puid, job["uid"], status="failed", error="relion_refine_mpi exited with code 1")
+
+    r3 = _run(manager, puid, "relion_refine3d", {"threads": 1, "gpus": 0}, {"particles": parts, "map": ref})
+    with pytest.raises(Exception, match="failed or killed"):
+        manager.continue_job(puid, r3["uid"])
+    crash(r3, 2)
+    manager.continue_job(puid, r3["uid"])
+    run_until_done(manager, puid, [r3["uid"]], timeout=180)
+    done = manager.job(puid, r3["uid"])
+    assert done["status"] == "completed", done["error"]
+    log = _command(manager, puid, done)
+    assert f"--continue {r3['uid']}/run_it002_optimiser.star --o {r3['uid']}/run_ct2 --dont_combine_weights_via_disc" in log
+    assert "Continuing from iteration 2" in log and not (pdir / r3["uid"] / "continue.json").exists()
+    out = _outs(done)
+    assert out["particles"]["path"].endswith("run_ct2_data.star") and {"map", "half_maps"} <= set(out)
+    assert out["particles"]["meta"]["relion"]["optimiser"].endswith("run_ct2_optimiser.star")
+
+    c3 = _run(manager, puid, "relion_class3d_global", {"classes": 2, "iterations": 3, "threads": 1, "gpus": 0},
+              {"particles": parts, "map": ref})
+    crash(c3, 2)
+    manager.continue_job(puid, c3["uid"])
+    run_until_done(manager, puid, [c3["uid"]], timeout=180)
+    done = manager.job(puid, c3["uid"])
+    assert done["status"] == "completed", done["error"]
+    assert f"--continue {c3['uid']}/run_it002_optimiser.star --o {c3['uid']}/run_ct2" in _command(manager, puid, done)
+    out = _outs(done)
+    assert out["map_1"]["path"].endswith("run_ct2_it003_class001.mrc") and out["particles"]["path"].endswith("run_ct2_it003_data.star")
+    plots = {s["title"]: s for s in _sections(manager, puid, done, "plot")}
+    assert plots["Share of each class over the iterations"]["series"][0]["x"] == [1, 2, 3]  # both runs
+
+    sel = _run(manager, puid, "relion_select3d", {"mode": "list", "classes": "1"}, {"particles": _ref(done, "particles")})
+    manager.db.update_job(puid, sel["uid"], status="failed")
+    with pytest.raises(Exception, match="cannot be continued"):
+        manager.continue_job(puid, sel["uid"])
+    empty = manager.create_job(puid, "relion_refine3d", {"threads": 1, "gpus": 0}, {"particles": parts, "map": ref})
+    manager.db.update_job(puid, empty["uid"], status="killed")
+    with pytest.raises(Exception, match="Nothing to continue"):
+        manager.continue_job(puid, empty["uid"])
 
 
 EPU_XML = """<?xml version="1.0" encoding="utf-8"?>

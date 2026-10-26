@@ -526,6 +526,7 @@ Trie les particules en classes 3D contre une référence (relion_refine --K) : r
 - Les cartes des classes se jouent comme une série dans le visualiseur 3D.
 - Le rapport suit la part de chaque classe au fil des itérations (convergence) et montre les directions de vue de chaque classe.
 - Filaments : « Helical processing » avec twist et montée initiaux (et leur recherche locale).
+- Un run en échec ou tué (mémoire, nœud perdu, temps de file dépassé) se relance de sa dernière itération : « Resume » (le « Continue » de RELION, fichiers gardés, sorties sous run_ct<itération>).
 
 **Étapes suivantes** : 3D auto-refine (RELION), 3D classification (RELION), Heterogeneous refinement (RELION), Curate particles (statistics)
 
@@ -657,6 +658,7 @@ Raffinement 3D gold-standard (relion_refine --auto_refine) : recherches globales
 - « Solvent-flattened FSC » (avec un masque) aide une petite particule dans une grande boîte.
 - Blush (RELION 5) pour les particules petites ou flexibles.
 - Filaments : « Helical processing » impose la symétrie hélicoïdale (twist, montée) et peut l'affiner (recherche locale).
+- Un run en échec ou tué (mémoire, nœud perdu, temps de file dépassé) se relance de sa dernière itération : « Resume » (le « Continue » de RELION, fichiers gardés, sorties sous run_ct<itération>).
 
 **Étapes suivantes** : Mask creation (RELION), CTF refinement (RELION), Bayesian polishing (RELION), RELION post-processing, Local resolution (RELION), 3D multi-body refinement (RELION), DynaMight flexibility (RELION), RELION local refinement
 
@@ -819,6 +821,31 @@ Soustraction de signal (relion_particle_subtract) : retire de chaque image la pr
 **Étapes suivantes** : RELION local refinement, RELION 3D classification (focused), cryoDRGN training
 
 ## Traitement de carte
+
+### Align to symmetry axes (RELION)
+
+`relion_align_symmetry` — logiciel : `relion`
+
+Tourne (et recentre) une carte raffinée sans symétrie pour que ses axes de symétrie soient ceux de RELION (relion_align_symmetry), comme les « Volume Alignment Tools » de CryoSPARC : la référence d'un raffinement symétrique ou d'une expansion de symétrie. La symétrie peut aussi être appliquée.
+
+**Quand l'utiliser**
+
+- Après un raffinement C1 qui montre une symétrie : aligner la carte avant de raffiner avec la symétrie.
+- Avant une expansion de symétrie, avec une carte venue d'un autre logiciel ou d'une autre convention.
+
+**À éviter / pièges**
+
+- Une symétrie supposée sans la voir dans la carte C1 : vérifiez d'abord (classes 3D, carte C1).
+
+**Entrées conseillées** : Une carte (raffinée en C1, de préférence non affûtée).
+
+**Conseils**
+
+- Boîte de travail 64 px (Nyquist ~20 Å) : suffisant et rapide.
+- Puis 3D auto-refine avec cette carte et la symétrie (filtre initial 10-15 Å : la carte vient de ces particules).
+- « Rotation about z only » quand l'axe principal est déjà sur z (Cn).
+
+**Étapes suivantes** : 3D auto-refine (RELION), Symmetry expansion (RELION), Mask creation (RELION)
 
 ### Anisotropy correction (spIsoNet)
 
@@ -1184,23 +1211,26 @@ Carte de résolution locale à partir des deux demi-cartes (phenix.local_resolut
 
 `map_tools` — intégré (aucun logiciel externe)
 
-Opérations simples sur une carte : taille de pixel, recadrage/agrandissement de boîte, inversion de main, B-factor global, filtre passe-bas, multiplication par un masque, normalisation.
+Opérations simples sur une carte, comme les « Volume Tools » de CryoSPARC : taille de pixel (en-tête), rééchantillonnage (autre taille de pixel par recadrage ou remplissage de Fourier, ou sur la grille d'une autre carte), recadrage/agrandissement de boîte, inversion de main, B-factor global, filtre passe-bas, multiplication par un masque, normalisation.
 
 **Quand l'utiliser**
 
 - La main est fausse (hélices gauches, ModelAngelo ne construit que des fragments) : « Flip handedness ».
 - Boîte non cubique ou trop grande pour un logiciel : recadrer en boîte cubique.
+- Carte d'un autre jeu de données ou d'un autre logiciel à comparer : « Resample to pixel size » ou la grille d'une autre carte (entrée « Grid of »).
 - Carte filtrée à une résolution donnée pour une figure ou un ajustement grossier.
 
 **À éviter / pièges**
 
 - Recadrer la carte déposée sans recadrer de même les demi-cartes et le masque.
+- Agrandir le pixel au-delà de la moitié de la résolution : les détails au-delà de Nyquist sont perdus.
 
-**Entrées conseillées** : Une carte ; le masque seulement pour « Multiply by mask ».
+**Entrées conseillées** : Une carte ; le masque seulement pour « Multiply by mask » ; une carte de référence pour sa grille.
 
 **Conseils**
 
-- Les opérations s'enchaînent dans un ordre fixe : pixel → boîte → main → B-factor → filtre → masque → normalisation.
+- Les opérations s'enchaînent dans un ordre fixe : pixel → rééchantillonnage → boîte → main → B-factor → filtre → masque → normalisation.
+- « Set pixel size » ne change que l'en-tête (calibration fausse) ; « Resample » change la grille.
 - B-factor négatif = affûtage, positif = flou.
 
 **Étapes suivantes** : ModelAngelo build, CryoAtom2 build, CryoAtom2 enhanced (best of several runs), Fit in map (rigid body), Rigid-body fit (ChimeraX)

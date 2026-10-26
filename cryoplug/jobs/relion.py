@@ -713,12 +713,11 @@ class RelionClass3D(RelionJob):
         progress = Progress(ctx, total=iters)
         ctx.progress(0.05, "relion_refine (classification)")
         run_relion(ctx, args, on_line=progress)
-        last = sorted(ctx.job_dir.glob("run_it*_data.star"))
-        if not last:
+        _it, stem = rl.iteration_stem(ctx.job_dir, suffix="_data.star")
+        if not stem:
             raise JobError("RELION did not write any run_it###_data.star (see the log)")
-        data_star = last[-1]
-        it = re.search(r"run_it(\d+)_data", data_star.name).group(1)
-        model = rl.model_fsc(ctx.path(f"run_it{it}_model.star")) if ctx.path(f"run_it{it}_model.star").exists() else {}
+        data_star = ctx.path(f"{stem}_data.star")
+        model = rl.model_fsc(ctx.path(f"{stem}_model.star")) if ctx.path(f"{stem}_model.star").exists() else {}
         tables = rl.read_star(data_star)
         ptab = rl.particle_table(tables)
         classes = np.array([int(float(c)) for c in ptab.column("rlnClassNumber")])
@@ -726,7 +725,7 @@ class RelionClass3D(RelionJob):
         maps, rows = [], []
         base_meta = {"symmetry": sym, "relion_map": True}
         for c in range(1, k + 1):
-            path = ctx.path(f"run_it{it}_class{c:03d}.mrc")
+            path = ctx.path(f"{stem}_class{c:03d}.mrc")
             if not path.exists():
                 continue
             m = to_consensus(ctx, path, parts, f"class_{c}.mrc")
@@ -744,7 +743,7 @@ class RelionClass3D(RelionJob):
         if not maps:
             raise JobError("RELION wrote no class map (see the log)")
         ctx.add_output("maps", "volume_series", maps, f"{len(maps)} class maps", meta={**base_meta, "frames": len(maps)})
-        meta = particles_meta(ctx, data_star, parts, "class3d", sym, optimiser=ctx.rel(ctx.path(f"run_it{it}_optimiser.star")))
+        meta = particles_meta(ctx, data_star, parts, "class3d", sym, optimiser=ctx.rel(ctx.path(f"{stem}_optimiser.star")))
         ctx.add_output("particles", "particles", data_star, f"Classified particles ({n:,})", meta=meta)
         if model.get("estimated_resolution") is not None:
             ctx.log(f"Estimated resolution of class 1: {model['estimated_resolution']:.2f} Å")

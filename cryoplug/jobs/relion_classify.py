@@ -14,7 +14,7 @@ from cryoplug.jobs import register
 from cryoplug.jobs.base import JobContext, JobError, JobType, OutputDef, Param, Slot, extra_args_param
 from cryoplug.jobs.relion import Progress, absolute_greyscale, map_on_grid
 from cryoplug.jobs.relion_common import (
-    SAMPLINGS, RelionJob, compute_params, gpus, healpix, helical_check, helical_class2d_args, helical_class3d_args,
+    SAMPLINGS, RelionJob, compute_params, continuation, continue_args, gpus, healpix, helical_check, helical_class2d_args, helical_class3d_args,
     helical_params, mask_diameter, mpi, particles_out_meta, refine_compute_params, refinement_diagnostics, relion_command,
     relion_particles, run_relion, threads,
 )
@@ -613,9 +613,10 @@ class RelionInitialModel(RelionJob):
         infos = rl.model_classes(files["model"])
         counts, total = class_counts(files["data"]) if files["data"].exists() else ({}, 0)
         rows, maps = [], []
+        stem = rl.iteration_prefix(files)
         for info in infos:
             c = info["class"]
-            path = ctx.path(f"run_it{it:03d}_class{c:03d}.mrc")
+            path = ctx.path(f"{stem}_class{c:03d}.mrc")
             if not path.exists():
                 continue
             maps.append(path)
@@ -644,6 +645,7 @@ class RelionClass3DGlobal(RelionJob):
     description = ("Sorts the particles into 3D classes against a reference (relion_refine --K): global angular "
                    "searches, local ones, or none (classification with the poses kept). Every class gives a map and "
                    "its particles; Blush regularisation helps small or flexible particles.")
+    continuable = True
     inputs = [
         Slot("particles", ("particles",), "Particles"),
         Slot("map", ("map",), "Reference map", help="An initial model or a refined map: low-pass filtered by RELION.",
@@ -707,6 +709,19 @@ class RelionClass3DGlobal(RelionJob):
         sym = (str(p["symmetry"]).strip() or "C1").upper()
         ref, k, absolute = self.references(ctx, parts)
         iters = int(p["iterations"])
+        cont = continuation(ctx)
+        if cont:  # a failed or killed run goes on from its last iteration, to the iterations asked
+            opt, it, root = cont
+            if it >= iters:
+                raise JobError(f"The run already reached iteration {it} of {iters}: nothing to continue")
+            args = continue_args(ctx, p, opt, root) + ["--iter", str(iters)]
+            ctx.progress(0.03, f"relion_refine: {k} classes, continued from iteration {it} to {iters}")
+            run_relion(ctx, args, on_line=Progress(ctx, total=iters))
+            it, files = rl.iteration_files(ctx.job_dir)
+            if not it or not files["data"].exists():
+                raise JobError("relion_refine wrote no run_itNNN_data.star (see the log)")
+            class3d_outputs(ctx, files, it, k, sym)
+            return
         args = [*relion_command(ctx, "relion_refine", p["mpi"]), "--o", ctx.rel(ctx.path("run")), "--i", parts["ref"],
                 "--ref", ref]
         if not absolute:
@@ -767,8 +782,9 @@ def class3d_outputs(ctx: JobContext, files: dict[str, Path], it: int, k: int, sy
     n = len(classes)
     infos = {i["class"]: i for i in rl.model_classes(files["model"])} if files["model"].exists() else {}
     maps, rows, tiles = [], [], []
+    stem = rl.iteration_prefix(files)
     for c in range(1, k + 1):
-        path = ctx.path(f"run_it{it:03d}_class{c:03d}.mrc")
+        path = ctx.path(f"{stem}_class{c:03d}.mrc")
         if not path.exists():
             continue
         maps.append(path)

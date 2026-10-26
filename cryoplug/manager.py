@@ -486,6 +486,27 @@ class Manager:
             self.db.update_job(puid, juid, message=self.CONTROL_MESSAGES.get(action, f"Asked to {action}"))
             return self.job(puid, juid)
 
+    def continue_job(self, puid: str, juid: str, lane: str | None = None, roots: list[Path] | None = None) -> dict[str, Any]:
+        """Queues a failed or killed run again, its files kept, to go on from where it stopped (RELION's Continue: from
+        the last iteration written)."""
+        from cryoplug import relion as rl
+        with self.lock:
+            job = self.job(puid, juid)
+            jt = get_job_type(job["type"])
+            if not jt.continuable:
+                raise ManagerError(f"{jt.title} cannot be continued: clear it and run it again")
+            if job["status"] not in ("failed", "killed"):
+                raise ManagerError(f"Only a failed or killed job can be continued (status: {job['status']})")
+            jdir = self.job_dir(puid, juid)
+            it, _files = rl.iteration_files(jdir)
+            if not it:
+                raise ManagerError("Nothing to continue: RELION wrote no iteration yet (clear the job and run it again)")
+            (jdir / "continue.json").write_text(json.dumps({"iteration": it, "at": time.time()}))
+            self.db.update_job(puid, juid, status="building", outputs=[], highlights=[], progress=0.0,
+                               message=f"Continuing from iteration {it}", error="", pid=None, cluster_job_id=None, gpus=[],
+                               queued_at=None, started_at=None, ended_at=None)
+        return self.queue_job(puid, juid, lane, roots=roots)
+
     def clear_job(self, puid: str, juid: str) -> dict[str, Any]:
         with self.lock:
             job = self.job(puid, juid)

@@ -319,16 +319,30 @@ def model_classes(path: str | Path) -> list[dict[str, Any]]:
     return out
 
 
+def iteration_stem(folder: Path, root: str = "run", suffix: str = "_optimiser.star") -> tuple[int, str]:
+    """Latest iteration written by relion_refine and the stem of its files: ``run_it025``, or ``run_ct10_it012`` once
+    the run was continued (relion_refine --continue writes under <root>_ct<iteration>). (0, "") when none."""
+    pattern = re.compile(rf"({re.escape(root)}(?:_ct\d+)?_it(\d+)){re.escape(suffix)}")
+    best = (0, "")
+    for p in folder.glob(f"{root}*_it*{suffix}"):
+        m = pattern.fullmatch(p.name)
+        if m and int(m.group(2)) >= best[0]:
+            best = (int(m.group(2)), m.group(1))
+    return best
+
+
 def iteration_files(folder: Path, root: str = "run") -> tuple[int, dict[str, Path]]:
     """Latest iteration written by relion_refine (classification, initial model) and its files."""
-    found = sorted(int(m.group(1)) for p in folder.glob(f"{root}_it*_optimiser.star")
-                   if (m := re.fullmatch(rf"{re.escape(root)}_it(\d+)_optimiser\.star", p.name)))
-    if not found:
+    it, stem = iteration_stem(folder, root)
+    if not it:
         return 0, {}
-    it = found[-1]
-    stem = f"{root}_it{it:03d}"
     return it, {"data": folder / f"{stem}_data.star", "model": folder / f"{stem}_model.star",
                 "optimiser": folder / f"{stem}_optimiser.star", "classes": folder / f"{stem}_classes.mrcs"}
+
+
+def iteration_prefix(files: dict[str, Path]) -> str:
+    """The stem shared by the files of an iteration (``run_it025``), from those of iteration_files."""
+    return files["optimiser"].name[: -len("_optimiser.star")]
 
 
 def subset_star(src: str | Path, dst: str | Path, keep: Iterable[int] | np.ndarray, comment: str = "") -> Path:

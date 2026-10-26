@@ -359,6 +359,12 @@ une par ligne) et le mode *cluster* sépare les particules en groupes d'une stat
 
 ### 2.7 Conseils
 
+- Un **3D auto-refine** ou une **3D classification** en échec ou tué (mémoire, nœud perdu, temps de file dépassé) se
+  relance de sa dernière itération avec **Resume** dans l'en-tête du job : c'est le *Continue* de RELION
+  (`relion_refine --continue`), les fichiers sont gardés et les sorties écrites sous `run_ct<itération>`.
+- Une carte raffinée en C1 qui montre une symétrie : **Align to symmetry axes (RELION)** (relion_align_symmetry) la
+  tourne et la recentre sur les axes du groupe ponctuel (convention de RELION, axe principal selon z), avec la
+  symétrie imposée si besoin ; elle sert ensuite de référence à un 3D auto-refine lancé avec cette symétrie.
 - Travaillez à pixel réduit pour la 2D, l'ab initio et la 3D ; avant le raffinement final, ré-extrayez à pleine
   échelle (entrée *Particles to re-extract* de l'extraction, recentrée sur les positions raffinées).
 - Itérez : 2D → sélection → Topaz entraîné sur les bonnes particules (**Topaz training**) → repicking → 2D.
@@ -1275,6 +1281,7 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | Erreur mémoire GPU | Carte trop grande ou batch trop gros | Réduire la taille de batch, recadrer la boîte, utiliser un GPU plus gros |
 | ModelAngelo : fragments, hélices gauches | Main inversée | Map operations → Flip handedness |
 | Modèle décalé par rapport à la carte | Carte non cubique donnée à ModelAngelo | Map operations → recadrer en boîte cubique |
+| Cartes de pixels différents à comparer ou combiner | Deux jeux de données, deux logiciels | Map operations → *Resample to pixel size*, ou l'entrée *Grid of* (grille d'une autre carte) |
 | ISOLDE/Coot ne s'ouvre pas depuis le navigateur | Pas d'affichage configuré | `[interactive] display` dans la configuration, ou paquet de session |
 | L'interface ne s'ouvre pas depuis le portable | Serveur en écoute locale (`127.0.0.1`) ou port bloqué par le pare-feu | `host = "0.0.0.0"` dans `[server]` puis redémarrer ; ouvrir le port (`sudo ufw allow 39500/tcp`) ; ou tunnel SSH |
 | « Wrong access token » à la connexion | Jeton mal copié ou renouvelé | `cryoplug url` sur le serveur réaffiche le lien de connexion |

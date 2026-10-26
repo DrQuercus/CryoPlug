@@ -752,6 +752,8 @@ def refine_spa(argv: list[str], legacy) -> None:
     a = parse(argv, "relion_refine")
     if "--continue" in a and "--multibody_masks" in a:
         return multibody(a)
+    if "--continue" in a:  # a run continued from an iteration (relion.py)
+        return legacy(argv)
     need(a, "--o")
     if "--grad" in a and _mpi() > 1:
         die("Gradient refinement is not supported together with MPI")

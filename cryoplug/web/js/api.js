@@ -86,6 +86,7 @@ export const api = {
   queueJob: (p, j, lane) => request('POST', `/api/projects/${p}/jobs/${j}/queue`, lane ? { lane } : {}),
   killJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/kill`),
   clearJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/clear`),
+  resumeJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/continue`, {}),
   cloneJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/clone`),
   deleteJob: (p, j, force) => request('DELETE', `/api/projects/${p}/jobs/${j}?force=${!!force}`),
   log: (p, j, offset) => request('GET', `/api/projects/${p}/jobs/${j}/log?offset=${offset || 0}`),

@@ -14,9 +14,9 @@ through tools, with the rights of your credential. The data are often unpublishe
 
 - **MCP tools** (preferred): `server_status`, `list_projects`, `get_project`, `create_project`, `list_job_types`,
   `describe_job_type`, `find_outputs`, `create_job`, `update_job`, `queue_job`, `get_job`, `get_job_log`,
-  `get_job_images`, `wait_for_jobs`, `clone_job`, `kill_job`, `control_job`, `clear_job`, `list_workflows`, `apply_workflow`,
-  `browse_server_files`, `upload_file`, `list_job_files`, `read_project_file`, `map_info`, `list_skills`,
-  `read_skill`.
+  `get_job_images`, `wait_for_jobs`, `clone_job`, `kill_job`, `control_job`, `clear_job`, `resume_job`,
+  `list_workflows`, `apply_workflow`, `browse_server_files`, `upload_file`, `list_job_files`, `read_project_file`,
+  `map_info`, `list_skills`, `read_skill`.
 - **Shell** (no MCP client): the same tools with `cryoplug ai call TOOL key=value ...`, values in JSON when they are
   not plain text, for example:
   `cryoplug ai call create_job project=P1 type=map_fsc 'inputs={"half_maps": "J1"}' queue=true`.

@@ -151,6 +151,10 @@ function renderHeaderOnly() {
     add('continue', btn('Continue with…', (e) => continueMenu(e.currentTarget, job), { cls: job.status === 'completed' ? 'primary' : '', ic: 'next',
       title: 'New job using the outputs of this one' }));
   }
+  if (['failed', 'killed'].includes(job.status) && state.types[job.type]?.continuable) {
+    add('resume', btn('Resume', () => jobOps.resume(job), { cls: 'primary', ic: 'play',
+      title: 'Go on from the last iteration written, the files kept (RELION’s Continue)' }));
+  }
   if (['failed', 'killed'].includes(job.status)) {
     add('clear', btn('Clear', () => jobOps.clear(job), { ic: 'undo', title: 'Delete its outputs and go back to building: fix the parameters, then queue again' }));
     add('clone', btn('Clone', () => jobOps.clone(job), { ic: 'copy', title: 'A copy with the same inputs and parameters' }));
@@ -214,6 +218,7 @@ const jobOps = {
     if (!(await confirmDialog('Clear job', `Delete all outputs and files of ${job.uid} and return it to building state?`, 'Clear', true))) return;
     act(api.clearJob(state.project.uid, job.uid), 'Cleared');
   },
+  resume: (job) => act(api.resumeJob(state.project.uid, job.uid), 'Queued again from its last iteration'),
   async clone(job) {
     const c = await guard(api.cloneJob(state.project.uid, job.uid), 'Cloned');
     await refreshJobs();
@@ -250,6 +255,9 @@ export function jobMenuItems(job, anchor, { withOpen = false } = {}) {
   }
   items.push({ separator: true });
   items.push({ key: 'clone', label: 'Clone', ic: 'copy', action: () => jobOps.clone(job) });
+  if (['failed', 'killed'].includes(job.status) && state.types[job.type]?.continuable) {
+    items.push({ key: 'resume', label: 'Resume from the last iteration', ic: 'play', action: () => jobOps.resume(job) });
+  }
   if (['completed', 'failed', 'killed'].includes(job.status)) items.push({ key: 'clear', label: 'Clear (back to building)', ic: 'undo', action: () => jobOps.clear(job) });
   items.push({ key: 'path', label: 'Copy folder path', ic: 'folder', action: () => copyText(job.job_dir || `${state.project.dir}/${job.uid}`) });
   items.push({ separator: true });

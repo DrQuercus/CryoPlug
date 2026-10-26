@@ -71,17 +71,52 @@ class HalfMapFSC(JobType):
         ctx.add_highlight("Resolution", f"{res:.2f} Å")
 
 
+def fourier_resample(vol: MapVolume, pixel_size: float) -> MapVolume:
+    """The map at another pixel size by Fourier cropping or padding (its physical size and origin kept; the box
+    becomes the nearest even number of voxels, so the pixel size reached can differ slightly from the one asked)."""
+    data = np.asarray(vol.data, dtype=np.float32)
+    old = np.array(data.shape)  # z, y, x
+    voxel_zyx = np.asarray(vol.voxel, dtype=float)[::-1]
+    new = np.maximum(2, np.round(old * voxel_zyx / pixel_size / 2).astype(int) * 2)
+    spec = np.fft.fftshift(np.fft.fftn(data))
+    out = np.zeros(tuple(new), dtype=complex)
+    src, dst = [], []
+    for o, n in zip(old, new):
+        m = min(o, n)
+        src.append(slice(o // 2 - m // 2, o // 2 - m // 2 + m))
+        dst.append(slice(n // 2 - m // 2, n // 2 - m // 2 + m))
+    out[tuple(dst)] = spec[tuple(src)]
+    res = np.real(np.fft.ifftn(np.fft.ifftshift(out))) * (np.prod(new) / np.prod(old))
+    return MapVolume(data=res.astype(np.float32), voxel=(voxel_zyx * old / new)[::-1].copy(), origin=np.array(vol.origin, dtype=float))
+
+
+def onto_grid(vol: MapVolume, like: MapVolume) -> MapVolume:
+    """The map sampled on the grid of another (its box, pixel size and origin), by trilinear interpolation; 0 outside."""
+    nz, ny, nx = like.data.shape
+    axes = [like.origin[a] + like.voxel[a] * np.arange(n) for a, n in enumerate((nx, ny, nz))]
+    z, y, x = np.meshgrid(axes[2], axes[1], axes[0], indexing="ij")
+    values = vol.interpolate(np.stack([x.ravel(), y.ravel(), z.ravel()], 1), outside=0.0)
+    return MapVolume(data=values.reshape(like.data.shape).astype(np.float32), voxel=np.array(like.voxel, dtype=float),
+                     origin=np.array(like.origin, dtype=float))
+
+
 @register
 class MapTools(JobType):
     name = "map_tools"
     title = "Map operations"
     category = "Map processing"
-    description = ("Built-in map manipulations applied in order: set pixel size, crop/pad, flip handedness, global "
-                   "B-factor sharpening/blurring, low-pass filter, mask, normalisation.")
+    description = ("Built-in map manipulations applied in order, as CryoSPARC's Volume Tools: set pixel size, resample "
+                   "(to another pixel size, by Fourier cropping or padding, or onto the grid of another map), crop/pad, "
+                   "flip handedness, global B-factor sharpening/blurring, low-pass filter, mask, normalisation.")
     software = ["CryoPlug"]
-    inputs = [Slot("map", ("map",), "Map"), Slot("mask", ("mask",), "Mask", required=False)]
+    inputs = [Slot("map", ("map",), "Map"), Slot("mask", ("mask",), "Mask", required=False),
+              Slot("reference", ("map", "mask"), "Grid of", required=False,
+                   help="Resample the map onto the grid (box, pixel size, origin) of this map: to compare or combine them.")]
     params = [
-        Param("set_pixel_size", "float", 0.0, label="Set pixel size", unit="Å", min=0.0, help="0 = keep."),
+        Param("set_pixel_size", "float", 0.0, label="Set pixel size", unit="Å", min=0.0,
+              help="Changes the header only (a wrong calibration). 0 = keep."),
+        Param("resample_pixel_size", "float", 0.0, label="Resample to pixel size", unit="Å", min=0.0,
+              help="Fourier cropping (larger pixels) or padding (smaller), the physical size kept. 0 = keep."),
         Param("box", "int", 0, label="Crop/pad to box", unit="px", min=0, help="Centered cubic box. 0 = keep."),
         Param("flip_hand", "bool", False, label="Flip handedness"),
         Param("bfactor", "float", 0.0, label="Global B-factor", unit="Å²",
@@ -97,6 +132,8 @@ class MapTools(JobType):
     def validate(cls, params, connected):
         if params.get("apply_mask") and "mask" not in connected:
             return ["'Multiply by mask' needs a mask input"]
+        if params.get("resample_pixel_size") and "reference" in connected:
+            return ["Resample either to a pixel size or onto the grid of another map, not both"]
         return []
 
     def run(self, ctx: JobContext) -> None:
@@ -107,6 +144,15 @@ class MapTools(JobType):
         if p["set_pixel_size"] > 0:
             vol.voxel = np.array([p["set_pixel_size"]] * 3, dtype=float)
             steps.append(f"pixel size {p['set_pixel_size']} Å")
+        if p["resample_pixel_size"] > 0:
+            before = vol.shape_xyz
+            vol = fourier_resample(vol, float(p["resample_pixel_size"]))
+            steps.append(f"resampled from {before[0]} to {vol.shape_xyz[0]} px ({vol.voxel[0]:.4f} Å/px)")
+        reference = ctx.input("reference")
+        if reference is not None:
+            like = MapVolume.read(reference.path)
+            vol = onto_grid(vol, like)
+            steps.append(f"on the grid of {reference.source} ({like.shape_xyz[0]} px, {like.voxel[0]:.4f} Å/px)")
         if p["box"] > 0:
             vol = crop_or_pad(vol, int(p["box"]))
             steps.append(f"box {p['box']}")
@@ -136,6 +182,8 @@ class MapTools(JobType):
         meta = ctx.inherited_meta("map")
         if p["set_pixel_size"] > 0:
             meta.pop("resolution", None)
+        if p["resample_pixel_size"] > 0 and meta.get("resolution") and meta["resolution"] < 2 * float(vol.voxel[0]):
+            meta["resolution"] = round(2 * float(vol.voxel[0]), 3)  # no detail beyond the new Nyquist limit
         if p["flip_hand"]:
             meta["hand_flipped"] = True
         ctx.add_output("map", "map", out, "Processed map", meta=meta)
