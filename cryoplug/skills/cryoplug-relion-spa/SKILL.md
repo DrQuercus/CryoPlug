@@ -17,7 +17,7 @@ DynaMight): confirm with the person first.
 | 1. Import | `relion_import` | `movies` (wildcard or folder), `pixel_size` as recorded, `dose_per_frame`, `gain` if not gain-corrected | movie count, frames |
 | 2. Motion | `relion_motioncorr` | `patches_x`/`patches_y` 5 (K2/K3/Falcon 4), `binning` 2 for super-resolution, `float16`, power spectra on | accumulated motion, drift |
 | 3. CTF | `relion_ctffind` | `res_max` 5 Å (3–4 Å for good data), power spectra of step 2 | CTF fit resolution histogram, fits image |
-| 4. Curation | `relion_curate` | `max_ctf_resolution` 6–8 Å, `max_motion` 30–50 Å | histograms with thresholds, rejected output |
+| 4. Curation | `relion_curate` | `mode=thresholds` as an agent, `max_ctf_resolution` 6–8 Å, `max_motion` 30–50 Å; `interactive` (default) waits for a person | histograms with thresholds, rejected output |
 | 5. Picking | `relion_autopick` | `method=log`, `diameter_min`/`diameter_max` around the particle | picks drawn on micrographs, particles per micrograph |
 | 6. Extraction | `relion_extract` | `box` ≈ 2 × diameter (even), `rescale` to 64–128 px for 2D/3D | particle count, box, pixel size |
 | 7. 2D | `relion_class2d` | `algorithm=vdam`, `classes` 50–200, `vdam_batches` 200 | class gallery |
@@ -29,9 +29,12 @@ DynaMight): confirm with the person first.
 | 13. Post-processing | `relion_postprocess`, `relion_locres` | automatic B-factor | corrected FSC, B-factor, local resolution |
 | 14. Polishing loop | `relion_ctf_refine` (`mode=complete`) → `relion_polish` (`mode=train` once, then polish) → `relion_refine3d` | | resolution gain after each round |
 
-Workflow `relion_spa` creates steps 1–13 (CTF refinement and the second refinement optional). Its selection job is
-interactive: a person clicks the classes in the job panel; as an agent, read the class table of the 2D job (particles
-and resolution per class) and finish the selection with a `list` job instead, after showing the person your choice.
+Workflow `relion_spa` creates steps 1–13 (CTF refinement and the second refinement optional). Its curation and
+selection jobs are interactive: a person drags the limits on the distributions of the micrographs and clicks the
+classes in the job panel. As an agent, read the CTF and motion statistics and the class table of the 2D job (particles
+and resolution per class), and use a `relion_curate` job with `mode=thresholds` and a `relion_select2d` job with
+`mode=list` instead, after showing the person your choice. `relion_pick_inspect` (picks shown on the micrographs,
+threshold, particles removed or added by hand, or manual picking) is for people only.
 
 ## Settings that matter
 

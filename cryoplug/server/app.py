@@ -647,6 +647,22 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
             raise HTTPException(400, f"Cannot read {path}: {exc}") from None
         return FileResponse(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
+    @app.get("/api/projects/{puid}/drift")
+    def drift(puid: str, path: str) -> dict[str, Any]:
+        """The drift of a movie: the global shift of each frame (pixels) from its RELION motion file."""
+        from cryoplug import relion as rl
+        p = manager.safe_path(puid, path)
+        if p.suffix != ".star":
+            raise HTTPException(400, "Not a RELION motion file (.star)")
+        try:
+            shifts = rl.read_star(p).get("global_shift")
+            if shifts is None or not shifts.rows:
+                return {"x": [], "y": []}
+            return {"x": [round(float(v), 3) for v in shifts.floats("rlnMicrographShiftX")],
+                    "y": [round(float(v), 3) for v in shifts.floats("rlnMicrographShiftY")]}
+        except (OSError, ValueError, KeyError) as exc:
+            raise HTTPException(400, f"Cannot read {path}: {exc}") from None
+
     @app.get("/api/projects/{puid}/jobs/{juid}/session")
     def get_session(puid: str, juid: str, name: str = "state") -> dict[str, Any]:
         """Work in progress of an interactive tool (picks edited, exposures accepted...)."""

@@ -541,6 +541,22 @@ def report_lines(report: dict[str, Any] | None, full: bool = False) -> list[str]
             lines.append(f"[{title}] interactive latent-space explorer (in the web interface)")
         elif kind == "classes2d":
             lines += class_lines(sec, rows_shown)
+        elif kind == "exposures":
+            line = f"[{title}] micrograph browser (CTF fit, drift, distributions) in the web interface"
+            if sec.get("waiting"):
+                line += ("; WAITING for a person to curate the micrographs in the job panel (as an agent, create a "
+                         "relion_curate job with mode=thresholds instead)")
+            elif isinstance(sec.get("decided"), str):
+                line += f"; kept {sec['decided'].count('1'):,} of {len(sec['decided']):,}"
+                if sec.get("overrides"):
+                    line += f" ({len(sec['overrides'])} decided by hand)"
+            lines.append(line)
+        elif kind == "picks":
+            line = f"[{title}] picks drawn on the micrographs in the web interface"
+            if sec.get("waiting"):
+                line += ("; WAITING for a person to inspect the picks (threshold, particles removed or added) in the job "
+                         "panel (as an agent, set min_fom in relion_extract instead)")
+            lines.append(line)
     return lines
 
 
@@ -1103,7 +1119,8 @@ def get_job(s: Session, a: Args) -> str:
     if job["status"] == "building" and job.get("problems"):
         lines.append("Cannot be queued yet: " + "; ".join(job["problems"]))
     if job["status"] == "waiting":
-        lines.append("Interactive session waiting for a person (ISOLDE / Coot in the web interface).")
+        lines.append("Waiting for a person in the web interface (an ISOLDE / Coot session, a class selection, a curation "
+                     "of micrographs or an inspection of picks).")
     if job["status"] in ("failed", "killed"):
         if job.get("error"):
             lines.append(f"Error: {job['error']}")

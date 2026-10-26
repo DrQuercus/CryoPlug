@@ -215,7 +215,8 @@ WORKFLOWS: list[dict[str, Any]] = [
         "id": "relion_spa",
         "title": "Movies to map (RELION single particle)",
         "description": ("The whole single-particle pipeline in RELION, as in CryoSPARC: movies imported → motion correction "
-                        "→ CTF estimation → micrographs curated on their CTF fit → Laplacian-of-Gaussian picking → "
+                        "→ CTF estimation → micrographs curated on their CTF fit, motion and ice (the job shows the "
+                        "distributions and the micrographs and waits for you) → Laplacian-of-Gaussian picking → "
                         "extraction (down-scaled) → 2D classification → selection of the good classes (the job shows the "
                         "class averages and waits for your clicks: the chain waits for it) → initial model → 3D "
                         "auto-refine → mask → post-processing and local resolution. CTF refinement and a second "

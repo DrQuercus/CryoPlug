@@ -227,25 +227,28 @@ Ajuste la fonction de transfert de contraste de chaque micrographie avec CTFFIND
 
 `relion_curate` — intégré (aucun logiciel externe)
 
-Garde les micrographies dont la CTF, le défocus, l'astigmatisme, le mouvement ou la glace respectent des seuils (comme « Curate Exposures » de CryoSPARC) et montre les distributions avec les seuils. Les micrographies rejetées forment une seconde sortie.
+Trie les micrographies sur leur ajustement CTF, leur défocus, leur astigmatisme, leur mouvement et la glace (comme « Manually Curate Exposures » de CryoSPARC). En mode interactif, le job attend : distributions dont on tire les limites sur les histogrammes, nuage de points de deux mesures, tableau triable des micrographies, et chaque micrographie avec son ajustement CTF et sa dérive, acceptée ou rejetée à la main. Ou bien il applique d'un coup les seuils donnés. Les micrographies rejetées forment une seconde sortie.
 
 **Quand l'utiliser**
 
 - Avant le picking : retirer glace épaisse, dérive, contamination, ajustements CTF ratés.
 - Ne garder qu'une gamme de défocus pour un essai rapide.
+- Depuis l'estimation de la CTF : « Curate… » dans le navigateur d'expositions crée ce job avec les limites essayées.
 
 **À éviter / pièges**
 
-- Des seuils fixés à l'aveugle : regardez d'abord les histogrammes (un premier passage sans seuil strict).
+- Des seuils fixés à l'aveugle : regardez d'abord les histogrammes et quelques micrographies (mode interactif).
 
-**Entrées conseillées** : Les micrographies avec CTF ; le mouvement est relu dans la correction de mouvement quand l'estimation de la CTF l'a perdu.
+**Entrées conseillées** : Les micrographies avec CTF ; le mouvement et la dérive sont relus dans la correction de mouvement quand l'estimation de la CTF les a perdus.
 
 **Conseils**
 
 - Résolution d'ajustement CTF ≤ 5-8 Å selon les données ; mouvement total < 30-50 Å.
+- Clavier : ← → pour passer d'une micrographie à l'autre (dans l'ordre et le filtre du tableau), A accepte, R rejette, U rend la décision aux limites ; double-clic sur un histogramme : plus de limite.
+- Le travail est enregistré au fil de l'eau ; Done sans rien envoyer (agent) applique les seuils des paramètres.
 - La sortie « rejected » permet de vérifier ce qui a été écarté.
 
-**Étapes suivantes** : Auto-picking (RELION), Topaz training (RELION)
+**Étapes suivantes** : Auto-picking (RELION), Inspect picks / manual picking, Topaz training (RELION)
 
 ### Motion correction (RELION)
 

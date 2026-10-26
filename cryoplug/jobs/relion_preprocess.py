@@ -8,6 +8,7 @@ with the options of RELION 5.1's GUI.
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
 import struct
@@ -420,6 +421,7 @@ class RelionMotionCorr(RelionJob):
                 ctx.warn(f"No thumbnail: {exc}")
         ctx.add_table("Motion", ["", "Value"], [["Micrographs", f"{len(names):,}"], *rows])
         ctx.add_highlight("Micrographs", f"{len(names):,}")
+        exposure_browser(ctx, out)
         meta = micrograph_meta(ctx, out, "motioncorr", has_motion=True,
                                power_spectra=mics.has("rlnCtfPowerSpectrum"), nodw=mics.has("rlnMicrographNameNoDW"))
         ctx.add_output("micrographs", "micrographs", out, f"{len(names):,} micrographs", meta=meta, thumbnail=thumb)
@@ -571,19 +573,122 @@ class RelionCtffind(RelionJob):
                 ctx.add_image("CTF fits: best, median, worst (" + "; ".join(labels) + ")", png)
                 thumb = thumbnail_of(ctx, tiles[0], "micrographs")
         meta = micrograph_meta(ctx, out, "ctffind", **(extra or {}))
+        exposure_browser(ctx, out, extra)
         ctx.add_output("micrographs", "micrographs", out, f"{n:,} micrographs with CTF", meta=meta, thumbnail=thumb)
 
 
-# ------------------------------------------------------------------ curation
-CURATION = [  # (parameter, STAR label, kept when, unit, label)
-    ("max_ctf_resolution", "rlnCtfMaxResolution", "max", "Å", "CTF fit resolution"),
-    ("min_defocus", "rlnDefocusU", "min", "Å", "Defocus"),
-    ("max_defocus", "rlnDefocusU", "max", "Å", "Defocus"),
-    ("max_astigmatism", "rlnCtfAstigmatism", "max", "Å", "Astigmatism"),
-    ("min_fom", "rlnCtfFigureOfMerit", "min", "", "CTF figure of merit"),
-    ("max_motion", "rlnAccumMotionTotal", "max", "Å", "Total motion"),
-    ("max_ice", "rlnCtfIceRingDensity", "max", "", "Ice ring density"),
+# ------------------------------------------------------------------ exposures: curation and browser
+EXPOSURE_METRICS = [  # (key, STAR label, title, unit); the defocus is the mean of rlnDefocusU and rlnDefocusV
+    ("ctf_res", "rlnCtfMaxResolution", "CTF fit resolution", "Å"),
+    ("defocus", "rlnDefocusU", "Defocus", "Å"),
+    ("astigmatism", "rlnCtfAstigmatism", "Astigmatism", "Å"),
+    ("ctf_fom", "rlnCtfFigureOfMerit", "CTF figure of merit", ""),
+    ("motion", "rlnAccumMotionTotal", "Total motion", "Å"),
+    ("motion_early", "rlnAccumMotionEarly", "Early motion", "Å"),
+    ("motion_late", "rlnAccumMotionLate", "Late motion", "Å"),
+    ("ice", "rlnCtfIceRingDensity", "Ice ring density", ""),
+    ("ice_fraction", "rlnCtfIceRingPowerFraction", "Ice ring power fraction", ""),
+    ("ice_thickness", "rlnMicrographIceThickness", "Ice thickness", "Å"),
+    ("phase_shift", "rlnPhaseShift", "Phase shift", "°"),
 ]
+METRIC = {m[0]: m for m in EXPOSURE_METRICS}
+REPORTED = ("ctf_res", "defocus", "astigmatism", "ctf_fom", "motion", "ice")  # plotted in the curation report
+CURATION = {  # parameter -> (metric, bound: 0 lower, 1 upper)
+    "max_ctf_resolution": ("ctf_res", 1), "min_defocus": ("defocus", 0), "max_defocus": ("defocus", 1),
+    "max_astigmatism": ("astigmatism", 1), "min_fom": ("ctf_fom", 0), "max_motion": ("motion", 1), "max_ice": ("ice", 1),
+}
+
+
+def motion_source(ctx: JobContext, meta: dict[str, Any], mics: rl.StarTable) -> tuple[dict[str, np.ndarray], list[str] | None]:
+    """The motion of the micrographs (rlnAccumMotion*) and their motion files (rlnMicrographMetadata), read from the
+    motion correction they came from when the CTF estimation in between dropped them."""
+    names = mics.column("rlnMicrographName")
+    files = mics.column("rlnMicrographMetadata") if mics.has("rlnMicrographMetadata") else None
+    ref = meta.get("motion_star")
+    if (mics.has("rlnAccumMotionTotal") and files is not None) or not ref or not ctx.abs(ref).exists():
+        return {}, files
+    source = rl.micrograph_table(rl.read_star(ctx.abs(ref)))
+    src_names = source.column("rlnMicrographName")
+    out: dict[str, np.ndarray] = {}
+    if not mics.has("rlnAccumMotionTotal"):
+        for label in ("rlnAccumMotionTotal", "rlnAccumMotionEarly", "rlnAccumMotionLate"):
+            if source.has(label):
+                by_name = dict(zip(src_names, source.floats(label)))
+                out[label] = np.array([by_name.get(m, np.nan) for m in names])
+    if files is None and source.has("rlnMicrographMetadata"):
+        by_name = dict(zip(src_names, source.column("rlnMicrographMetadata")))
+        files = [by_name.get(m, "") for m in names]
+    return out, files
+
+
+def exposure_metrics(mics: rl.StarTable, motion: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """The value of every micrograph for each metric known (NaN where unknown)."""
+    out: dict[str, np.ndarray] = {}
+    for key, label, _, _ in EXPOSURE_METRICS:
+        if key == "defocus":
+            if mics.has("rlnDefocusU"):
+                du = mics.floats("rlnDefocusU")
+                out[key] = (du + mics.floats("rlnDefocusV")) / 2 if mics.has("rlnDefocusV") else du
+        elif mics.has(label):
+            out[key] = mics.floats(label)
+        elif label in motion:
+            out[key] = motion[label]
+    return out
+
+
+def exposure_data(ctx: JobContext, tables: dict[str, rl.StarTable], mics: rl.StarTable, values: dict[str, np.ndarray],
+                  files: list[str] | None, name: str = "exposures") -> Path:
+    """The micrographs and their metrics for the exposure browser of the job panel (``<name>.json``)."""
+    def clean(v: np.ndarray) -> list[float | None]:
+        return [round(float(x), 4) if np.isfinite(x) else None for x in v]
+    data = {"names": mics.column("rlnMicrographName"),
+            "ctf_images": mics.column("rlnCtfImage") if mics.has("rlnCtfImage") else None,
+            "motion_files": files if files and any(files) else None,
+            "apix": round(rl.micrograph_pixel_size(tables), 4),
+            "metrics": [{"key": k, "title": METRIC[k][2], "unit": METRIC[k][3], "values": clean(v)} for k, v in values.items()]}
+    out = ctx.path(f"{name}.json")
+    out.write_text(json.dumps(data, separators=(",", ":")))
+    return out
+
+
+def exposure_browser(ctx: JobContext, star: Path, meta: dict[str, Any] | None = None) -> None:
+    """The micrographs of a job in the panel: each with its CTF fit and drift, the distributions, a scatter plot and the
+    table of the micrographs (read-only; "Curate…" makes a curation job)."""
+    try:
+        tables = rl.read_star(star)
+        mics = rl.micrograph_table(tables)
+        motion, files = motion_source(ctx, meta or {}, mics)
+        values = exposure_metrics(mics, motion)
+        data = exposure_data(ctx, tables, mics, values, files)
+    except Exception as exc:  # cosmetic: the outputs are written
+        ctx.warn(f"No exposure browser: {exc}")
+        return
+    ctx.add_tool("exposures", "Exposures", data, curate=bool(values))
+
+
+def curation_mask(values: dict[str, np.ndarray], thresholds: dict[str, list[float | None]], n: int
+                  ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """The micrographs within every [lower, upper] range (an unknown value passes), and those failing each one."""
+    keep = np.ones(n, dtype=bool)
+    failing = {}
+    for key, (lo, hi) in thresholds.items():
+        v = values[key]
+        bad = np.zeros(n, dtype=bool)
+        with np.errstate(invalid="ignore"):
+            if lo is not None:
+                bad |= v < lo
+            if hi is not None:
+                bad |= v > hi
+        failing[key] = bad
+        keep &= ~bad
+    return keep, failing
+
+
+def range_text(key: str, lo: float | None, hi: float | None) -> str:
+    unit = f" {METRIC[key][3]}" if METRIC[key][3] else ""
+    if lo is not None and hi is not None:
+        return f"{METRIC[key][2]} {lo:g} – {hi:g}{unit}"
+    return f"{METRIC[key][2]} {'≥' if lo is not None else '≤'} {lo if lo is not None else hi:g}{unit}"
 
 
 @register
@@ -591,15 +696,23 @@ class RelionCurate(JobType):
     name = "relion_curate"
     title = "Curate micrographs"
     category = "Preprocessing"
+    interactive = True
     software = ["RELION"]
-    description = ("Keeps the micrographs whose CTF fit, defocus, astigmatism, motion or ice meet thresholds (as "
-                   "CryoSPARC's Curate Exposures; relion_star_handler --select one criterion at a time). Shows the "
-                   "distributions with the thresholds; the rejected micrographs are an output too.")
+    description = ("Keeps the micrographs whose CTF fit, defocus, astigmatism, motion or ice are within limits, as "
+                   "CryoSPARC's Manually Curate Exposures: the job waits with the distributions (limits dragged on the "
+                   "histograms), a scatter plot, the table of the micrographs and each micrograph with its CTF fit and "
+                   "drift, accepted or rejected one by one. Or applies the thresholds below at once. The rejected "
+                   "micrographs are an output too.")
     inputs = [Slot("micrographs", ("micrographs",), "Micrographs", help="With CTF estimation for the CTF criteria.")]
     params = [
+        Param("mode", "choice", "interactive", choices=["interactive", "thresholds"], label="Curation",
+              labels={"interactive": "On the plots and micrographs (the job waits for you)",
+                      "thresholds": "With the thresholds below, at once"},
+              help="Interactive: the thresholds below are where the limits start."),
         Param("max_ctf_resolution", "float", 0.0, label="Worst CTF fit resolution", unit="Å", min=0,
               help="Keep micrographs whose CTF fits to this resolution or better (e.g. 6 Å). 0 = no limit."),
-        Param("min_defocus", "float", 0.0, label="Minimum defocus", unit="Å", min=0, help="0 = no limit."),
+        Param("min_defocus", "float", 0.0, label="Minimum defocus", unit="Å", min=0,
+              help="Mean of the two defoci (U and V). 0 = no limit."),
         Param("max_defocus", "float", 0.0, label="Maximum defocus", unit="Å", min=0, help="0 = no limit."),
         Param("max_astigmatism", "float", 0.0, label="Maximum astigmatism", unit="Å", min=0, help="0 = no limit."),
         Param("min_fom", "float", 0.0, label="Minimum CTF figure of merit", min=0, advanced=True, help="0 = no limit."),
@@ -610,48 +723,109 @@ class RelionCurate(JobType):
     outputs = [OutputDef("micrographs", "micrographs", "Kept micrographs"),
                OutputDef("rejected", "micrographs", "Rejected micrographs")]
 
-    def run(self, ctx: JobContext) -> None:
-        p = ctx.params
+    def load(self, ctx: JobContext) -> tuple[Any, Path, dict[str, rl.StarTable], rl.StarTable, dict[str, np.ndarray], list[str] | None]:
         inp = ctx.require("micrographs")
         star, _ = star_of(ctx, inp)
         tables = rl.read_star(star)
         mics = rl.micrograph_table(tables)
-        n = len(mics)
-        keep = np.ones(n, dtype=bool)
-        rows, plotted = [], set()
-        motion = self.motion_of(ctx, inp, mics)
-        for name, label, kind, unit, title in CURATION:
-            limit = float(p[name] or 0)
-            if mics.has(label):
-                values = mics.floats(label)
-            elif label in motion:
-                values = motion[label]
-            else:
-                if limit:
-                    raise JobError(f"{title}: the micrographs have no {label} column (run "
-                                   + ("motion correction" if label.startswith("rlnAccumMotion") else "CTF estimation")
-                                   + " first?)")
+        motion, files = motion_source(ctx, inp.meta, mics)
+        return inp, star, tables, mics, exposure_metrics(mics, motion), files
+
+    @staticmethod
+    def start_limits(p: dict[str, Any], values: dict[str, np.ndarray]) -> dict[str, list[float | None]]:
+        """The limits of the parameters: {metric: [lower, upper]}."""
+        start: dict[str, list[float | None]] = {}
+        for param, (key, side) in CURATION.items():
+            limit = float(p[param] or 0)
+            if not limit:
                 continue
-            if limit:
-                ok = (values <= limit if kind == "max" else values >= limit) | np.isnan(values)  # unknown: kept
-                rows.append([f"{title} {'≤' if kind == 'max' else '≥'} {limit:g} {unit}".strip(), f"{int((~ok).sum()):,}"])
-                keep &= ok
-            if label not in plotted:
-                plotted.add(label)
-                lines = [{"x": float(p[q]), "label": f"{'≤' if k == 'max' else '≥'} {float(p[q]):g}"}
-                         for q, lab, k, _, _ in CURATION if lab == label and float(p[q] or 0)]
-                ctx.add_plot(title, [{"name": "Micrographs", **histogram(values)}], x_label=f"{title} ({unit})" if unit else title,
-                             y_label="Micrographs", style="bars", vlines=lines)
-        if not rows:
-            raise JobError("Set at least one threshold")
-        kept = int(keep.sum())
-        ctx.add_table("Rejected by", ["Criterion", "Micrographs rejected"], rows + [["Kept", f"{kept:,} of {n:,}"]])
-        if not kept:
-            raise JobError("No micrograph meets all the thresholds")
-        ctx.add_highlight("Kept", f"{kept:,} / {n:,}")
-        out = rl.subset_star(star, ctx.path("micrographs.star"), keep, comment=f"Curated from {inp.source}")
-        passed = {k: v for k, v in inp.meta.items() if k in ("has_motion", "power_spectra", "motion_star")}
+            if key not in values:
+                label = METRIC[key][1]
+                raise JobError(f"{METRIC[key][2]}: the micrographs have no {label} column (run "
+                               + ("motion correction" if label.startswith("rlnAccumMotion") else "CTF estimation")
+                               + " first?)")
+            start.setdefault(key, [None, None])[side] = limit
+        return start
+
+    def prepare(self, ctx: JobContext) -> bool:
+        p = ctx.params
+        inp, star, tables, mics, values, files = self.load(ctx)
+        start = self.start_limits(p, values)
+        if p["mode"] == "thresholds":
+            if not start:
+                raise JobError("Set at least one threshold")
+            self.apply(ctx, inp, star, mics, values, start, {}, how="thresholds")
+            exposure_browser(ctx, ctx.path("micrographs.star"), inp.meta)
+            return True
+        data = exposure_data(ctx, tables, mics, values, files)
+        ctx.add_tool("exposures", "Curate exposures", data, waiting=True, editable=True, thresholds=start,
+                     prompt_title="Waiting for your curation",
+                     prompt="Drag the limits on the histograms, accept or reject micrographs one by one (A / R), then Done.")
+        ctx.add_highlight("Micrographs", f"{len(mics):,}")
+        ctx.log("Waiting: curate the micrographs in the job panel, then Done")
+        return False
+
+    def finalize(self, ctx: JobContext, choice: str | None) -> None:
+        inp, star, _, mics, values, _ = self.load(ctx)
+        try:
+            sent = json.loads(choice) if (choice or "").strip() else {}
+        except ValueError as exc:
+            raise JobError(f"Curation not understood: {exc}") from None
+        if not sent:  # Done without data: the work saved while the job waited, or the limits of the parameters
+            saved = ctx.path("session_curate.json")
+            sent = json.loads(saved.read_text()) if saved.exists() else {"thresholds": self.start_limits(ctx.params, values)}
+        thresholds: dict[str, list[float | None]] = {}
+        for key, bounds in (sent.get("thresholds") or {}).items():
+            if key not in values or not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+                continue
+            lo, hi = (None if b is None else float(b) for b in bounds)
+            if lo is not None or hi is not None:
+                thresholds[key] = [lo, hi]
+        overrides = {str(k): v for k, v in (sent.get("overrides") or {}).items() if v in ("accept", "reject")}
+        keep = self.apply(ctx, inp, star, mics, values, thresholds, overrides, how="interactive")
+        for sec in ctx.report.get("sections", []):  # the curation is done: the browser shows the decisions
+            if sec.get("kind") == "exposures" and sec.get("waiting"):
+                sec.update(waiting=False, editable=False, thresholds=thresholds, overrides=overrides,
+                           decided="".join("1" if k else "0" for k in keep), title="Exposures")
+        ctx.save_report()
+
+    def apply(self, ctx: JobContext, inp: Any, star: Path, mics: rl.StarTable, values: dict[str, np.ndarray],
+              thresholds: dict[str, list[float | None]], overrides: dict[str, str], how: str) -> np.ndarray:
+        n = len(mics)
+        keep, failing = curation_mask(values, thresholds, n)
+        rows = [[range_text(k, *b), f"{int(failing[k].sum()):,}"] for k, b in thresholds.items()]
         names = mics.column("rlnMicrographName")
+        index = {m: i for i, m in enumerate(names)}
+        by_hand = {"accept": 0, "reject": 0}
+        for name, what in overrides.items():
+            i = index.get(name)
+            if i is None or keep[i] == (what == "accept"):
+                continue
+            keep[i] = what == "accept"
+            by_hand[what] += 1
+        if by_hand["reject"]:
+            rows.append(["Rejected by hand", f"{by_hand['reject']:,}"])
+        if by_hand["accept"]:
+            rows.append(["Accepted by hand (outside the limits)", f"{by_hand['accept']:,}"])
+        kept = int(keep.sum())
+        if not kept:  # before any section: a waiting curation stays as it was
+            raise JobError("No micrograph kept: widen the limits or accept some micrographs")
+        ctx.add_table("Rejected by", ["Criterion", "Micrographs rejected"], rows + [["Kept", f"{kept:,} of {n:,}"]])
+        for key, v in values.items():
+            if key not in REPORTED and key not in thresholds:
+                continue
+            lo, hi = thresholds.get(key, [None, None])
+            lines = [{"x": b, "label": f"{s} {b:g}"} for b, s in ((lo, "≥"), (hi, "≤")) if b is not None]
+            finite = v[np.isfinite(v)]
+            if not len(finite):
+                continue
+            title, unit = METRIC[key][2], METRIC[key][3]
+            ctx.add_plot(title, [{"name": "Micrographs", **histogram(finite)}], x_label=f"{title} ({unit})" if unit else title,
+                         y_label="Micrographs", style="bars", vlines=lines)
+        ctx.add_highlight("Kept", f"{kept:,} / {n:,}")
+        comment = f"Curated from {inp.source}" + (f" ({how})" if how else "")
+        out = rl.subset_star(star, ctx.path("micrographs.star"), keep, comment=comment)
+        passed = {k: v for k, v in inp.meta.items() if k in ("has_motion", "power_spectra", "motion_star")}
         thumb = None
         try:  # the first micrograph kept, for the job card
             from cryoplug.micrographs import preview, read_image
@@ -664,22 +838,6 @@ class RelionCurate(JobType):
             rej = rl.subset_star(star, ctx.path("micrographs_rejected.star"), ~keep, comment=f"Rejected from {inp.source}")
             ctx.add_output("rejected", "micrographs", rej, f"{n - kept:,} rejected micrographs",
                            meta=micrograph_meta(ctx, rej, "curate", **passed))
-        if kept < n:
             micrograph_gallery(ctx, sample([names[i] for i in np.flatnonzero(~keep)], 2), "rejected_examples",
                                "Rejected examples")
-
-    @staticmethod
-    def motion_of(ctx: JobContext, inp: Any, mics: rl.StarTable) -> dict[str, np.ndarray]:
-        """The motion of the micrographs (rlnAccumMotion*) from the motion correction they came from, when the CTF
-        estimation in between dropped it."""
-        ref = inp.meta.get("motion_star")
-        if mics.has("rlnAccumMotionTotal") or not ref or not ctx.abs(ref).exists():
-            return {}
-        source = rl.micrograph_table(rl.read_star(ctx.abs(ref)))
-        out = {}
-        names = mics.column("rlnMicrographName")
-        for label in ("rlnAccumMotionTotal", "rlnAccumMotionEarly", "rlnAccumMotionLate"):
-            if source.has(label):
-                by_name = dict(zip(source.column("rlnMicrographName"), source.floats(label)))
-                out[label] = np.array([by_name.get(m, np.nan) for m in names])
-        return out
+        return keep

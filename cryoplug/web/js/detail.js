@@ -5,6 +5,7 @@ import { api } from './api.js';
 import { builderConnect, builderPrefill, builderSetParams, builderSlotsFor, openBuilder } from './builder.js';
 import { classGallery, forgetSelection } from './classes.js';
 import { computeRows } from './compute.js';
+import { exposureCurator } from './curate.js';
 import { helpSheet } from './help.js';
 import { latentExplorer } from './latent.js';
 import { pickInspector } from './picker.js';
@@ -550,6 +551,15 @@ function reportSection(sec, puid, job) {
       newInspection: job.status === 'completed' && (job.outputs || []).some((o) => o.type === 'coordinates') && job.inputs?.micrographs
         ? (threshold) => newPickInspection(job, threshold) : null,
     })));
+  } else if (sec.kind === 'exposures') {
+    const mics = (job.outputs || []).find((o) => o.type === 'micrographs' && o.name === 'micrographs')
+      || (job.outputs || []).find((o) => o.type === 'micrographs');
+    wrap.append(h('div', { class: 'box' }, exposureCurator(sec, {
+      puid, job,
+      finish: (payload) => act(api.finish(puid, job.uid, JSON.stringify(payload)), 'Curation saved'),
+      widen: () => widenFor(job),
+      curate: sec.curate && job.status === 'completed' && mics ? (limits) => newCuration(job, mics, limits) : null,
+    })));
   } else if (sec.kind === 'image') {
     wrap.append(h('h4', {}, sec.title), h('a', { href: api.fileUrl(puid, sec.path), target: '_blank', rel: 'noopener' },
       h('img', { src: api.fileUrl(puid, sec.path), alt: sec.title, style: { maxWidth: '100%', borderRadius: '8px' } })));
@@ -566,6 +576,27 @@ async function newPickInspection(job, threshold) {
       params: threshold !== null && threshold !== undefined ? { min_fom: +threshold.toFixed(4) } : {},
       inputs: { micrographs: job.inputs.micrographs, coordinates: { job: job.uid, output: out.name } }, queue: true }),
     `Inspection of the picks of ${job.uid} queued`);
+    await refreshJobs();
+    navigate(jobHref(made.uid));
+  } catch { /* shown */ }
+}
+
+// A curation job of the micrographs of a job (motion correction, CTF estimation), its limits starting from those tried
+// in the exposure browser, queued at once: it waits for the curation.
+const CURATION_PARAMS = { ctf_res: [null, 'max_ctf_resolution'], defocus: ['min_defocus', 'max_defocus'], astigmatism: [null, 'max_astigmatism'],
+  ctf_fom: ['min_fom', null], motion: [null, 'max_motion'], ice: [null, 'max_ice'] };
+async function newCuration(job, out, limits) {
+  const puid = state.project.uid;
+  const params = { mode: 'interactive' };
+  for (const [key, [lo, hi]] of Object.entries(limits || {})) {
+    const names = CURATION_PARAMS[key];
+    if (!names) continue;
+    if (lo !== null && names[0]) params[names[0]] = +(+lo).toPrecision(5);
+    if (hi !== null && names[1]) params[names[1]] = +(+hi).toPrecision(5);
+  }
+  try {
+    const made = await guard(api.createJob(puid, { type: 'relion_curate', params, inputs: { micrographs: { job: job.uid, output: out.name } }, queue: true }),
+      `Curation of the micrographs of ${job.uid} queued`);
     await refreshJobs();
     navigate(jobHref(made.uid));
   } catch { /* shown */ }

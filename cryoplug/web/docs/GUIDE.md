@@ -226,8 +226,9 @@ de RELION et se relisent dans RELION.
 | Import | Import movies (RELION) | taille de pixel des films, dose par image, référence de gain | nombre de films, images par film |
 | Mouvement | Motion correction (RELION) | patchs 5 × 5, float16, spectres de puissance | mouvement cumulé, dérive, micrographies |
 | CTF | CTF estimation (CTFFIND) | 30–5 Å, spectres de puissance de l'étape précédente | résolution d'ajustement, défocus, image des ajustements |
-| Tri | Curate micrographs | ajustement CTF ≤ 6–8 Å, mouvement total | histogrammes avec les seuils, micrographies rejetées |
+| Tri | Curate micrographs | limites tirées sur les histogrammes (ajustement CTF ≤ 6–8 Å, mouvement…) | chaque micrographie avec sa CTF et sa dérive, rejets à la main |
 | Picking | Auto-picking (RELION) | Laplacien de Gaussienne, diamètres min./max. de la particule | image des particules entourées, particules par micrographie |
+| Inspection (facultatif) | Inspect picks / manual picking | seuil de figure de mérite sur l'histogramme | particules retirées ou ajoutées d'un clic |
 | Extraction | Particle extraction (RELION) | boîte ≈ 2 × le diamètre, réduite à 64–128 px | vignettes des particules |
 | 2D | 2D classification (RELION) | VDAM, 50–200 classes | galerie redessinée à chaque itération |
 | Sélection | Select 2D classes | les bonnes classes cliquées | particules gardées / rejetées |
@@ -238,8 +239,9 @@ de RELION et se relisent dans RELION.
 | Post-traitement | RELION post-processing, Local resolution (RELION) | facteur B automatique | FSC corrigée, facteur B, résolution locale |
 | Finitions | CTF refinement, Bayesian polishing, puis 3D auto-refine | les trois passes du tutoriel RELION | gain de résolution à chaque tour |
 
-Le workflow **Movies to map (RELION single particle)** crée toute la chaîne d'un coup : elle tourne jusqu'à la
-sélection des classes 2D, qui attend vos clics ; les jobs suivants attendent la sélection, puis repartent seuls.
+Le workflow **Movies to map (RELION single particle)** crée toute la chaîne d'un coup : elle tourne jusqu'au tri des
+micrographies, qui attend votre tri, puis jusqu'à la sélection des classes 2D, qui attend vos clics ; les jobs suivants
+attendent, puis repartent seuls.
 
 ### 2.2 Configurer RELION, CTFFIND et MotionCor2
 
@@ -253,7 +255,25 @@ sélection des classes 2D, qui attend vos clics ; les jobs suivants attendent la
 - RELION ne lit que des chemins relatifs au projet : l'import lie les dossiers des films dans son dossier de job, rien
   n'est copié.
 
-### 2.3 Sélectionner les classes 2D comme dans CryoSPARC
+### 2.3 Trier les micrographies et inspecter le picking
+
+- La correction de mouvement et l'estimation de la CTF montrent un **navigateur d'expositions** : chaque micrographie
+  (filtrée passe-bas, réglable) avec son ajustement CTF, sa dérive image par image et ses mesures ; un histogramme par
+  mesure (ajustement CTF, défocus, astigmatisme, figure de mérite, mouvements total/précoce/tardif, glace…), un nuage
+  de points de deux mesures au choix et le tableau triable de toutes les micrographies. On y essaie des limites, puis
+  **Curate…** crée le tri avec ces limites.
+- **Curate micrographs** (mode interactif, par défaut) attend : tirez les limites sur les histogrammes (la poignée la
+  plus proche suit la souris, double-clic : plus de limite), regardez les micrographies rejetées (filtre *Browse* :
+  *Rejected*) et décidez à la main : **A** accepte, **R** rejette, **U** rend la décision aux limites, ← → pour
+  avancer. Les lignes du tableau et les points du nuage s'ouvrent d'un clic. Le travail est enregistré au fil de l'eau ;
+  **Done** écrit les micrographies gardées et les rejetées. Le mode *thresholds* applique les seuils d'un coup.
+- **Inspect picks / manual picking** montre les particules repérées sur chaque micrographie : seuil de figure de mérite
+  glissé sur son histogramme (le nombre gardé par micrographie suit), clic sur un cercle pour le retirer, clic ailleurs
+  pour ajouter une particule, molette pour zoomer, glisser pour se déplacer, ← → pour changer de micrographie. Sans
+  coordonnées en entrée, c'est un picking manuel (un jeu d'entraînement pour Topaz). Depuis un picking terminé,
+  **Inspect and edit…** crée l'inspection avec le seuil affiché.
+
+### 2.4 Sélectionner les classes 2D comme dans CryoSPARC
 
 - La **2D classification** montre ses moyennes pendant le calcul. Chaque vignette porte le numéro de la classe, son
   nombre de particules et sa résolution ; tri par nombre de particules, par résolution ou par numéro, curseur de taille.
@@ -264,7 +284,7 @@ sélection des classes 2D, qui attend vos clics ; les jobs suivants attendent la
   sélection est créée et lancée.
 - Mode *Automatic* : le class ranker de RELION garde les classes de score ≥ 0,5 (réglable).
 
-### 2.4 Conseils
+### 2.5 Conseils
 
 - Travaillez à pixel réduit pour la 2D, l'ab initio et la 3D ; avant le raffinement final, ré-extrayez à pleine
   échelle (entrée *Particles to re-extract* de l'extraction, recentrée sur les positions raffinées).

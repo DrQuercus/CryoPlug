@@ -94,7 +94,7 @@ def test_relion_preprocessing(manager, spa):
     assert any(s["title"].startswith("CTF fits") for s in _sections(manager, puid, ctf, "image"))
 
     # curation: the worst CTF fit (12 Å) is rejected; the motion comes from the motion correction
-    cur = _run(manager, puid, "relion_curate", {"max_ctf_resolution": 8.0, "max_motion": 1000.0},
+    cur = _run(manager, puid, "relion_curate", {"mode": "thresholds", "max_ctf_resolution": 8.0, "max_motion": 1000.0},
                {"micrographs": _ref(ctf, "micrographs")})
     o = _outs(cur)
     assert o["micrographs"]["meta"]["n_micrographs"] == 3 and o["rejected"]["meta"]["n_micrographs"] == 1
@@ -102,14 +102,69 @@ def test_relion_preprocessing(manager, spa):
     plots = {s["title"]: s for s in _sections(manager, puid, cur, "plot")}
     assert plots["CTF fit resolution"]["style"] == "bars" and plots["CTF fit resolution"]["vlines"][0]["x"] == 8.0
     assert "Total motion" in plots
-    bad = _run(manager, puid, "relion_curate", {}, {"micrographs": _ref(ctf, "micrographs")}, ok=False)
+    bad = _run(manager, puid, "relion_curate", {"mode": "thresholds"}, {"micrographs": _ref(ctf, "micrographs")}, ok=False)
     assert bad["status"] == "failed" and "at least one threshold" in bad["error"]
+
+
+def test_interactive_curation_and_exposure_browser(manager, spa):
+    """The curation waits with the exposure browser: limits dragged on the distributions and micrographs accepted or
+    rejected by hand; the work is saved while it waits; Done keeps the accepted micrographs. Motion correction and CTF
+    estimation show the same browser, read-only."""
+    puid, mc, ctf = spa["puid"], spa["motioncorr"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    # read-only browsers: the motion of the movies, then the CTF fits (with the motion files of motion correction)
+    (mc_tool,) = _sections(manager, puid, mc, "exposures")
+    data = json.loads((pdir / mc_tool["data"]).read_text())
+    assert [m["key"] for m in data["metrics"]][:1] == ["motion"] and data["ctf_images"] is None and len(data["names"]) == 4
+    (ctf_tool,) = _sections(manager, puid, ctf, "exposures")
+    assert ctf_tool["curate"] and not ctf_tool.get("waiting")
+    data = json.loads((pdir / ctf_tool["data"]).read_text())
+    keys = [m["key"] for m in data["metrics"]]
+    assert keys[:4] == ["ctf_res", "defocus", "astigmatism", "ctf_fom"] and "motion" in keys and "ice" in keys
+    assert data["ctf_images"][0].endswith("mic_001_PS.ctf:mrc") and data["motion_files"][0].endswith("mic_001.star")
+    res = dict(zip(data["names"], next(m for m in data["metrics"] if m["key"] == "ctf_res")["values"]))
+    worst = max(res, key=res.get)
+
+    cur = _run(manager, puid, "relion_curate", {"max_ctf_resolution": 8.0}, {"micrographs": _ref(ctf, "micrographs")},
+               status="waiting")
+    (tool,) = _sections(manager, puid, cur, "exposures")
+    assert tool["waiting"] and tool["editable"] and tool["thresholds"] == {"ctf_res": [None, 8.0]}
+    # work in progress, saved while the job waits
+    best = min(res, key=res.get)
+    session = {"thresholds": {"ctf_res": [None, 8.0], "motion": [None, 1000.0]}, "overrides": {worst: "accept", best: "reject"}}
+    manager.write_session(puid, cur["uid"], "curate", session)
+    assert manager.read_session(puid, cur["uid"], "curate") == session
+    with pytest.raises(Exception, match="No micrograph kept"):  # nothing kept: the job keeps waiting
+        manager.finish_interactive(puid, cur["uid"], json.dumps({"thresholds": {"ctf_res": [None, 1.0]}}))
+    assert manager.job(puid, cur["uid"])["status"] == "waiting"
+    done = manager.finish_interactive(puid, cur["uid"])  # Done without data: the session
+    o = _outs(done)
+    kept = rl.micrograph_table(rl.read_star(pdir / o["micrographs"]["path"])).column("rlnMicrographName")
+    assert worst in kept and best not in kept and len(kept) == 3 and o["rejected"]["meta"]["n_micrographs"] == 1
+    (table,) = [s for s in _sections(manager, puid, done, "table") if s["title"] == "Rejected by"]
+    cells = {r[0]: r[1] for r in table["rows"]}
+    assert cells["CTF fit resolution ≤ 8 Å"] == "1" and cells["Rejected by hand"] == "1"
+    assert cells["Accepted by hand (outside the limits)"] == "1" and cells["Kept"] == "3 of 4"
+    (tool,) = _sections(manager, puid, done, "exposures")  # the browser shows the decisions, read-only
+    assert not tool["waiting"] and not tool["editable"] and len(tool["decided"]) == 4 and tool["decided"].count("1") == 3
+    plots = {s["title"]: s for s in _sections(manager, puid, done, "plot")}
+    assert plots["Total motion"]["vlines"] == [{"x": 1000.0, "label": "≤ 1000"}]
+    assert "Defocus" in plots and "CTF fit resolution" in plots
+    # an agent's Done with no data and no session: the limits of the parameters
+    cur2 = _run(manager, puid, "relion_curate", {"max_ctf_resolution": 8.0, "min_defocus": 1000.0},
+                {"micrographs": _ref(ctf, "micrographs")}, status="waiting")
+    done2 = manager.finish_interactive(puid, cur2["uid"])
+    assert _outs(done2)["micrographs"]["meta"]["n_micrographs"] == 3
+    # a metric the micrographs do not have
+    bad = _run(manager, puid, "relion_curate", {"max_astigmatism": 100.0}, {"micrographs": _ref(mc, "micrographs")}, ok=False)
+    assert bad["status"] == "failed" and "Astigmatism: the micrographs have no rlnCtfAstigmatism column" in bad["error"]
 
 
 def test_relion_pipeline_movies_to_map(manager, spa):
     puid, mc, ctf = spa["puid"], spa["motioncorr"], spa["ctf"]
     pdir = manager.project_dir(puid)
-    cur = _run(manager, puid, "relion_curate", {"max_ctf_resolution": 8.0}, {"micrographs": _ref(ctf, "micrographs")})
+    cur = _run(manager, puid, "relion_curate", {"mode": "thresholds", "max_ctf_resolution": 8.0},
+               {"micrographs": _ref(ctf, "micrographs")})
     mics = _ref(cur, "micrographs")
 
     # LoG picking (particles are 60 Å across, dark on a light background)
@@ -342,8 +397,14 @@ def test_relion_movies_to_map_workflow(manager, movies):
     assert not res["problems"], res["problems"]
     by_type = {j["type"]: j for j in res["jobs"]}
     assert "relion_ctf_refine" not in by_type and "relion_locres" in by_type  # optional steps: off / on by default
+    uids = [j["uid"] for j in res["jobs"]]
+    curate = by_type["relion_curate"]
+    run_until_done(manager, puid, uids[:uids.index(curate["uid"]) + 1], timeout=300)
+    assert manager.job(puid, curate["uid"])["status"] == "waiting"  # the curation waits too
+    done = manager.finish_interactive(puid, curate["uid"])  # Done as it opened: the 8 Å limit of the workflow
+    assert done["status"] == "completed" and _outs(done)["micrographs"]["meta"]["n_micrographs"] == 3
     select = by_type["relion_select2d"]
-    upstream = [j["uid"] for j in res["jobs"][:[j["uid"] for j in res["jobs"]].index(select["uid"]) + 1]]
+    upstream = uids[:uids.index(select["uid"]) + 1]
     run_until_done(manager, puid, upstream, timeout=300)
     assert manager.job(puid, select["uid"])["status"] == "waiting"
     later = manager.job(puid, by_type["relion_initial_model"]["uid"])
@@ -368,6 +429,12 @@ def test_agents_read_the_2d_classes():
     kept = report_lines({"sections": [{"kind": "classes2d", "title": "2D classes", "classes": classes, "selected": [2, 3],
                                        "how": "clicked"}]})
     assert "kept: classes 2, 3 (clicked)" in kept[0]
+    lines = report_lines({"sections": [
+        {"kind": "exposures", "title": "Curate exposures", "data": "J9/exposures.json", "waiting": True},
+        {"kind": "exposures", "title": "Exposures", "data": "J9/exposures.json", "decided": "1101", "overrides": {"m": "reject"}},
+        {"kind": "picks", "title": "Inspect picks", "data": "J9/picks.json", "waiting": True}]})
+    assert "WAITING" in lines[0] and "mode=thresholds" in lines[0] and "kept 3 of 4 (1 decided by hand)" in lines[1]
+    assert "WAITING" in lines[2] and "min_fom" in lines[2]
 
 
 def test_inspect_picks_and_manual_picking(manager, spa):
@@ -452,3 +519,8 @@ def test_micrograph_pictures_and_sessions_over_the_api(manager, spa):
         r = client.put(f"/api/projects/{puid}/jobs/{mc['uid']}/session", params={"name": "picks"}, json={"a": 1})
         assert r.status_code >= 400  # only a waiting job keeps a session
         assert client.get(f"/api/projects/{puid}/jobs/{mc['uid']}/session", params={"name": "picks"}).json() == {}
+        # the drift of a movie, from its motion file
+        motion = rl.micrograph_table(rl.read_star(pdir / _outs(mc)["micrographs"]["path"])).column("rlnMicrographMetadata")[0]
+        d = client.get(f"/api/projects/{puid}/drift", params={"path": motion}).json()
+        assert len(d["x"]) == len(d["y"]) == 6 and d["x"][0] == 0
+        assert client.get(f"/api/projects/{puid}/drift", params={"path": mic}).status_code == 400

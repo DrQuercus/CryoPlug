@@ -58,10 +58,10 @@ Fits the contrast transfer function of every micrograph with CTFFIND 4.1 or 5 (r
 Usually followed by: `relion_curate`, `relion_autopick`.
 
 ### `relion_curate` — Curate micrographs
-built-in. In: micrographs: micrographs. Out: micrographs: micrographs, rejected: micrographs.
+built-in · interactive: a person works in it. In: micrographs: micrographs. Out: micrographs: micrographs, rejected: micrographs.
 
-Keeps the micrographs whose CTF fit, defocus, astigmatism, motion or ice meet thresholds (as CryoSPARC's Curate Exposures; relion_star_handler --select one criterion at a time). Shows the distributions with the thresholds; the rejected micrographs are an output too.
-Usually followed by: `relion_autopick`, `relion_topaz_train`.
+Keeps the micrographs whose CTF fit, defocus, astigmatism, motion or ice are within limits, as CryoSPARC's Manually Curate Exposures: the job waits with the distributions (limits dragged on the histograms), a scatter plot, the table of the micrographs and each micrograph with its CTF fit and drift, accepted or rejected one by one. Or applies the thresholds below at once. The rejected micrographs are an output too.
+Usually followed by: `relion_autopick`, `relion_pick_inspect`, `relion_topaz_train`.
 
 ### `relion_motioncorr` — Motion correction (RELION)
 RELION · GPU optional. In: movies: movies. Out: micrographs: micrographs.
