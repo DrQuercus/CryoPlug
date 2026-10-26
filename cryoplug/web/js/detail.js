@@ -6,6 +6,7 @@ import { builderConnect, builderPrefill, builderSetParams, builderSlotsFor, open
 import { classGallery, forgetSelection } from './classes.js';
 import { computeRows } from './compute.js';
 import { exposureCurator } from './curate.js';
+import { particleCurator } from './pcurate.js';
 import { helpSheet } from './help.js';
 import { latentExplorer } from './latent.js';
 import { liveDashboard } from './live.js';
@@ -572,6 +573,12 @@ function reportSection(sec, puid, job) {
       curate: (sec.curate || sec.live) && job.status === 'completed' && mics ? (limits) => newCuration(job, mics, limits) : null,
       applyLive: sec.live && ['launched', 'running'].includes(job.status)
         ? (limits) => act(api.control(puid, job.uid, 'thresholds', limits), 'New acceptance limits: applied at the next cycle') : null,
+    })));
+  } else if (sec.kind === 'particle_stats') {
+    wrap.append(h('div', { class: 'box' }, particleCurator(sec, {
+      puid, job,
+      finish: (payload) => act(api.finish(puid, job.uid, JSON.stringify(payload)), 'Curation saved'),
+      widen: () => widenFor(job),
     })));
   } else if (sec.kind === 'image') {
     wrap.append(h('h4', {}, sec.title), h('a', { href: api.fileUrl(puid, sec.path), target: '_blank', rel: 'noopener' },

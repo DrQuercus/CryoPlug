@@ -853,6 +853,77 @@ def test_filament_picking_and_helical_extraction(manager, spa):
     assert float(parts.column("rlnAngleTiltPrior")[0]) == 90.0
 
 
+def test_particle_curation_by_statistics(manager, spa):
+    """Particles kept on their statistics: interactive (limits on the distributions, images over the API), at once
+    with written limits, or split into clusters of one statistic (Gaussian mixture)."""
+    from fastapi.testclient import TestClient
+
+    from cryoplug.server.app import create_app
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = _ref(ctf, "micrographs")
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1},
+                {"micrographs": mics})
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1},
+               {"micrographs": mics, "coordinates": _ref(pick, "coordinates")})
+    c2d = _run(manager, puid, "relion_class2d", {"classes": 2, "vdam_batches": 10, "threads": 1, "gpus": 0},
+               {"particles": _ref(ext, "particles")})
+    parts = _ref(c2d, "particles")
+    ptab = rl.particle_table(rl.read_star(pdir / _outs(c2d)["particles"]["path"]))
+    n = len(ptab)
+    prob = ptab.floats("rlnMaxValueProbDistribution")
+
+    cur = _run(manager, puid, "relion_particle_curate", {"limits": "max_prob 0.3 -"}, {"particles": parts}, status="waiting")
+    tool = _sections(manager, puid, cur, "particle_stats")[0]
+    assert tool["waiting"] and tool["limits"] == {"max_prob": [0.3, None]}
+    info = json.loads((pdir / tool["data"]).read_text())
+    keys = [m["key"] for m in info["metrics"]]
+    assert {"max_prob", "n_significant", "loglike", "norm", "fom", "defocus", "per_micrograph"} <= set(keys)
+    assert "shift" not in keys  # the same for every particle: nothing to curate
+    assert info["n"] == info["n_display"] == n and info["source"] == {"job": c2d["uid"], "output": "particles"}
+    codes = np.frombuffer((pdir / info["binary"]).read_bytes(), dtype="<u2").reshape(len(keys), n)
+    m = info["metrics"][keys.index("max_prob")]
+    decoded = m["lo"] + codes[keys.index("max_prob")] / 65534 * (m["hi"] - m["lo"])
+    assert np.allclose(decoded, prob, atol=(m["hi"] - m["lo"]) / 60000 + 1e-6)
+    manager.write_session(puid, cur["uid"], "pcurate", {"limits": {"max_prob": [0.5, None], "norm": [None, 1.1]}})
+    done = manager.finish_interactive(puid, cur["uid"], "")
+    norm = ptab.floats("rlnNormCorrection")
+    expect = int(((prob >= 0.5) & (norm <= 1.1)).sum())
+    out = _outs(done)
+    assert done["status"] == "completed" and out["particles"]["meta"]["n_particles"] == expect
+    assert out["rejected"]["meta"]["n_particles"] == n - expect
+    final = _sections(manager, puid, done, "particle_stats")[0]
+    assert not final["waiting"] and final["kept"] == expect and final["limits"]["norm"] == [None, 1.1]
+    rows = dict(next(s for s in _sections(manager, puid, done, "table") if s["title"] == "Rejected by")["rows"])
+    assert rows["Probability of the best pose: ≥ 0.5"] == f"{int((prob < 0.5).sum()):,}"
+
+    thr = _run(manager, puid, "relion_particle_curate", {"mode": "thresholds", "limits": "rlnMaxValueProbDistribution 0.5 -\nnorm - 1.1"},
+               {"particles": parts})
+    assert _outs(thr)["particles"]["meta"]["n_particles"] == expect
+    bad = _run(manager, puid, "relion_particle_curate", {"mode": "thresholds", "limits": "nothing 1 2"}, {"particles": parts}, ok=False)
+    assert bad["status"] == "failed" and "available" in bad["error"] and "max_prob" in bad["error"]
+    job = manager.create_job(puid, "relion_particle_curate", {"mode": "thresholds"}, {"particles": parts})
+    with pytest.raises(Exception, match="at least one limit"):
+        manager.queue_job(puid, job["uid"])
+
+    clu = _run(manager, puid, "relion_particle_curate", {"mode": "cluster", "statistic": "max_prob", "clusters": 2},
+               {"particles": parts})
+    outs = _outs(clu)
+    sizes = [outs[k]["meta"]["n_particles"] for k in ("cluster_1", "cluster_2")]
+    assert sum(sizes) == n and min(sizes) > 0
+    low = rl.particle_table(rl.read_star(pdir / outs["cluster_1"]["path"])).floats("rlnMaxValueProbDistribution")
+    high = rl.particle_table(rl.read_star(pdir / outs["cluster_2"]["path"])).floats("rlnMaxValueProbDistribution")
+    assert low.mean() < high.mean()
+    assert any(s["title"] == "Probability of the best pose: clusters" for s in _sections(manager, puid, clu, "plot"))
+
+    app = create_app(manager.config, start_scheduler=False, manager=manager)
+    with TestClient(app, base_url="http://localhost:39500") as client:
+        r = client.get(f"/api/projects/{puid}/jobs/{c2d['uid']}/particle-images", params={"output": "particles", "ids": "0,3,5", "size": 48})
+        assert r.status_code == 200 and r.content[:4] == b"\x89PNG", r.text
+        r = client.get(f"/api/projects/{puid}/jobs/{c2d['uid']}/particle-images", params={"output": "classes", "ids": "0"})
+        assert r.status_code == 404
+
+
 def test_micrograph_pictures_and_sessions_over_the_api(manager, spa):
     from fastapi.testclient import TestClient
 

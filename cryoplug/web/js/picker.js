@@ -50,7 +50,7 @@ function histoSlider({ values, range: [min, max], log = false, two = false, lo =
   bars.forEach((b) => svg.appendChild(b));
   svg.append(s('text', { x: 0, y: H + 13, class: 'pk-axis' }, digits(min)),
     s('text', { x: W, y: H + 13, 'text-anchor': 'end', class: 'pk-axis' }, digits(max)),
-    log ? s('text', { x: W / 2, y: H + 13, 'text-anchor': 'middle', class: 'pk-axis' }, 'log scale') : null);
+    ...(log ? [s('text', { x: W / 2, y: H + 13, 'text-anchor': 'middle', class: 'pk-axis' }, 'log scale')] : []));
   const xOf = (v) => ((Math.max(u0, Math.min(u1, t(v))) - u0) / span) * W;
   const vals = { lo, hi };
   const sides = two ? ['lo', 'hi'] : ['lo'];
@@ -541,7 +541,7 @@ export function pickInspector(sec, { puid, job, finish = null, widen = null, new
         if (filament) total.replaceChildren(h('b', {}, fmt(n)), ` filament${n === 1 ? '' : 's'}${on}`);
         else {
           total.replaceChildren(h('b', {}, fmt(n)), ` particle${n === 1 ? '' : 's'} kept${on}`,
-            all ? h('span', { class: 'muted' }, ` (${fmt(all)} picked)`) : null);
+            ...(all ? [h('span', { class: 'muted' }, ` (${fmt(all)} picked)`)] : []));
         }
         if (joint) joint.draw(threshold, plo, phi);
         if (doneBtn) doneBtn.disabled = !n;

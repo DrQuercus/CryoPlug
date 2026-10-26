@@ -71,7 +71,9 @@ whose classes (`classes` output) go to `relion_select2d`.
 `relion_particle_sets` (A ∩ B, A − B, B − A, matched by image or by position), `relion_join` (union),
 `relion_rebalance` (caps over-represented views), `relion_downsample` (Fourier cropping to a smaller box),
 `relion_symmetry_expand` (one particle per symmetry copy, then `relion_subtract` / focused classification in C1),
-`relion_subset` (duplicates, splits, metadata ranges).
+`relion_subset` (duplicates, splits, metadata ranges), `relion_particle_curate` (particles kept on their statistics:
+interactive for people; as an agent `mode=thresholds` with `limits` such as `max_prob 0.1 -` and `norm 0.6 1.4`, one
+per line, or `mode=cluster` with a `statistic` and a number of `clusters`; read the statistics of the particles first).
 
 Also: `relion_optics_groups` (optics groups from EPU beam shifts, file names or acquisition order, before CTF
 refinement of AFIS data), `relion_topaz_denoise` (denoised micrographs for picking; extraction maps the picks back to

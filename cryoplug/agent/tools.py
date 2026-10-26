@@ -561,6 +561,16 @@ def report_lines(report: dict[str, Any] | None, full: bool = False) -> list[str]
                 line += ("; WAITING for a person to inspect the picks (threshold, power range, particles removed or added) "
                          "in the job panel (as an agent, set min_fom in relion_extract instead)")
             lines.append(line)
+        elif kind == "particle_stats":
+            line = f"[{title}] distributions of the particle statistics in the web interface"
+            if sec.get("waiting"):
+                line += ("; WAITING for a person to set the limits in the job panel (as an agent, create a "
+                         "relion_particle_curate job with mode=thresholds and limits, e.g. 'max_prob 0.1 -')")
+            elif sec.get("limits") is not None:
+                limits = "; ".join(f"{k} {'-' if lo is None else f'{lo:g}'} {'-' if hi is None else f'{hi:g}'}"
+                                   for k, (lo, hi) in (sec.get("limits") or {}).items()) or "none"
+                line += f"; limits applied: {limits}; kept {int(sec.get('kept') or 0):,} particles"
+            lines.append(line)
     return lines
 
 

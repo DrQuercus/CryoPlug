@@ -487,13 +487,35 @@ def latent_image_reader(project_dir: Path, meta: dict[str, Any], outputs: list[d
     return _READERS[key], rows
 
 
+def particle_image_reader(project_dir: Path, output: dict[str, Any], outputs: list[dict[str, Any]]):
+    """Reader of the images of a latent output (see latent_image_reader) or of a particles output (its STAR or .cs
+    file, images found from the project folder), and the row of each particle in it (None: the same)."""
+    from cryoplug import particles as pt
+    meta = output.get("meta") or {}
+    if output.get("type") == "latent":
+        return latent_image_reader(project_dir, meta, outputs)
+    rel = Path((meta.get("relion") or {}).get("star") or output.get("path") or "")
+    source = rel if rel.is_absolute() else project_dir / rel
+    if not source.is_file():
+        raise ValueError(f"the particle file {rel} is missing")
+    datadir = meta.get("datadir") if meta.get("datadir") and Path(meta["datadir"]).is_dir() else str(project_dir)
+    if source.suffix == ".star":  # RELION's image names are relative to the project folder
+        datadir = str(project_dir)
+    key = (str(source.resolve()), source.stat().st_mtime, str(datadir))
+    if key not in _READERS:
+        while len(_READERS) >= 4:
+            _READERS.pop(next(iter(_READERS))).close()
+        _READERS[key] = pt.ParticleImages(source, datadir)
+    return _READERS[key], None
+
+
 def particle_montage_png(project_dir: Path, output: dict[str, Any], ids: list[int], size: int = 96,
                          outputs: list[dict[str, Any]] | None = None, per_row: int = 8) -> bytes:
     """Contact sheet of particle images (low-pass filtered so the particles are visible) as PNG bytes."""
     from cryoplug import particles as pt
     from cryoplug.imaging import png_bytes
     with _READERS_LOCK:  # readers are shared (and closed when evicted): one request at a time
-        reader, rows = latent_image_reader(project_dir, output.get("meta") or {}, outputs or [])
+        reader, rows = particle_image_reader(project_dir, output, outputs or [])
         n = int((output.get("meta") or {}).get("n_particles") or (len(rows) if rows is not None else reader.n))
         images = []
         for i in ids:

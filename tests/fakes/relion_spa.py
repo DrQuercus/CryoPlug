@@ -524,7 +524,11 @@ def class2d(a: dict) -> None:
         ptab.set_column("rlnAnglePsi", (np.arange(len(labels)) * 37.0) % 360)
         ptab.set_column("rlnOriginXAngst", [0.5] * len(labels))
         ptab.set_column("rlnOriginYAngst", [-0.5] * len(labels))
-        ptab.set_column("rlnNormCorrection", [1.0] * len(labels))
+        stats = np.random.default_rng(7 + it)  # per-particle statistics of the alignment, as RELION writes them
+        ptab.set_column("rlnNormCorrection", stats.normal(1.0, 0.08, len(labels)))
+        ptab.set_column("rlnLogLikeliContribution", stats.normal(5.2e4, 300.0, len(labels)))
+        ptab.set_column("rlnMaxValueProbDistribution", np.clip(stats.beta(4, 3, len(labels)), 0, 1))
+        ptab.set_column("rlnNrOfSignificantSamples", stats.integers(1, 60, len(labels)))
         rl.write_star(f"{last}_data.star", list(tables.values()))
         optimiser(f"{last}_optimiser.star", f"{last}_data.star", f"{last}_model.star", root)
 

@@ -612,12 +612,13 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
 
     @app.get("/api/projects/{puid}/jobs/{juid}/particle-images")
     def particle_images(puid: str, juid: str, ids: str, output: str = "latent", size: int = 96, per_row: int = 8) -> Response:
-        """Contact sheet of the images of some particles of a latent output (for the latent explorer)."""
+        """Contact sheet of the images of some particles of a latent output (the latent explorer) or of a particles
+        output (particle curation), by their number in it."""
         from cryoplug.jobs.heterogeneity import particle_montage_png
         job = manager.job(puid, juid)
         out = next((o for o in job.get("outputs") or [] if o.get("name") == output), None)
-        if out is None or out.get("type") != "latent":
-            raise HTTPException(404, f"{juid} has no latent output '{output}'")
+        if out is None or out.get("type") not in ("latent", "particles"):
+            raise HTTPException(404, f"{juid} has no latent or particles output '{output}'")
         try:
             wanted = [int(x) for x in ids.split(",") if x.strip()][:64]
         except ValueError:

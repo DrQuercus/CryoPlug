@@ -113,13 +113,13 @@ Usually followed by: `relion_autopick`.
 RELION · GPU optional. In: particles: particles. Out: classes: class_averages, particles: particles.
 
 Sorts the particles into 2D class averages (relion_refine): VDAM, the fast gradient algorithm of RELION 4/5, or the classic EM algorithm. The class averages show up while it runs; the particles keep their class for the selection of the good classes (Select 2D classes).
-Usually followed by: `relion_select2d`, `relion_class2d`.
+Usually followed by: `relion_select2d`, `relion_class2d`, `relion_particle_curate`.
 
 ### `relion_class3d_global` — 3D classification (RELION)
 RELION · GPU optional. In: particles: particles, map: map, mask?: mask. Out: maps: volume_series, particles: particles, map_1: map, class_1: particles.
 
 Sorts the particles into 3D classes against a reference (relion_refine --K): global angular searches, local ones, or none (classification with the poses kept). Every class gives a map and its particles; Blush regularisation helps small or flexible particles.
-Usually followed by: `relion_refine3d`, `relion_class3d_global`, `relion_hetero_refine`.
+Usually followed by: `relion_refine3d`, `relion_class3d_global`, `relion_hetero_refine`, `relion_particle_curate`.
 
 ### `relion_hetero_refine` — Heterogeneous refinement (RELION)
 RELION · GPU optional. In: particles: particles, ref_1: map, ref_2: map, ref_3?: map, ref_4?: map, ref_5?: map, ref_6?: map, ref_7?: map, ref_8?: map, mask?: mask. Out: maps: volume_series, particles: particles, map_1: map, class_1: particles.
@@ -545,6 +545,12 @@ Automated checklist before submitting to the wwPDB/EMDB: map/half-map/mask consi
 Usually followed by: `deposition_package`, `wwpdb_validation`.
 
 ## Utilities
+
+### `relion_particle_curate` — Curate particles (statistics)
+built-in · interactive: a person works in it. In: particles: particles. Out: particles: particles, rejected: particles, cluster_1: particles, cluster_2: particles.
+
+Keeps the particles whose statistics are within limits, as CryoSPARC's Subset Particles by Statistic: probability of the best pose, significant samples, log-likelihood, normalisation, pick figure of merit, defocus, CTF fit, alignment shift, particles on the micrograph and any other RELION column. Interactive, the job waits with the distribution of each statistic (limits dragged on the histograms, each showing the particles the other limits keep), a density plot of two of them and images of particles kept and left out. Or applies the limits written below at once, or splits the particles into clusters of one statistic (Gaussian mixture).
+Usually followed by: `relion_refine3d`, `relion_class2d`, `relion_class3d_global`, `relion_particle_sets`.
 
 ### `custom_command` — Custom command
 Shell (custom commands) · GPU optional · administrators only, not for agents. In: map?: map, map2?: map, half_maps?: half_maps, model?: model, mask?: mask, sequence?: sequence. Out: map: map, model: model.

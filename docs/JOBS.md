@@ -471,7 +471,7 @@ Trie les particules en moyennes de classes 2D (relion_refine) : VDAM, l'algorith
 - Dans la galerie, cliquez des classes puis « Select these classes » : la sélection est créée et lancée.
 - Filaments : « Helical processing » (diamètre du tube, recherche bimodale de ψ, décalages limités le long de l'axe).
 
-**Étapes suivantes** : Select 2D classes, 2D classification (RELION)
+**Étapes suivantes** : Select 2D classes, 2D classification (RELION), Curate particles (statistics)
 
 ### 3D classification (RELION)
 
@@ -499,7 +499,7 @@ Trie les particules en classes 3D contre une référence (relion_refine --K) : r
 - Le rapport suit la part de chaque classe au fil des itérations (convergence) et montre les directions de vue de chaque classe.
 - Filaments : « Helical processing » avec twist et montée initiaux (et leur recherche locale).
 
-**Étapes suivantes** : 3D auto-refine (RELION), 3D classification (RELION), Heterogeneous refinement (RELION)
+**Étapes suivantes** : 3D auto-refine (RELION), 3D classification (RELION), Heterogeneous refinement (RELION), Curate particles (statistics)
 
 ### Heterogeneous refinement (RELION)
 
@@ -2257,6 +2257,36 @@ Checklist automatique avant OneDep : cohérence cartes/demi-cartes/masque, modè
 **Étapes suivantes** : Deposition package, wwPDB validation report (OneDep)
 
 ## Utilitaires
+
+### Curate particles (statistics)
+
+`relion_particle_curate` — intégré (aucun logiciel externe)
+
+Garde les particules dont les statistiques sont dans des limites, comme « Subset Particles by Statistic » de CryoSPARC, mais en interactif : probabilité de la meilleure pose (rlnMaxValueProbDistribution), échantillons significatifs, contribution à la log-vraisemblance, correction de normalisation, figure de mérite du picking, défocus, ajustement CTF, décalage de l'alignement, nombre de particules sur la micrographie et toute autre colonne RELION. Le job attend avec l'histogramme de chaque statistique (les barres comptent les particules que gardent les autres limites), une carte de densité de deux statistiques et des images de particules gardées et écartées. Ou bien il applique d'un coup les limites écrites, ou sépare les particules en groupes d'une statistique (mélange de gaussiennes).
+
+**Quand l'utiliser**
+
+- Après une classification 2D ou 3D : écarter les particules mal alignées (probabilité de la meilleure pose basse, beaucoup d'échantillons significatifs) avant le raffinement.
+- Après un raffinement : retirer les particules à normalisation aberrante ou à faible contribution à la vraisemblance.
+- Micrographies surchargées (agrégats) : limite sur le nombre de particules par micrographie.
+- Séparer en deux populations nettes d'une statistique : mode « Clusters » (deux gaussiennes ou plus).
+
+**À éviter / pièges**
+
+- Des limites serrées sur une seule itération : regardez les images des particules écartées avant de valider.
+- Comparer des statistiques entre jobs différents : la log-vraisemblance dépend du jeu, de la boîte et du modèle.
+
+**Entrées conseillées** : Des particules ; celles d'une classification ou d'un raffinement RELION ont le plus de statistiques.
+
+**Conseils**
+
+- Glissez sur un histogramme pour une limite (double-clic : aucune) ; « N out » compte les particules qu'elle écarte.
+- Les barres bleues tiennent compte des autres limites : on voit ce qu'une limite de plus retirerait vraiment.
+- Les images se renouvellent après chaque changement (« Other particles » pour un autre tirage).
+- Agents et scripts : mode « thresholds » avec, par ligne, « statistique minimum maximum » (- pour aucune), par exemple « max_prob 0.1 - ».
+- Au-delà d'un million de particules, les graphiques montrent un échantillon ; les limites s'appliquent à toutes.
+
+**Étapes suivantes** : 3D auto-refine (RELION), 2D classification (RELION), 3D classification (RELION), Particle sets (intersection, difference)
 
 ### Custom command
 

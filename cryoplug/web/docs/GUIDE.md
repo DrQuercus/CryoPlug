@@ -314,6 +314,16 @@ attendent, puis repartent seuls.
 | Images plus petites pour aller vite | **Downsample particles** (recadrage de Fourier) |
 | Une particule par sous-unité d'un complexe symétrique | **Symmetry expansion (RELION)** |
 | Doublons, sous-ensembles, sélection sur une colonne | **Subset selection (RELION)** |
+| Trier les particules sur leurs statistiques | **Curate particles (statistics)** (histogrammes, densité, images gardées / écartées) |
+
+**Curate particles (statistics)** attend, comme le tri des micrographies, avec l'histogramme de chaque statistique des
+particules : probabilité de la meilleure pose, échantillons significatifs, contribution à la log-vraisemblance,
+normalisation, figure de mérite du picking, défocus, ajustement CTF, décalage de l'alignement, particules par
+micrographie et toute autre colonne RELION. On tire les limites sur les histogrammes ; les barres bleues comptent les
+particules que gardent les *autres* limites (en gris : toutes), une carte de densité croise deux statistiques et deux
+bandes d'images montrent des particules gardées et écartées, renouvelées à chaque changement. **Done** écrit les
+particules gardées et les écartées. Sans attendre : le mode *thresholds* applique des limites écrites (`max_prob 0.1 -`,
+une par ligne) et le mode *cluster* sépare les particules en groupes d'une statistique (mélange de gaussiennes).
 
 ### 2.6 Groupes d'optique, filaments, débruitage
 

@@ -429,7 +429,10 @@ refinement** et **DynaMight** pour la suite. Le workflow *Movies to map (RELION 
   de toutes les micrographies et chacune avec son ajustement CTF et sa dérive, acceptée ou rejetée au clavier (A / R) ;
   *Inspect picks / manual picking* montre les particules sur les micrographies (seuil de figure de mérite et gamme de
   power score sur leurs histogrammes, clic pour retirer ou ajouter, zoom, filtre passe-bas ; mode *Filaments* : début
-  et fin de chaque tube pour l'extraction hélicale). Le travail en cours est enregistré sur le serveur.
+  et fin de chaque tube pour l'extraction hélicale) ; *Curate particles (statistics)* trie les particules sur leurs
+  statistiques (probabilité de la meilleure pose, log-vraisemblance, normalisation, défocus…) avec un histogramme par
+  statistique, une carte de densité et des images des particules gardées et écartées. Le travail en cours est
+  enregistré sur le serveur.
 - **Live preprocessing** traite les films pendant la collecte (import, mouvement, CTF, tri, picking, extraction des
   seuls nouveaux films à chaque cycle) avec un tableau de bord en direct ; *Stop after this cycle* donne les sorties.
 - **Diagnostics** à la CryoSPARC dans les raffinements et classifications : directions de vue (par classe aussi),
@@ -443,6 +446,8 @@ refinement** et **DynaMight** pour la suite. Le workflow *Movies to map (RELION 
 ![Tri interactif des micrographies](docs/images/relion_curate.png)
 
 ![Inspection des picks et picking manuel](docs/images/relion_pick_inspect.png)
+
+![Tri des particules sur leurs statistiques](docs/images/relion_particle_curate.png)
 
 ![Prétraitement en direct pendant la collecte](docs/images/relion_live.png)
 
@@ -978,7 +983,7 @@ La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes
 | Refinement | CTF refinement (RELION) · Bayesian polishing (RELION) · Real-space refinement (Phenix) · Refinement (Servalcat) · Add waters (phenix.douse) |
 | Validation | Local resolution (RELION) · Comprehensive validation (Phenix) · MolProbity · EMRinger · Map-model validation (Q-score, FSC) · Sequence register check (checkMySequence) · wwPDB validation report (OneDep) |
 | Deposition | Pre-deposition checks · Deposition package |
-| Utilities | Join star files (RELION) · Subset selection (RELION) · Particle sets (intersection, difference) · Rebalance orientations · Downsample particles · Symmetry expansion (RELION) · Optics groups (beam shift, file names) · Model operations · Merge models · Render images (ChimeraX) · Custom command |
+| Utilities | Join star files (RELION) · Subset selection (RELION) · Particle sets (intersection, difference) · Curate particles (statistics) · Rebalance orientations · Downsample particles · Symmetry expansion (RELION) · Optics groups (beam shift, file names) · Model operations · Merge models · Render images (ChimeraX) · Custom command |
 
 Les métriques intégrées (FSC, résolution directionnelle, Q-score, FSC carte-modèle, CC, inclusion
 d'atomes) sont calculées en NumPy. La résolution directionnelle utilise des FSC coniques (demi-angle 20°,

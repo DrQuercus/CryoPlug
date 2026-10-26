@@ -106,7 +106,8 @@ export const api = {
   control: (p, j, action, value = null) => request('POST', `/api/projects/${p}/jobs/${j}/control`, { action, value }),
   session: (p, j, name = 'state') => request('GET', `/api/projects/${p}/jobs/${j}/session?name=${enc(name)}`),
   saveSession: (p, j, name, data) => request('PUT', `/api/projects/${p}/jobs/${j}/session?name=${enc(name)}`, data),
-  particleImagesUrl: (p, j, ids, size = 96) => `/api/projects/${p}/jobs/${j}/particle-images?ids=${ids.join(',')}&size=${size}`,
+  particleImagesUrl: (p, j, ids, size = 96, output = 'latent', perRow = 8) =>
+    `/api/projects/${p}/jobs/${j}/particle-images?ids=${ids.join(',')}&size=${size}&output=${enc(output)}&per_row=${perRow}`,
   // maps for the 3D viewer: maxBox voxels per side at most (0: full size), encoding f32 / i16 / i8, low-pass in A
   previewUrl: (p, path, maxBox, { encoding, lowpass } = {}) => `/api/projects/${p}/preview?path=${enc(path)}`
     + `${maxBox !== undefined && maxBox !== null ? `&max_box=${maxBox}` : ''}${viewOptions(encoding, lowpass)}`,

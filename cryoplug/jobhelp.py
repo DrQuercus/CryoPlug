@@ -478,7 +478,7 @@ HELP: dict[str, dict[str, Any]] = {
             "Dans la galerie, cliquez des classes puis « Select these classes » : la sélection est créée et lancée.",
             "Filaments : « Helical processing » (diamètre du tube, recherche bimodale de ψ, décalages limités le long de l'axe).",
         ],
-        "next": ["relion_select2d", "relion_class2d"],
+        "next": ["relion_select2d", "relion_class2d", "relion_particle_curate"],
     },
     "relion_select2d": {
         "purpose": "Garde les particules des bonnes classes 2D. Comme dans CryoSPARC, le job affiche les moyennes et attend : "
@@ -556,7 +556,7 @@ HELP: dict[str, dict[str, Any]] = {
             "vue de chaque classe.",
             'Filaments : « Helical processing » avec twist et montée initiaux (et leur recherche locale).',
         ],
-        "next": ["relion_refine3d", "relion_class3d_global", "relion_hetero_refine"],
+        "next": ["relion_refine3d", "relion_class3d_global", "relion_hetero_refine", "relion_particle_curate"],
     },
     "relion_hetero_refine": {
         "purpose": "Répartit les particules entre plusieurs cartes de référence tout en les raffinant toutes (comme le "
@@ -709,6 +709,38 @@ HELP: dict[str, dict[str, Any]] = {
             "L'union des deux jeux se fait avec « Join star files ».",
         ],
         "next": ["relion_refine3d", "relion_class2d", "relion_join"],
+    },
+    "relion_particle_curate": {
+        "purpose": "Garde les particules dont les statistiques sont dans des limites, comme « Subset Particles by Statistic » "
+                   "de CryoSPARC, mais en interactif : probabilité de la meilleure pose (rlnMaxValueProbDistribution), "
+                   "échantillons significatifs, contribution à la log-vraisemblance, correction de normalisation, figure de "
+                   "mérite du picking, défocus, ajustement CTF, décalage de l'alignement, nombre de particules sur la "
+                   "micrographie et toute autre colonne RELION. Le job attend avec l'histogramme de chaque statistique (les "
+                   "barres comptent les particules que gardent les autres limites), une carte de densité de deux "
+                   "statistiques et des images de particules gardées et écartées. Ou bien il applique d'un coup les limites "
+                   "écrites, ou sépare les particules en groupes d'une statistique (mélange de gaussiennes).",
+        "when": [
+            "Après une classification 2D ou 3D : écarter les particules mal alignées (probabilité de la meilleure pose "
+            "basse, beaucoup d'échantillons significatifs) avant le raffinement.",
+            "Après un raffinement : retirer les particules à normalisation aberrante ou à faible contribution à la "
+            "vraisemblance.",
+            "Micrographies surchargées (agrégats) : limite sur le nombre de particules par micrographie.",
+            "Séparer en deux populations nettes d'une statistique : mode « Clusters » (deux gaussiennes ou plus).",
+        ],
+        "avoid": [
+            "Des limites serrées sur une seule itération : regardez les images des particules écartées avant de valider.",
+            "Comparer des statistiques entre jobs différents : la log-vraisemblance dépend du jeu, de la boîte et du modèle.",
+        ],
+        "inputs": "Des particules ; celles d'une classification ou d'un raffinement RELION ont le plus de statistiques.",
+        "tips": [
+            "Glissez sur un histogramme pour une limite (double-clic : aucune) ; « N out » compte les particules qu'elle écarte.",
+            "Les barres bleues tiennent compte des autres limites : on voit ce qu'une limite de plus retirerait vraiment.",
+            "Les images se renouvellent après chaque changement (« Other particles » pour un autre tirage).",
+            "Agents et scripts : mode « thresholds » avec, par ligne, « statistique minimum maximum » (- pour aucune), "
+            "par exemple « max_prob 0.1 - ».",
+            "Au-delà d'un million de particules, les graphiques montrent un échantillon ; les limites s'appliquent à toutes.",
+        ],
+        "next": ["relion_refine3d", "relion_class2d", "relion_class3d_global", "relion_particle_sets"],
     },
     "relion_rebalance": {
         "purpose": "Retire des particules dans les vues trop représentées (orientation préférentielle), comme « Rebalance "
