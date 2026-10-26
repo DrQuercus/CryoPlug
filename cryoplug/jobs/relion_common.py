@@ -247,3 +247,103 @@ def histogram(values: np.ndarray, bins: int = 30, lo: float | None = None, hi: f
     counts, edges = np.histogram(values, bins=bins, range=(lo, hi))
     centres = (edges[:-1] + edges[1:]) / 2
     return {"x": [round(float(c), 4) for c in centres], "y": [int(c) for c in counts]}
+
+
+# ------------------------------------------------------------------ diagnostics of refinements and classifications
+def viewing_directions(ctx: JobContext, ptab: rl.StarTable, title: str = "Viewing directions", key: str | None = None,
+                       note: str = "") -> None:
+    """Distribution of the viewing directions (azimuth = rlnAngleRot, elevation = 90° − rlnAngleTilt; % of the
+    particles), as CryoSPARC's viewing direction plot."""
+    if not (ptab.has("rlnAngleRot") and ptab.has("rlnAngleTilt")) or not len(ptab):
+        return
+    az = (ptab.floats("rlnAngleRot") + 180.0) % 360.0 - 180.0
+    el = 90.0 - np.clip(ptab.floats("rlnAngleTilt"), 0.0, 180.0)
+    hist, _y, _x = np.histogram2d(el, az, bins=[12, 24], range=[[-90, 90], [-180, 180]])
+    hist = hist[::-1] * 100.0 / max(1, len(ptab))  # top row = +90°
+    ylab = [f"{82.5 - 15 * i:+.0f}°" for i in range(12)]
+    xlab = [f"{-180 + 15 * j}°" for j in range(24)]
+    ctx.add_heatmap(title, xlab, ylab, hist.round(3).tolist(), unit="%", x_label="Azimuth (rot)", y_label="Elevation (90° − tilt)",
+                    key=key, note=note or "Even coverage is best; empty regions are views missing from the data (preferred "
+                                          "orientation), which stretch the map along those directions.")
+
+
+def iteration_history(folder: Path, root: str = "run") -> list[dict[str, Any]]:
+    """Per iteration of relion_refine: the share and estimated resolution of every class, and the current resolution
+    (``run_itNNN_model.star``; the first half set of an auto-refinement)."""
+    import re
+    found = []
+    for p in folder.glob(f"{root}_it*_model.star"):
+        m = re.fullmatch(rf"{re.escape(root)}_it(\d+)(_half1)?_model\.star", p.name)
+        if m:
+            found.append((int(m.group(1)), p))
+    out = []
+    for it, path in sorted(found):
+        try:
+            tables = rl.read_star(path)
+        except (OSError, ValueError):
+            continue
+        rec: dict[str, Any] = {"iteration": it}
+        classes = tables.get("model_classes")
+        if classes is not None and classes.has("rlnClassDistribution"):
+            rec["distribution"] = [float(v) for v in classes.floats("rlnClassDistribution")]
+            if classes.has("rlnEstimatedResolution"):
+                rec["resolution"] = [float(v) for v in classes.floats("rlnEstimatedResolution")]
+        general = tables.get("model_general")
+        if general is not None and general.value("rlnCurrentResolution") is not None:
+            try:
+                rec["current_resolution"] = float(general.value("rlnCurrentResolution"))
+            except ValueError:
+                pass
+        out.append(rec)
+    return out
+
+
+def refinement_diagnostics(ctx: JobContext, data_star: Path, folder: Path | None = None, root: str = "run",
+                           per_class: bool = False) -> None:
+    """CryoSPARC-like diagnostics of a refinement or classification: viewing directions (of each large class too),
+    posterior precision of the poses, shifts, and the share of each class over the iterations."""
+    try:
+        ptab = rl.particle_table(rl.read_star(data_star))
+    except (OSError, ValueError) as exc:
+        ctx.warn(f"No diagnostics: {exc}")
+        return
+    n = len(ptab)
+    if not n:
+        return
+    classes = np.array([int(float(c)) for c in ptab.column("rlnClassNumber")]) if ptab.has("rlnClassNumber") else np.ones(n, int)
+    viewing_directions(ctx, ptab, "Viewing directions (all particles)" if per_class else "Viewing directions", key="views")
+    if per_class:
+        values, counts = np.unique(classes, return_counts=True)
+        big = [int(c) for c, k in sorted(zip(values, counts), key=lambda t: -t[1]) if k >= 0.05 * n][:6]
+        for c in sorted(big):
+            viewing_directions(ctx, ptab.select(np.flatnonzero(classes == c)), f"Viewing directions of class {c}",
+                               key=f"views_{c}", note=f"{int((classes == c).sum()):,} particles.")
+    if ptab.has("rlnMaxValueProbDistribution"):
+        prob = ptab.floats("rlnMaxValueProbDistribution")
+        ctx.add_plot("Posterior precision of the poses", [{"name": "Particles", **histogram(prob, lo=0.0, hi=1.0)}],
+                     x_label="Probability of the best pose (rlnMaxValueProbDistribution)", y_label="Particles", style="bars",
+                     note="Near 1: the particle has one clear pose. Many particles near 0: poor or ambiguous alignment "
+                          "(junk, heterogeneity, too small a particle for the resolution).")
+    if ptab.has("rlnOriginXAngst") and ptab.has("rlnOriginYAngst"):
+        shift = np.hypot(ptab.floats("rlnOriginXAngst"), ptab.floats("rlnOriginYAngst"))
+        ctx.add_plot("Particle shifts", [{"name": "Particles", **histogram(shift, lo=0.0)}], x_label="Shift (Å)",
+                     y_label="Particles", style="bars",
+                     note="Shifts of the particles from their picked centres. A tail of large shifts: picks off-centre "
+                          "(re-extract with re-centring) or a box too small.")
+    history = iteration_history(folder or data_star.parent, root)
+    shares = [h for h in history if h.get("distribution")]
+    k = max((len(h["distribution"]) for h in shares), default=0)
+    if per_class and k > 1 and len(shares) > 1:
+        x = [h["iteration"] for h in shares]
+        ctx.add_plot("Share of each class over the iterations",
+                     [{"name": f"Class {c + 1}", "x": x, "y": [round(100 * h["distribution"][c], 2) if c < len(h["distribution"]) else None
+                                                              for h in shares]} for c in range(k)],
+                     x_label="Iteration", y_label="Particles (%)",
+                     note="Classes still exchanging particles at the end have not converged: more iterations, or a "
+                          "different regularisation T.")
+        if any(h.get("resolution") for h in shares):
+            ctx.add_plot("Estimated resolution of each class",
+                         [{"name": f"Class {c + 1}", "x": x,
+                           "y": [round(h["resolution"][c], 2) if h.get("resolution") and c < len(h["resolution"]) and h["resolution"][c] < 900 else None
+                                 for h in shares]} for c in range(k)],
+                         x_label="Iteration", y_label="Resolution (Å)")

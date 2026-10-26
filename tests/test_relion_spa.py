@@ -250,6 +250,38 @@ def test_relion_pipeline_movies_to_map(manager, spa):
     o3 = _outs(c3d)
     assert {"maps", "particles", "map_1", "map_2"} <= set(o3)
     assert sum(o3[f"class_{c}"]["meta"]["n_particles"] for c in (1, 2) if f"class_{c}" in o3) == n_sel
+    # diagnostics as in CryoSPARC: share of the classes over the iterations, viewing directions of each class
+    plots = {s["title"]: s for s in _sections(manager, puid, c3d, "plot")}
+    shares = plots["Share of each class over the iterations"]["series"]
+    assert [s["name"] for s in shares] == ["Class 1", "Class 2"] and shares[0]["x"] == [1, 2, 3]
+    assert shares[0]["y"][0] < shares[0]["y"][-1] and shares[0]["y"][-1] > shares[1]["y"][-1]
+    assert "Estimated resolution of each class" in plots and "Posterior precision of the poses" in plots
+    assert "Particle shifts" in plots
+    heat = {s["title"]: s for s in _sections(manager, puid, c3d, "heatmap")}
+    assert {"Viewing directions (all particles)", "Viewing directions of class 1", "Viewing directions of class 2"} <= set(heat)
+    assert sum(map(sum, heat["Viewing directions (all particles)"]["values"])) == pytest.approx(100, abs=0.5)
+
+    # heterogeneous refinement: a class map and a decoy of another box and pixel size (resampled onto the particles)
+    MapVolume(data=np.random.default_rng(3).normal(0, 1, (40, 40, 40)).astype(np.float32),
+              voxel=np.full(3, 1.6)).write(pdir / "decoy.mrc")
+    decoy = _run(manager, puid, "import_maps", {"map": str(pdir / "decoy.mrc"), "compute_fsc": False})
+    het = _run(manager, puid, "relion_hetero_refine", {"iterations": 4, "threads": 2, "gpus": 0},
+               {"particles": _ref(sel, "particles"), "ref_1": _ref(c3d, "map_1"), "ref_2": _ref(decoy, "map")})
+    log = _command(manager, puid, het)
+    assert f"--ref {het['uid']}/references.star" in log and "--K 2" in log and "--ini_high 40" in log
+    assert "--firstiter_cc" in log  # the imported decoy is not on RELION's absolute greyscale
+    refs = rl.read_star(pdir / het["uid"] / "references.star")["model_classes"].column("rlnReferenceImage")
+    assert refs == [f"{het['uid']}/references/ref_1.mrc", f"{het['uid']}/references/ref_2.mrc"]
+    resampled = MapVolume.read(pdir / refs[1])
+    assert resampled.shape_xyz == (32, 32, 32) and resampled.pixel_size == pytest.approx(2.0)
+    oh = _outs(het)
+    assert {"maps", "particles", "map_1", "map_2", "class_1", "class_2"} <= set(oh)
+    assert oh["class_1"]["meta"]["n_particles"] > oh["class_2"]["meta"]["n_particles"]
+    assert [r[1] for r in next(s for s in _sections(manager, puid, het, "table") if s["title"] == "References")["rows"]] \
+        == ["ref_1.mrc", "ref_2.mrc"]
+    one = manager.create_job(puid, "relion_hetero_refine", {}, {"particles": _ref(sel, "particles"), "ref_1": _ref(c3d, "map_1")})
+    with pytest.raises(Exception, match="Reference 2"):  # a class per reference: two at least
+        manager.queue_job(puid, one["uid"])
 
     # 3D auto-refine: gold standard with 3 MPI processes
     ref = _run(manager, puid, "relion_refine3d", {"threads": 2, "gpus": 0},
@@ -260,6 +292,8 @@ def test_relion_pipeline_movies_to_map(manager, spa):
     ro = _outs(ref)
     assert {"map", "half_maps", "fsc", "particles"} <= set(ro)
     assert ro["particles"]["meta"]["relion"]["optimiser"].endswith("run_optimiser.star")
+    assert [s["title"] for s in _sections(manager, puid, ref, "heatmap")] == ["Viewing directions"]
+    assert "Posterior precision of the poses" in {s["title"] for s in _sections(manager, puid, ref, "plot")}
     assert ref["resources"]["num_cpus"] == 6
 
     # mask around the refined map

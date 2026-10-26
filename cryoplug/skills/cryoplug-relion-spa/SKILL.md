@@ -23,7 +23,8 @@ DynaMight): confirm with the person first.
 | 7. 2D | `relion_class2d` | `algorithm=vdam`, `classes` 50–200, `vdam_batches` 200 | class gallery |
 | 8. Selection | `relion_select2d` | `mode=list` with `classes` (e.g. "1, 4, 7-9") as an agent; `interactive` waits for a person's clicks; `auto` uses RELION's class ranker | kept / rejected particles |
 | 9. Initial model | `relion_initial_model` | `symmetry` (made in C1, symmetry applied after), `iterations` 200 | map |
-| 10. 3D classes (optional) | `relion_class3d_global` | `classes` 4–8, `iterations` 25, `alignment=global` | class maps and particle shares |
+| 10. 3D classes (optional) | `relion_class3d_global` | `classes` 4–8, `iterations` 25, `alignment=global` | class maps, shares over the iterations, views per class |
+| 10b. Heterogeneous refinement (optional) | `relion_hetero_refine` | `ref_1`, `ref_2`… one map per class (good map + decoys, or the classes of an initial model), `ini_high` 40 | class shares, particles per class |
 | 11. Refinement | `relion_refine3d` | `mpi` ≥ 3, `symmetry`, `ini_high` 40–60 Å from an initial model | FSC, resolution |
 | 12. Mask | `relion_mask_create` | `lowpass` 15 Å, `extend` 3, `soft_edge` 6 (threshold 0 = automatic) | mask statistics; look at it on the map |
 | 13. Post-processing | `relion_postprocess`, `relion_locres` | automatic B-factor | corrected FSC, B-factor, local resolution |

@@ -493,6 +493,8 @@ def finish_refinement(ctx: JobContext, out: dict[str, Path], parts: dict[str, An
     if resolution:
         pmeta["resolution"] = round(float(resolution), 3)
     ctx.add_output("particles", "particles", out["data"], f"Refined particles ({pmeta['n_particles']:,})", meta=pmeta)
+    from cryoplug.jobs.relion_common import refinement_diagnostics
+    refinement_diagnostics(ctx, out["data"], ctx.job_dir)
 
 
 # ------------------------------------------------------------- signal subtraction

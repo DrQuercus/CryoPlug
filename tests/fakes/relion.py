@@ -99,7 +99,16 @@ def refine(argv):
     tables = rl.read_star(a["--i"])
     parts = check_images(tables)
     box, apix = grid(tables)
-    ref = check_map(a["--ref"], box, apix, "Reference", "--trust_ref_size" in a)
+    refs = None
+    if a["--ref"].endswith(".star"):  # one reference per class (MlModel::initialiseFromImages); --K is ignored
+        listing = rl.read_star(a["--ref"])
+        table = listing.get("model_classes") or next(iter(listing.values()))
+        if not table.has("rlnReferenceImage"):
+            die("When specifying a .star-file as --ref input, you need to have the _rlnReferenceImage field")
+        refs = [check_map(name, box, apix, "Reference", "--trust_ref_size" in a) for name in table.column("rlnReferenceImage")]
+        ref = refs[0]
+    else:
+        ref = check_map(a["--ref"], box, apix, "Reference", "--trust_ref_size" in a)
     if "--solvent_mask" in a:
         mask = check_map(a["--solvent_mask"], box, apix, "Solvent mask")
         if mask.data.min() < -1e-6 or mask.data.max() > 1 + 1e-6:
@@ -145,32 +154,44 @@ def refine(argv):
         # the last iteration joins the half sets: its optimiser no longer splits them (ml_optimiser_mpi.cpp)
         write_optimiser(f"{root}_optimiser.star", f"{root}_data.star", f"{root}_model.star", False, root)
         return
-    k, n_iter = int(a.get("--K", 1)), int(a.get("--iter", 25))
+    k, n_iter = (len(refs) if refs else int(a.get("--K", 1))), int(a.get("--iter", 25))
     if mpi_size() == 2:
         die("relion_refine_mpi needs at least 3 processes or a single one")
+    # class shares drifting from even to uneven: class c ends with a share proportional to k - c + 1
+    final = np.arange(k, 0, -1, dtype=float)
+    final /= final.sum()
     for it in range(1, n_iter + 1):
         print(f" Expectation iteration {it} of {n_iter}")
+        w = it / n_iter
+        share = (1 - w) / k + w * final
+        classes = rl.StarTable("model_classes")
+        classes.set_column("rlnReferenceImage", [f"{root}_it{it:03d}_class{c:03d}.mrc" for c in range(1, k + 1)])
+        classes.set_column("rlnClassDistribution", share)
+        classes.set_column("rlnEstimatedResolution", [12.0 - 6.0 * w + c for c in range(k)])
+        general = rl.StarTable("model_general", ["rlnCurrentResolution"], [[f"{12.0 - 6.0 * w:.6f}"]], loop=False)
+        rl.write_star(f"{root}_it{it:03d}_model.star", [general, classes])
     last = f"{root}_it{n_iter:03d}"
     for c in range(1, k + 1):
         z, y, x = np.indices(ref.data.shape) - box // 2
         bump = np.exp(-((x - c) ** 2 + y ** 2 + z ** 2) / 8.0).astype(np.float32)
-        ref.like(ref.data + 0.3 * bump).write(f"{last}_class{c:03d}.mrc")
-    parts.set_column("rlnClassNumber", np.arange(len(parts)) % k + 1)
+        start = refs[c - 1] if refs else ref
+        start.like(start.data + 0.3 * bump).write(f"{last}_class{c:03d}.mrc")
+    n = len(parts)
+    counts = np.round(final * n).astype(int)
+    counts[0] += n - counts.sum()
+    parts.set_column("rlnClassNumber", np.repeat(np.arange(1, k + 1), counts)[rng.permutation(n)])
     if "--skip_align" not in a:
         aligned(parts, rng)
     rl.write_star(f"{last}_data.star", list(tables.values()))
-    classes = rl.StarTable("model_classes")
-    classes.set_column("rlnReferenceImage", [f"{last}_class{c:03d}.mrc" for c in range(1, k + 1)])
-    classes.set_column("rlnClassDistribution", [1.0 / k] * k)
-    classes.set_column("rlnEstimatedResolution", [6.0] * k)
-    general = rl.StarTable("model_general", ["rlnCurrentResolution"], [["6.0"]], loop=False)
-    rl.write_star(f"{last}_model.star", [general, classes])
     write_optimiser(f"{last}_optimiser.star", f"{last}_data.star", f"{last}_model.star", False, root)
 
 
 def aligned(parts, rng):
-    """Poses after an alignment: those of the particles moved a little, or new ones (global searches)."""
+    """Poses after an alignment: those of the particles moved a little, or new ones (global searches), with the
+    probability of the best pose and the number of significant samples."""
     n = len(parts)
+    parts.set_column("rlnMaxValueProbDistribution", np.clip(rng.beta(5, 2, n), 0, 1))
+    parts.set_column("rlnNrOfSignificantSamples", rng.integers(1, 40, n))
     if parts.has("rlnAngleRot") and parts.has("rlnAngleTilt"):
         parts.set_column("rlnAngleRot", parts.floats("rlnAngleRot") + 0.5)
         return

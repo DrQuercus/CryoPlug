@@ -233,8 +233,9 @@ de RELION et se relisent dans RELION.
 | 2D | 2D classification (RELION) | VDAM, 50–200 classes | galerie redessinée à chaque itération |
 | Sélection | Select 2D classes | les bonnes classes cliquées | particules gardées / rejetées |
 | Ab initio | 3D initial model (RELION) | C1, puis symétrie appliquée | carte initiale |
-| 3D (facultatif) | 3D classification (RELION) | 4–8 classes, T = 4 | cartes des classes (série dans le visualiseur) |
-| Raffinement | 3D auto-refine (RELION) | 3 processus MPI au moins, recherches locales dès 1,8° | FSC, résolution |
+| 3D (facultatif) | 3D classification (RELION) | 4–8 classes, T = 4 | cartes des classes, part de chaque classe au fil des itérations, directions de vue par classe |
+| Nettoyage 3D (facultatif) | Heterogeneous refinement (RELION) | une carte par classe : bonne carte + leurres, ou classes d'un modèle initial | particules de chaque classe |
+| Raffinement | 3D auto-refine (RELION) | 3 processus MPI au moins, recherches locales dès 1,8° | FSC, résolution, directions de vue, précision des poses |
 | Masque | Mask creation (RELION) | filtre 15 Å, extension 3 px, bord 6 px | le masque sur la carte, dans le visualiseur |
 | Post-traitement | RELION post-processing, Local resolution (RELION) | facteur B automatique | FSC corrigée, facteur B, résolution locale |
 | Finitions | CTF refinement, Bayesian polishing, puis 3D auto-refine | les trois passes du tutoriel RELION | gain de résolution à chaque tour |

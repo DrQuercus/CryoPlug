@@ -436,6 +436,32 @@ Trie les particules en classes 3D contre une référence (relion_refine --K) : r
 - 4 à 8 classes, 25 itérations, T = 4.
 - Sans alignement, sur des particules raffinées et avec un masque : classification rapide et focalisée.
 - Les cartes des classes se jouent comme une série dans le visualiseur 3D.
+- Le rapport suit la part de chaque classe au fil des itérations (convergence) et montre les directions de vue de chaque classe.
+
+**Étapes suivantes** : 3D auto-refine (RELION), 3D classification (RELION), Heterogeneous refinement (RELION)
+
+### Heterogeneous refinement (RELION)
+
+`relion_hetero_refine` — logiciel : `relion`
+
+Répartit les particules entre plusieurs cartes de référence tout en les raffinant toutes (comme le « Heterogeneous Refinement » de CryoSPARC ; relion_refine avec une référence par classe). Les cartes venues d'autres jobs sont rééchantillonnées sur la grille des particules.
+
+**Quand l'utiliser**
+
+- Nettoyer un jeu de particules : une bonne carte et des leurres (carte de déchets, particule cassée, micelle vide) qui attirent les mauvaises particules.
+- Après un modèle initial à plusieurs classes : séparer conformations ou compositions avec ces classes comme références.
+
+**À éviter / pièges**
+
+- Des références identiques : elles se partagent les particules au hasard ; partez de cartes réellement différentes.
+- Des références trop détaillées : le filtre passe-bas initial (40 Å par défaut) évite le biais de modèle.
+
+**Entrées conseillées** : Les particules, au moins deux cartes (une par classe), un masque en option.
+
+**Conseils**
+
+- Leurres : une carte de bruit filtrée, une classe « poubelle » d'une classification, une carte d'un mauvais modèle initial.
+- Le rapport donne la part de chaque classe au fil des itérations, leur résolution estimée et les directions de vue par classe ; les particules de chaque classe sont des sorties.
 
 **Étapes suivantes** : 3D auto-refine (RELION), 3D classification (RELION)
 
@@ -516,7 +542,7 @@ Calcule une première carte 3D sans référence (relion_refine --grad --denovo_3
 - T = 4 et 200 mini-lots, comme le GUI de RELION.
 - La carte est sur l'échelle de gris absolue de RELION : les jobs 3D suivants s'en servent sans --firstiter_cc.
 
-**Étapes suivantes** : 3D classification (RELION), 3D auto-refine (RELION)
+**Étapes suivantes** : 3D classification (RELION), Heterogeneous refinement (RELION), 3D auto-refine (RELION)
 
 ### RELION 3D classification (focused)
 

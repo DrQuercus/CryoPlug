@@ -11,10 +11,10 @@ import numpy as np
 from cryoplug import relion as rl
 from cryoplug.jobs import register
 from cryoplug.jobs.base import JobContext, JobError, OutputDef, Param, Slot, extra_args_param
-from cryoplug.jobs.relion import Progress, absolute_greyscale
+from cryoplug.jobs.relion import Progress, absolute_greyscale, map_on_grid
 from cryoplug.jobs.relion_common import (
     SAMPLINGS, RelionJob, compute_params, gpus, healpix, mask_diameter, mpi, particles_out_meta, refine_compute_params,
-    relion_command, relion_particles, run_relion, threads,
+    refinement_diagnostics, relion_command, relion_particles, run_relion, threads,
 )
 from cryoplug.mrc import MapVolume
 
@@ -584,17 +584,22 @@ class RelionClass3DGlobal(RelionJob):
     outputs = [OutputDef("maps", "volume_series", "Class maps"), OutputDef("particles", "particles", "Classified particles"),
                OutputDef("map_1", "map", "Map of class 1"), OutputDef("class_1", "particles", "Particles of class 1")]
 
+    def references(self, ctx: JobContext, parts: dict[str, Any]) -> tuple[str, int, bool]:
+        """The --ref of relion_refine, the number of classes, and whether the reference is on absolute greyscale."""
+        ref = ctx.require("map")
+        return ctx.rel(ref.path), int(ctx.params["classes"]), absolute_greyscale(ctx, ref)
+
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
         parts = relion_particles(ctx, ctx.require("particles"))
-        ref = ctx.require("map")
         mask = ctx.input("mask")
         diameter = mask_diameter(ctx, parts)
         sym = (str(p["symmetry"]).strip() or "C1").upper()
-        k, iters = int(p["classes"]), int(p["iterations"])
+        ref, k, absolute = self.references(ctx, parts)
+        iters = int(p["iterations"])
         args = [*relion_command(ctx, "relion_refine", p["mpi"]), "--o", ctx.rel(ctx.path("run")), "--i", parts["ref"],
-                "--ref", ctx.rel(ref.path)]
-        if not absolute_greyscale(ctx, ref):
+                "--ref", ref]
+        if not absolute:
             args.append("--firstiter_cc")
         args.append("--trust_ref_size")
         if p["ini_high"] > 0:
@@ -682,4 +687,47 @@ def class3d_outputs(ctx: JobContext, files: dict[str, Path], it: int, k: int, sy
                    meta=particles_out_meta(ctx, files["data"], "class3d", symmetry=sym, optimiser=ctx.rel(files["optimiser"]),
                                            model=ctx.rel(files["model"])))
     ctx.add_highlight("Classes", str(len(maps)))
+    refinement_diagnostics(ctx, files["data"], ctx.job_dir, per_class=k > 1)
+
+
+# ------------------------------------------------------------------ heterogeneous refinement
+MAX_REFERENCES = 8
+
+
+@register
+class RelionHeteroRefine(RelionClass3DGlobal):
+    name = "relion_hetero_refine"
+    title = "Heterogeneous refinement (RELION)"
+    category = "Classification"
+    description = ("Sorts the particles among several reference maps while refining all of them, as CryoSPARC's "
+                   "Heterogeneous Refinement (relion_refine with one reference per class, listed in a STAR file): a good "
+                   "map with decoys (junk, broken particles, an empty micelle) cleans a particle set; the classes of an "
+                   "initial model separate conformations or compositions. References from other jobs are resampled "
+                   "onto the grid of the particles.")
+    inputs = [
+        Slot("particles", ("particles",), "Particles"),
+        *(Slot(f"ref_{i}", ("map",), f"Reference {i}", required=i <= 2, group="refs", prefer=("map",),
+               help="One map per class: the classes of an initial model, a good map and decoys..." if i == 1 else "")
+          for i in range(1, MAX_REFERENCES + 1)),
+        Slot("mask", ("mask",), "Mask", required=False, help="Soft mask around the particle (all classes)."),
+    ]
+    params = [Param(**{**p.__dict__, "default": 40.0}) if p.name == "ini_high" else p
+              for p in RelionClass3DGlobal.params if p.name != "classes"]
+
+    def references(self, ctx: JobContext, parts: dict[str, Any]) -> tuple[str, int, bool]:
+        refs = [r for i in range(1, MAX_REFERENCES + 1) if (r := ctx.input(f"ref_{i}"))]
+        if len(refs) < 2:
+            raise JobError("Connect at least two reference maps (one per class)")
+        ctx.path("references").mkdir(exist_ok=True)
+        names = []
+        for i, r in enumerate(refs, 1):
+            path, _ = map_on_grid(ctx, r, parts, f"references/ref_{i}.mrc")
+            names.append(ctx.rel(path))
+        table = rl.StarTable("model_classes")
+        table.set_column("rlnReferenceImage", names)
+        star = rl.write_star(ctx.path("references.star"), [table], comment="One reference per class (relion_refine --ref)")
+        ctx.add_table("References", ["Class", "Map", "From"],
+                      [[i, Path(nm).name, r.label or r.source] for i, (nm, r) in enumerate(zip(names, refs), 1)])
+        ctx.log(f"{len(refs)} references on the grid of the particles ({parts['box']} px, {parts['pixel_size']:g} Å/px)")
+        return ctx.rel(star), len(refs), all(absolute_greyscale(ctx, r) for r in refs)
 

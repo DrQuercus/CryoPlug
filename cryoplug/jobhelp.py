@@ -455,7 +455,7 @@ HELP: dict[str, dict[str, Any]] = {
             "T = 4 et 200 mini-lots, comme le GUI de RELION.",
             "La carte est sur l'échelle de gris absolue de RELION : les jobs 3D suivants s'en servent sans --firstiter_cc.",
         ],
-        "next": ["relion_class3d_global", "relion_refine3d"],
+        "next": ["relion_class3d_global", "relion_hetero_refine", "relion_refine3d"],
     },
     "relion_class3d_global": {
         "purpose": "Trie les particules en classes 3D contre une référence (relion_refine --K) : recherches angulaires "
@@ -474,6 +474,31 @@ HELP: dict[str, dict[str, Any]] = {
             "4 à 8 classes, 25 itérations, T = 4.",
             "Sans alignement, sur des particules raffinées et avec un masque : classification rapide et focalisée.",
             "Les cartes des classes se jouent comme une série dans le visualiseur 3D.",
+            "Le rapport suit la part de chaque classe au fil des itérations (convergence) et montre les directions de "
+            "vue de chaque classe.",
+        ],
+        "next": ["relion_refine3d", "relion_class3d_global", "relion_hetero_refine"],
+    },
+    "relion_hetero_refine": {
+        "purpose": "Répartit les particules entre plusieurs cartes de référence tout en les raffinant toutes (comme le "
+                   "« Heterogeneous Refinement » de CryoSPARC ; relion_refine avec une référence par classe). Les cartes "
+                   "venues d'autres jobs sont rééchantillonnées sur la grille des particules.",
+        "when": [
+            "Nettoyer un jeu de particules : une bonne carte et des leurres (carte de déchets, particule cassée, micelle "
+            "vide) qui attirent les mauvaises particules.",
+            "Après un modèle initial à plusieurs classes : séparer conformations ou compositions avec ces classes comme "
+            "références.",
+        ],
+        "avoid": [
+            "Des références identiques : elles se partagent les particules au hasard ; partez de cartes réellement différentes.",
+            "Des références trop détaillées : le filtre passe-bas initial (40 Å par défaut) évite le biais de modèle.",
+        ],
+        "inputs": "Les particules, au moins deux cartes (une par classe), un masque en option.",
+        "tips": [
+            "Leurres : une carte de bruit filtrée, une classe « poubelle » d'une classification, une carte d'un mauvais "
+            "modèle initial.",
+            "Le rapport donne la part de chaque classe au fil des itérations, leur résolution estimée et les directions de "
+            "vue par classe ; les particules de chaque classe sont des sorties.",
         ],
         "next": ["relion_refine3d", "relion_class3d_global"],
     },

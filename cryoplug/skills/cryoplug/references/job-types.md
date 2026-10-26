@@ -107,6 +107,12 @@ Usually followed by: `relion_select2d`, `relion_class2d`.
 RELION · GPU optional. In: particles: particles, map: map, mask?: mask. Out: maps: volume_series, particles: particles, map_1: map, class_1: particles.
 
 Sorts the particles into 3D classes against a reference (relion_refine --K): global angular searches, local ones, or none (classification with the poses kept). Every class gives a map and its particles; Blush regularisation helps small or flexible particles.
+Usually followed by: `relion_refine3d`, `relion_class3d_global`, `relion_hetero_refine`.
+
+### `relion_hetero_refine` — Heterogeneous refinement (RELION)
+RELION · GPU optional. In: particles: particles, ref_1: map, ref_2: map, ref_3?: map, ref_4?: map, ref_5?: map, ref_6?: map, ref_7?: map, ref_8?: map, mask?: mask. Out: maps: volume_series, particles: particles, map_1: map, class_1: particles.
+
+Sorts the particles among several reference maps while refining all of them, as CryoSPARC's Heterogeneous Refinement (relion_refine with one reference per class, listed in a STAR file): a good map with decoys (junk, broken particles, an empty micelle) cleans a particle set; the classes of an initial model separate conformations or compositions. References from other jobs are resampled onto the grid of the particles.
 Usually followed by: `relion_refine3d`, `relion_class3d_global`.
 
 ### `relion_select2d` — Select 2D classes
@@ -127,7 +133,7 @@ Usually followed by: `relion_mask_create`, `relion_ctf_refine`, `relion_polish`,
 RELION · GPU optional. In: particles: particles. Out: map: map, maps: volume_series, particles: particles.
 
 Makes a first 3D map from the particles without any reference (relion_refine --grad --denovo_3dref, VDAM), then aligns it on the symmetry axes and applies the symmetry (relion_align_symmetry): RELION's ab initio. Several classes separate different structures.
-Usually followed by: `relion_class3d_global`, `relion_refine3d`.
+Usually followed by: `relion_class3d_global`, `relion_hetero_refine`, `relion_refine3d`.
 
 ### `relion_class3d` — RELION 3D classification (focused)
 RELION · GPU optional. In: particles: particles, map: map, mask?: mask. Out: maps: volume_series, particles: particles, class_1: particles, map_1: map.
