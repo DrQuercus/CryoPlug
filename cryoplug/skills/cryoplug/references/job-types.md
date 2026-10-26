@@ -58,7 +58,7 @@ Fits the contrast transfer function of every micrograph with CTFFIND 4.1 or 5 (r
 Usually followed by: `relion_curate`, `relion_autopick`.
 
 ### `relion_curate` — Curate micrographs
-built-in · interactive: a person works in it. In: micrographs: micrographs. Out: micrographs: micrographs, rejected: micrographs.
+built-in · interactive: a person works in it. In: micrographs: micrographs, particles?: particles/coordinates. Out: micrographs: micrographs, rejected: micrographs, particles: particles, coordinates: coordinates.
 
 Keeps the micrographs whose CTF fit, defocus, astigmatism, motion or ice are within limits, as CryoSPARC's Manually Curate Exposures: the job waits with the distributions (limits dragged on the histograms), a scatter plot, the table of the micrographs and each micrograph with its CTF fit and drift, accepted or rejected one by one. Or applies the thresholds below at once. The rejected micrographs are an output too.
 Usually followed by: `relion_autopick`, `relion_pick_inspect`, `relion_topaz_train`.
@@ -588,9 +588,9 @@ Splits movies, micrographs or particles into optics groups, as CryoSPARC's Expos
 Usually followed by: `relion_ctf_refine`, `relion_motioncorr`, `relion_extract`.
 
 ### `relion_particle_sets` — Particle sets (intersection, difference)
-built-in. In: set_a: particles, set_b: particles. Out: both: particles, a_only: particles, b_only: particles.
+built-in. In: set_a: particles/micrographs, set_b: particles/micrographs. Out: both: particles, a_only: particles, b_only: particles.
 
-Compares two particle sets, as CryoSPARC's Particle Sets Tool: the particles in both, those of A only and those of B only. Particles are matched by image (the same extracted particle) or by position on the micrograph (particles picked or extracted twice). Join star files gives the union.
+Compares two particle sets, as CryoSPARC's Particle Sets Tool: the particles in both, those of A only and those of B only. Particles are matched by image (the same extracted particle) or by position on the micrograph (particles picked or extracted twice). Two micrograph sets are compared by micrograph name, as CryoSPARC's Exposure Sets Tool. Join star files gives the union.
 Usually followed by: `relion_refine3d`, `relion_class2d`, `relion_join`.
 
 ### `relion_rebalance` — Rebalance orientations
@@ -603,6 +603,12 @@ Usually followed by: `relion_refine3d`.
 UCSF ChimeraX (+ ISOLDE). In: map?: map, model?: model. Out: images: files.
 
 Offscreen ChimeraX rendering of the map and/or model from three orthogonal views (figures, reports).
+
+### `relion_restack` — Restack particles
+RELION. In: particles: particles. Out: particles: particles.
+
+Writes the images of a particle set into new stacks (relion_stack_create), as CryoSPARC's Restack Particles: a subset kept after cleaning then reads only its own images, from fewer and smaller files (faster on network disks, and the original extraction can be removed). Optionally re-centred on the alignment shifts, rounded to whole pixels (no interpolation).
+Usually followed by: `relion_refine3d`, `relion_class2d`, `relion_class3d_global`.
 
 ### `relion_subset` — Subset selection (RELION)
 RELION. In: data: particles/micrographs. Out: particles: particles, micrographs: micrographs, subset_1: particles, subset_2: particles.

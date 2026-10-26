@@ -256,6 +256,29 @@ WORKFLOWS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "relion_clean_3d",
+        "title": "Clean particles in 3D (decoys, heterogeneous refinement)",
+        "description": ("CryoSPARC's junk removal in RELION: particles (those of a 2D selection, a RELION .star file or a "
+                        "CryoSPARC job) → initial model with three classes (a good map and decoys: junk, broken or "
+                        "aggregated particles) → heterogeneous refinement against these maps → the good classes clicked "
+                        "in its gallery (Select 3D classes waits for you: the chain waits for it) → 3D auto-refine of "
+                        "the particles kept, from the initial model. Repeat the heterogeneous refinement on the particles "
+                        "kept while junk classes still take particles."),
+        "nodes": [
+            {"id": "import", "type": "import_particles", "title": "Particles to clean", "ask": ["path"]},
+            {"id": "inimodel", "type": "relion_initial_model", "title": "Initial model (a good class and decoys)",
+             "params": {"classes": 3}, "inputs": {"particles": ["import", "particles"]}, "ask": ["classes", "symmetry", "gpus"]},
+            {"id": "hetero", "type": "relion_hetero_refine", "title": "Heterogeneous refinement against the classes",
+             "inputs": {"particles": ["import", "particles"], "ref_1": ["inimodel", "map_1"], "ref_2": ["inimodel", "map_2"],
+                        "ref_3": ["inimodel", "map_3"], "ref_4": ["inimodel", "map_4"]},
+             "ask": ["iterations", "gpus"]},
+            {"id": "select", "type": "relion_select3d", "title": "Select the good 3D classes",
+             "inputs": {"particles": ["hetero", "particles"]}},
+            {"id": "refine", "type": "relion_refine3d", "title": "3D auto-refine of the particles kept",
+             "inputs": {"particles": ["select", "particles"], "map": ["inimodel", "map"]}, "ask": ["symmetry", "mpi", "gpus"]},
+        ],
+    },
+    {
         "id": "relion_focused_refinement",
         "title": "Focused refinement with signal subtraction (RELION)",
         "description": ("Local refinement of a region in RELION, from a CryoSPARC consensus refinement: particles and maps "

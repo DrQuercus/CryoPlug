@@ -242,7 +242,10 @@ de RELION et se relisent dans RELION.
 
 Le workflow **Movies to map (RELION single particle)** crée toute la chaîne d'un coup : elle tourne jusqu'au tri des
 micrographies, qui attend votre tri, puis jusqu'à la sélection des classes 2D, qui attend vos clics ; les jobs suivants
-attendent, puis repartent seuls.
+attendent, puis repartent seuls. Le workflow **Clean particles in 3D (decoys, heterogeneous refinement)** nettoie un
+jeu de particules comme dans CryoSPARC : modèle initial à trois classes (une bonne et des leurres), *Heterogeneous
+refinement* contre ces cartes, sélection des bonnes classes 3D (le job attend vos clics), puis 3D auto-refine des
+particules gardées.
 
 ### 2.2 Configurer RELION, CTFFIND et MotionCor2
 
@@ -267,7 +270,9 @@ attendent, puis repartent seuls.
   plus proche suit la souris, double-clic : plus de limite), regardez les micrographies rejetées (filtre *Browse* :
   *Rejected*) et décidez à la main : **A** accepte, **R** rejette, **U** rend la décision aux limites, ← → pour
   avancer. Les lignes du tableau et les points du nuage s'ouvrent d'un clic. Le travail est enregistré au fil de l'eau ;
-  **Done** écrit les micrographies gardées et les rejetées. Le mode *thresholds* applique les seuils d'un coup.
+  **Done** écrit les micrographies gardées et les rejetées. Le mode *thresholds* applique les seuils d'un coup. Avec des
+  picks ou des particules connectés, leur nombre par micrographie devient un histogramme de plus (micrographies trop
+  chargées ou vides) et ceux des micrographies gardées forment une sortie.
 - **Inspect picks / manual picking** montre les particules repérées sur chaque micrographie : seuil de figure de mérite
   glissé sur son histogramme (le nombre gardé par micrographie suit), gamme de *power score* (puissance locale autour
   de chaque pick, comme dans CryoSPARC : la glace cristalline, le carbone et la contamination sont hauts, la glace vide
@@ -300,6 +305,8 @@ attendent, puis repartent seuls.
 - Plus court : dans la galerie d'une classification terminée, cliquez des classes puis **Select these classes** : la
   sélection est créée et lancée.
 - Mode *Automatic* : le class ranker de RELION garde les classes de score ≥ 0,5 (réglable).
+- **By thresholds…** dans la galerie coche d'un coup les classes d'au moins N particules, de résolution donnée ou
+  meilleure (et de score du class ranker donné), comme les seuils de Select 2D de CryoSPARC.
 - En 3D, la classification et le **Heterogeneous refinement** montrent une galerie des cartes de classes (projections
   selon z, y, x et coupe centrale) ; cliquez les bonnes classes puis **Select these classes** : **Select 3D classes**
   réunit leurs particules. Le job peut aussi attendre vos clics, comme en 2D.
@@ -315,6 +322,8 @@ attendent, puis repartent seuls.
 | Une particule par sous-unité d'un complexe symétrique | **Symmetry expansion (RELION)** |
 | Doublons, sous-ensembles, sélection sur une colonne | **Subset selection (RELION)** |
 | Trier les particules sur leurs statistiques | **Curate particles (statistics)** (histogrammes, densité, images gardées / écartées) |
+| Réécrire un sous-ensemble dans ses propres piles | **Restack particles** (une pile par micrographie, recentrage arrondi) |
+| Micrographies communes à deux jeux, ou d'un jeu sans l'autre | **Particle sets** avec deux jeux de micrographies (par nom) |
 
 **Curate particles (statistics)** attend, comme le tri des micrographies, avec l'histogramme de chaque statistique des
 particules : probabilité de la meilleure pose, échantillons significatifs, contribution à la log-vraisemblance,

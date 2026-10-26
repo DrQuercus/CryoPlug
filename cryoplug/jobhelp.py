@@ -334,13 +334,16 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "avoid": ["Des seuils fixés à l'aveugle : regardez d'abord les histogrammes et quelques micrographies (mode interactif)."],
         "inputs": "Les micrographies avec CTF ; le mouvement et la dérive sont relus dans la correction de mouvement quand "
-                  "l'estimation de la CTF les a perdus.",
+                  "l'estimation de la CTF les a perdus. En option, des particules ou des picks : leur nombre par "
+                  "micrographie devient un critère et ceux des micrographies gardées forment une sortie.",
         "tips": [
             "Résolution d'ajustement CTF ≤ 5-8 Å selon les données ; mouvement total < 30-50 Å.",
             "Clavier : ← → pour passer d'une micrographie à l'autre (dans l'ordre et le filtre du tableau), A accepte, R "
             "rejette, U rend la décision aux limites ; double-clic sur un histogramme : plus de limite.",
             "Le travail est enregistré au fil de l'eau ; Done sans rien envoyer (agent) applique les seuils des paramètres.",
             "La sortie « rejected » permet de vérifier ce qui a été écarté.",
+            "Avec les picks ou les particules connectés : écartez les micrographies trop chargées (agrégats, carbone) ou "
+            "vides ; les particules des micrographies gardées suivent (sortie « particles » ou « coordinates »).",
         ],
         "next": ["relion_autopick", "relion_pick_inspect", "relion_topaz_train"],
     },
@@ -497,6 +500,8 @@ HELP: dict[str, dict[str, Any]] = {
             "Maj + clic sélectionne une série de classes ; boutons Tout, Aucune, Inverser.",
             "« Au plus N particules par classe » équilibre les vues avant un modèle initial.",
             "Class ranker : score de 0 à 1 (0,5 par défaut) ; il demande l'environnement Python de RELION 5.",
+            "« By thresholds… » coche d'un coup les classes d'au moins N particules, à résolution donnée ou meilleure "
+            "(et score du class ranker).",
         ],
         "next": ["relion_initial_model", "relion_class2d", "relion_class3d_global", "relion_refine3d", "relion_topaz_train",
                  "relion_autopick"],
@@ -697,15 +702,17 @@ HELP: dict[str, dict[str, Any]] = {
     "relion_particle_sets": {
         "purpose": "Compare deux jeux de particules (comme le « Particle Sets Tool » de CryoSPARC) : les particules "
                    "présentes dans les deux, celles de A seulement et celles de B seulement. Les particules se reconnaissent "
-                   "à leur image ou à leur position sur la micrographie.",
+                   "à leur image ou à leur position sur la micrographie. Deux jeux de micrographies se comparent par leur "
+                   "nom, comme avec l'« Exposure Sets Tool ».",
         "when": [
             "Retirer d'un jeu les particules d'un autre (classes « poubelle », particules déjà traitées).",
             "Garder les particules retenues par deux nettoyages indépendants (2D et 3D, deux pickings).",
         ],
         "avoid": ["La correspondance par image entre particules ré-extraites : elles ont d'autres noms d'image ; prenez la position."],
-        "inputs": "Deux jeux de particules (RELION ou CryoSPARC).",
+        "inputs": "Deux jeux de particules (RELION ou CryoSPARC), ou deux jeux de micrographies.",
         "tips": [
             "Position : distance d'environ un quart du diamètre ; les décalages de l'alignement sont pris en compte.",
+            "Micrographies : par nom complet, ou par nom de fichier quand les dossiers diffèrent (mouvement et CTF).",
             "L'union des deux jeux se fait avec « Join star files ».",
         ],
         "next": ["relion_refine3d", "relion_class2d", "relion_join"],
@@ -741,6 +748,24 @@ HELP: dict[str, dict[str, Any]] = {
             "Au-delà d'un million de particules, les graphiques montrent un échantillon ; les limites s'appliquent à toutes.",
         ],
         "next": ["relion_refine3d", "relion_class2d", "relion_class3d_global", "relion_particle_sets"],
+    },
+    "relion_restack": {
+        "purpose": "Réécrit les images d'un jeu de particules dans de nouvelles piles (relion_stack_create), comme « Restack "
+                   "Particles » de CryoSPARC : un sous-ensemble gardé après nettoyage ne lit plus que ses propres images, "
+                   "dans des fichiers moins nombreux et plus petits. Les particules peuvent être recentrées sur les décalages "
+                   "de l'alignement, arrondis au pixel (sans interpolation).",
+        "when": [
+            "Après le nettoyage 2D/3D d'un grand jeu : les jobs suivants lisent moins de données (disques réseau, cache).",
+            "Avant de supprimer une extraction volumineuse dont on ne garde qu'une partie.",
+        ],
+        "avoid": ["Un jeu encore appelé à changer beaucoup : chaque restack réécrit toutes les images gardées."],
+        "inputs": "Des particules (le recentrage demande leurs décalages : classification ou raffinement).",
+        "tips": [
+            "Une pile par micrographie par défaut, comme l'extraction ; une pile unique s'écrit image par image.",
+            "Le recentrage arrondi garde le reste du décalage dans le fichier ; pour un vrai recentrage avec nouvelle "
+            "boîte, ré-extrayez (extraction avec « Particles to re-extract »).",
+        ],
+        "next": ["relion_refine3d", "relion_class2d", "relion_class3d_global"],
     },
     "relion_rebalance": {
         "purpose": "Retire des particules dans les vues trop représentées (orientation préférentielle), comme « Rebalance "

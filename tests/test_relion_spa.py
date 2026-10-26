@@ -707,6 +707,37 @@ def test_relion_movies_to_map_workflow(manager, movies):
     assert post["map_sharp"]["meta"]["resolution"] == 3.6
 
 
+def test_clean_in_3d_workflow(manager, spa):
+    """The 3D cleaning workflow: particles imported → initial model with 3 classes → heterogeneous refinement against
+    them → the selection of the good classes waits for the clicks → auto-refine of the particles kept."""
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = _ref(ctf, "micrographs")
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1},
+                {"micrographs": mics})
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1},
+               {"micrographs": mics, "coordinates": _ref(pick, "coordinates")})
+    res = manager.instantiate_workflow(puid, "relion_clean_3d", queue=True, overrides={
+        "import": {"path": str(pdir / _outs(ext)["particles"]["path"])},
+        "inimodel": {"iterations": 20, "threads": 1, "gpus": 0}, "hetero": {"iterations": 2, "threads": 1, "gpus": 0},
+        "refine": {"threads": 1, "gpus": 0}})
+    assert not res["problems"], res["problems"]
+    by_type = {j["type"]: j for j in res["jobs"]}
+    hetero = by_type["relion_hetero_refine"]
+    assert {k: v["output"] for k, v in hetero["inputs"].items() if k.startswith("ref_")} == {
+        "ref_1": "map_1", "ref_2": "map_2", "ref_3": "map_3", "ref_4": "map_4"}
+    uids = [j["uid"] for j in res["jobs"]]
+    select = by_type["relion_select3d"]
+    run_until_done(manager, puid, uids[:uids.index(select["uid"]) + 1], timeout=300)
+    assert manager.job(puid, select["uid"])["status"] == "waiting", log_of(manager, puid, hetero["uid"])
+    assert "--ref" in _command(manager, puid, hetero)
+    done = manager.finish_interactive(puid, select["uid"], json.dumps({"classes": [1, 2]}))
+    assert done["status"] == "completed"
+    run_until_done(manager, puid, uids, timeout=300)
+    states = {j["type"]: manager.job(puid, j["uid"])["status"] for j in res["jobs"]}
+    assert all(s == "completed" for s in states.values()), states
+
+
 def test_agents_read_the_2d_classes():
     """AI agents see the classes of a gallery (largest first), and whether a selection waits for a person."""
     from cryoplug.agent.tools import report_lines
@@ -851,6 +882,74 @@ def test_filament_picking_and_helical_extraction(manager, spa):
     parts = rl.particle_table(rl.read_star(pdir / _outs(ext)["particles"]["path"]))
     assert len(parts) > 3 * 10 and set(parts.column("rlnHelicalTubeID")) == {"1", "2"}
     assert float(parts.column("rlnAngleTiltPrior")[0]) == 90.0
+
+
+def test_curation_counts_the_particles_of_each_micrograph(manager, spa):
+    """With picks or particles connected, the curation of micrographs limits their number per micrograph and passes
+    on those of the micrographs kept."""
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = _ref(ctf, "micrographs")
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1},
+                {"micrographs": mics})
+    counts = {m: rl.star_rows(pdir / c) for m, c in rl.coordinate_files(pdir / _outs(pick)["coordinates"]["path"])}
+    limit = sorted(counts.values())[len(counts) // 2]
+    wanted = {m for m, c in counts.items() if c >= limit}
+    assert 0 < len(wanted) < len(counts)
+    cur = _run(manager, puid, "relion_curate", {"mode": "thresholds", "min_particles": limit},
+               {"micrographs": mics, "particles": _ref(pick, "coordinates")})
+    out = _outs(cur)
+    kept = rl.micrograph_table(rl.read_star(pdir / out["micrographs"]["path"])).column("rlnMicrographName")
+    assert set(kept) == wanted
+    picks = dict(rl.coordinate_files(pdir / out["coordinates"]["path"]))
+    assert set(picks) == wanted and out["coordinates"]["meta"]["n_particles"] == sum(counts[m] for m in wanted)
+    rows = dict(next(s for s in _sections(manager, puid, cur, "table") if s["title"] == "Rejected by")["rows"])
+    assert rows[f"Particles ≥ {limit}"] == str(len(counts) - len(wanted))
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1},
+               {"micrographs": mics, "coordinates": _ref(pick, "coordinates")})
+    cur2 = _run(manager, puid, "relion_curate", {"mode": "thresholds", "max_particles": limit - 1},
+                {"micrographs": mics, "particles": _ref(ext, "particles")})
+    parts = rl.particle_table(rl.read_star(pdir / _outs(cur2)["particles"]["path"]))
+    assert parts and set(parts.column("rlnMicrographName")) <= set(counts) - wanted
+    bad = _run(manager, puid, "relion_curate", {"mode": "thresholds", "min_particles": 5}, {"micrographs": mics}, ok=False)
+    assert bad["status"] == "failed" and "connect the particles" in bad["error"]
+
+
+def test_restack_and_micrograph_sets(manager, spa):
+    """Restack particles (relion_stack_create, one stack per micrograph, re-centred) and two micrograph sets compared."""
+    puid, ctf, mc = spa["puid"], spa["ctf"], spa["motioncorr"]
+    pdir = manager.project_dir(puid)
+    mics = _ref(ctf, "micrographs")
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1},
+                {"micrographs": mics})
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1},
+               {"micrographs": mics, "coordinates": _ref(pick, "coordinates")})
+    c2d = _run(manager, puid, "relion_class2d", {"classes": 2, "vdam_batches": 10, "threads": 1, "gpus": 0},
+               {"particles": _ref(ext, "particles")})
+    no = _run(manager, puid, "relion_restack", {"recentre": True}, {"particles": _ref(ext, "particles")}, ok=False)
+    assert no["status"] == "failed" and "shifts" in no["error"]
+    rs = _run(manager, puid, "relion_restack", {"recentre": True}, {"particles": _ref(c2d, "particles")})
+    log = _command(manager, puid, rs)
+    assert (f"relion_stack_create --i {_outs(c2d)['particles']['path']} --o {rs['uid']}/particles --split_per_micrograph "
+            "--apply_rounded_offsets_only --float16") in log
+    before = rl.particle_table(rl.read_star(pdir / _outs(c2d)["particles"]["path"]))
+    after = rl.particle_table(rl.read_star(pdir / _outs(rs)["particles"]["path"]))
+    assert len(after) == len(before) and all(n.split("@")[1].startswith(f"{rs['uid']}/particles_") for n in after.column("rlnImageName"))
+    assert np.abs(after.floats("rlnOriginXAngst")).max() <= 1.0 + 1e-6  # whole pixels applied, less than one left
+    from cryoplug.particles import ParticleImages
+    images = ParticleImages(pdir / _outs(rs)["particles"]["path"], pdir)
+    assert images.n == len(after) and images.image(0).shape == (32, 32)
+    # micrograph sets: the CTF micrographs against a curation of them
+    cur = _run(manager, puid, "relion_curate", {"mode": "thresholds", "max_defocus": 15000}, {"micrographs": mics})
+    sets = _run(manager, puid, "relion_particle_sets", {}, {"set_a": mics, "set_b": _ref(cur, "micrographs")})
+    out = _outs(sets)
+    kept = rl.star_rows(pdir / _outs(cur)["micrographs"]["path"])
+    assert out["both"]["type"] == "micrographs" and out["both"]["meta"]["n_micrographs"] == kept
+    assert out.get("a_only", {}).get("meta", {}).get("n_micrographs", 0) == 4 - kept and "b_only" not in out
+    other = _run(manager, puid, "relion_particle_sets", {}, {"set_a": _ref(mc, "micrographs"), "set_b": _ref(cur, "micrographs")})
+    assert _outs(other)["both"]["meta"]["n_micrographs"] == kept  # motion-corrected and CTF micrographs: the same names
+    mixed = _run(manager, puid, "relion_particle_sets", {}, {"set_a": mics, "set_b": _ref(ext, "particles")}, ok=False)
+    assert mixed["status"] == "failed" and "not one of each" in mixed["error"]
 
 
 def test_particle_curation_by_statistics(manager, spa):

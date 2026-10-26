@@ -512,7 +512,8 @@ exit 0
                  "relion_run_ctffind", "relion_run_ctffind_mpi", "relion_autopick", "relion_autopick_mpi",
                  "relion_preprocess", "relion_preprocess_mpi", "relion_align_symmetry", "relion_class_ranker",
                  "relion_mask_create", "relion_ctf_refine", "relion_ctf_refine_mpi", "relion_motion_refine",
-                 "relion_motion_refine_mpi", "relion_star_handler", "relion_flex_analyse", "relion_python_dynamight"):
+                 "relion_motion_refine_mpi", "relion_star_handler", "relion_flex_analyse", "relion_python_dynamight",
+                 "relion_stack_create"):
         (d / prog).symlink_to(relion)
     # programs RELION calls (the fake RELION only checks that they can be run)
     for prog in ("ctffind", "MotionCor2"):

@@ -30,7 +30,10 @@ DynaMight): confirm with the person first.
 | 13. Post-processing | `relion_postprocess`, `relion_locres` | automatic B-factor | corrected FSC, B-factor, local resolution |
 | 14. Polishing loop | `relion_ctf_refine` (`mode=complete`) → `relion_polish` (`mode=train` once, then polish) → `relion_refine3d` | | resolution gain after each round |
 
-Workflow `relion_spa` creates steps 1–13 (CTF refinement and the second refinement optional). Its curation and
+Workflow `relion_spa` creates steps 1–13 (CTF refinement and the second refinement optional); workflow
+`relion_clean_3d` cleans a particle set in 3D (initial model with decoy classes → heterogeneous refinement → Select 3D
+classes, which waits for a person or takes `mode=list` → auto-refine). `relion_curate` also takes the picks or
+particles of the micrographs (`min_particles` / `max_particles`, and their subset as an output). Its curation and
 selection jobs are interactive: a person drags the limits on the distributions of the micrographs and clicks the
 classes in the job panel. As an agent, read the CTF and motion statistics and the class table of the 2D job (particles
 and resolution per class), and use a `relion_curate` job with `mode=thresholds` and a `relion_select2d` job with
@@ -71,7 +74,8 @@ whose classes (`classes` output) go to `relion_select2d`.
 `relion_particle_sets` (A ∩ B, A − B, B − A, matched by image or by position), `relion_join` (union),
 `relion_rebalance` (caps over-represented views), `relion_downsample` (Fourier cropping to a smaller box),
 `relion_symmetry_expand` (one particle per symmetry copy, then `relion_subtract` / focused classification in C1),
-`relion_subset` (duplicates, splits, metadata ranges), `relion_particle_curate` (particles kept on their statistics:
+`relion_subset` (duplicates, splits, metadata ranges), `relion_restack` (a subset rewritten into its own stacks,
+relion_stack_create), `relion_particle_curate` (particles kept on their statistics:
 interactive for people; as an agent `mode=thresholds` with `limits` such as `max_prob 0.1 -` and `norm 0.6 1.4`, one
 per line, or `mode=cluster` with a `statistic` and a number of `clusters`; read the statistics of the particles first).
 

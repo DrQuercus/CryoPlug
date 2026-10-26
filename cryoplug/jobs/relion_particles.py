@@ -53,8 +53,9 @@ class RelionParticleSets(JobType):
     software = ["RELION"]
     description = ("Compares two particle sets, as CryoSPARC's Particle Sets Tool: the particles in both, those of A "
                    "only and those of B only. Particles are matched by image (the same extracted particle) or by "
-                   "position on the micrograph (particles picked or extracted twice). Join star files gives the union.")
-    inputs = [Slot("set_a", ("particles",), "Set A"), Slot("set_b", ("particles",), "Set B")]
+                   "position on the micrograph (particles picked or extracted twice). Two micrograph sets are compared "
+                   "by micrograph name, as CryoSPARC's Exposure Sets Tool. Join star files gives the union.")
+    inputs = [Slot("set_a", ("particles", "micrographs"), "Set A"), Slot("set_b", ("particles", "micrographs"), "Set B")]
     params = [
         Param("match", "choice", "image", choices=["image", "position"], label="Match the particles by",
               labels={"image": "Image (rlnImageName)", "position": "Position on the micrograph"},
@@ -68,6 +69,9 @@ class RelionParticleSets(JobType):
 
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
+        if {ctx.require("set_a").type, ctx.require("set_b").type} != {"particles"}:
+            self.micrograph_sets(ctx)
+            return
         a, b = relion_particles(ctx, ctx.require("set_a")), relion_particles(ctx, ctx.require("set_b"))
         ta, tb = a["tables"], b["tables"]
         na, nb = len(_main(ta)), len(_main(tb))
@@ -113,6 +117,88 @@ class RelionParticleSets(JobType):
             ctx.add_output(name, "particles", out, f"{n:,} particles {label}", meta=particles_out_meta(ctx, out, "sets"))
         if not (a_hit.any() or (~a_hit).any() or (~b_hit).any()):
             raise JobError("Both sets are empty")
+
+    def micrograph_sets(self, ctx: JobContext) -> None:
+        """Two micrograph sets compared by name (the file name when the folders differ)."""
+        from cryoplug.jobs.relion_common import micrograph_meta, star_of
+        a, b = ctx.require("set_a"), ctx.require("set_b")
+        if a.type != b.type:
+            raise JobError("Compare two particle sets or two micrograph sets, not one of each")
+        star_a, star_b = star_of(ctx, a)[0], star_of(ctx, b)[0]
+        ta, tb = rl.read_star(star_a), rl.read_star(star_b)
+        names_a, names_b = rl.micrograph_table(ta).column("rlnMicrographName"), rl.micrograph_table(tb).column("rlnMicrographName")
+        full = bool(set(names_a) & set(names_b))
+        key = (lambda m: m) if full else (lambda m: Path(m).name)  # noqa: E731
+        in_b, in_a = {key(m) for m in names_b}, {key(m) for m in names_a}
+        a_hit = np.array([key(m) in in_b for m in names_a], dtype=bool)
+        b_hit = np.array([key(m) in in_a for m in names_b], dtype=bool)
+        how = "micrograph name" if full else "micrograph file name"
+        ctx.add_table(f"Micrograph sets (matched by {how})", ["", "Micrographs"], [
+            ["Set A", f"{len(names_a):,}"], ["Set B", f"{len(names_b):,}"], ["In both (A ∩ B)", f"{int(a_hit.sum()):,}"],
+            ["A only", f"{int((~a_hit).sum()):,}"], ["B only", f"{int((~b_hit).sum()):,}"]])
+        ctx.add_highlight("Both", f"{int(a_hit.sum()):,}")
+        passed = {k: v for k, v in a.meta.items() if k in ("has_motion", "power_spectra", "motion_star")}
+        for name, star, keep, label, src in (("both", star_a, a_hit, "in both sets", "A"), ("a_only", star_a, ~a_hit, "of A only", "A"),
+                                             ("b_only", star_b, ~b_hit, "of B only", "B")):
+            n = int(keep.sum())
+            if not n:
+                ctx.log(f"No micrograph {label}")
+                continue
+            out = rl.subset_star(star, ctx.path(f"micrographs_{name}.star"), keep, comment=f"Micrographs {label} (from set {src})")
+            ctx.add_output(name, "micrographs", out, f"{n:,} micrographs {label}", meta=micrograph_meta(ctx, out, "sets", **passed))
+
+
+# ------------------------------------------------------------------ restacking
+@register
+class RelionRestack(JobType):
+    name = "relion_restack"
+    title = "Restack particles"
+    category = "Utilities"
+    tool = "relion"
+    software = ["RELION"]
+    description = ("Writes the images of a particle set into new stacks (relion_stack_create), as CryoSPARC's Restack "
+                   "Particles: a subset kept after cleaning then reads only its own images, from fewer and smaller files "
+                   "(faster on network disks, and the original extraction can be removed). Optionally re-centred on the "
+                   "alignment shifts, rounded to whole pixels (no interpolation).")
+    inputs = [Slot("particles", ("particles",), "Particles")]
+    params = [
+        Param("split_per_micrograph", "bool", True, label="One stack per micrograph",
+              help="As the extraction writes them. Otherwise a single stack, written one image at a time."),
+        Param("recentre", "bool", False, label="Re-centre on the alignment shifts",
+              help="The shifts rounded to whole pixels are applied to the images (no interpolation); what remains stays "
+                   "in the file (--apply_rounded_offsets_only)."),
+        Param("float16", "bool", True, label="Images in 16-bit floats", help="Half the disk space (read by RELION 4 and 5)."),
+        extra_args_param(),
+    ]
+    outputs = [OutputDef("particles", "particles", "Restacked particles")]
+
+    def run(self, ctx: JobContext) -> None:
+        p = ctx.params
+        pin = relion_particles(ctx, ctx.require("particles"))
+        if p["recentre"] and not _main(pin["tables"]).has("rlnOriginXAngst"):
+            raise JobError("Re-centring needs the alignment shifts (rlnOriginXAngst): refine or classify the particles first")
+        root = ctx.path("particles")  # relion_stack_create writes <root>.star and <root>[_<micrograph>].mrcs
+        args = [ctx.program("relion", "relion_stack_create"), "--i", pin["ref"], "--o", ctx.rel(root)]
+        args.append("--split_per_micrograph" if p["split_per_micrograph"] else "--one_by_one")
+        if p["recentre"]:
+            args.append("--apply_rounded_offsets_only")
+        if p["float16"]:
+            args.append("--float16")
+        args += ctx.split_extra()
+        ctx.progress(0.05, f"relion_stack_create: {pin['n']:,} particles")
+        run_relion(ctx, args)
+        out = ctx.path("particles.star")
+        if not out.exists():
+            raise JobError("relion_stack_create wrote no particles.star (see the log)")
+        n = rl.star_rows(out)
+        stacks = [f for f in ctx.job_dir.rglob("*.mrcs")]
+        size = sum(f.stat().st_size for f in stacks)
+        ctx.add_table("Restacking", ["", "Value"], [
+            ["Particles", f"{n:,} (of {pin['n']:,})"], ["Stacks", f"{len(stacks):,}"],
+            ["Size", f"{size / 1e9:.2f} GB" if size >= 1e8 else f"{size / 1e6:.1f} MB"],
+            ["Re-centred", "yes (rounded shifts)" if p["recentre"] else "no"]])
+        ctx.add_highlight("Particles", f"{n:,}")
+        ctx.add_output("particles", "particles", out, f"{n:,} restacked particles", meta=particles_out_meta(ctx, out, "restack"))
 
 
 # ------------------------------------------------------------------ rebalance orientations

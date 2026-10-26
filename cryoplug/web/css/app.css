@@ -549,6 +549,11 @@ button.cls-tile:focus-visible { outline: 2px solid var(--focus); outline-offset:
 .xc-scatter-head select { max-width: 42%; }
 .xc-scatter { width: 100%; height: 300px; display: block; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-1); }
 /* particle curation: histograms of the statistics, density plot, particle images */
+.cls-thr { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px 8px; margin: 4px 0 8px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface-1); }
+.cls-thr label { display: inline-flex; align-items: center; gap: 5px; }
+.cls-thr input.cls-thr-input { width: 80px; padding: 3px 6px; }
+.cls-thr label { white-space: nowrap; }
 .pc { outline: none; display: flex; flex-direction: column; gap: 8px; }
 .pc-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .panel.wide .pc-body { grid-template-columns: minmax(0, 1fr) 400px; align-items: start; }

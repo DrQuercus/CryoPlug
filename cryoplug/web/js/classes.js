@@ -102,10 +102,36 @@ export function classGallery(sec, { puid, job, finish = null, newSelection = nul
   const zoom = h('input', { type: 'range', min: 72, max: 200, step: 8, value: view.size, 'aria-label': 'Size of the class averages',
     oninput: (e) => { view.size = +e.target.value; grid.style.setProperty('--cls-size', `${view.size}px`); } });
   const pickAll = (fn) => () => { records.forEach((r) => (fn(r) ? chosen.add(r.class) : chosen.delete(r.class))); refresh(); };
+  // quick selection, as CryoSPARC's thresholds of Select 2D: the classes with enough particles, a good enough
+  // resolution (and class ranker score); an empty field is not used
+  const hasScore = records.some((r) => r.score !== undefined);
+  const field = (label, unit, title, attrs) => {
+    const input = h('input', { type: 'number', class: 'cls-thr-input', 'aria-label': title, title, ...attrs });
+    return [input, h('label', { class: 'muted small', title }, label, input, unit)];
+  };
+  const [minParts, minPartsBox] = field('Particles ≥', '', 'Classes with at least this many particles', { min: 0, step: 1, placeholder: 'any' });
+  const [maxRes, maxResBox] = field('Resolution ≤', 'Å', 'Classes at this resolution or better', { min: 0, step: 0.5, placeholder: 'any' });
+  const [minScore, minScoreBox] = hasScore ? field('Score ≥', '', 'Classes with at least this class ranker score', { min: 0, max: 1, step: 0.05, placeholder: 'any' }) : [null, null];
+  const byThresholds = () => {
+    const np = minParts.value === '' ? null : +minParts.value;
+    const res = maxRes.value === '' ? null : +maxRes.value;
+    const sc = minScore && minScore.value !== '' ? +minScore.value : null;
+    records.forEach((r) => {
+      const ok = (np === null || (r.particles || 0) >= np) && (res === null || (r.resolution && r.resolution < 900 && r.resolution <= res))
+        && (sc === null || (r.score ?? -1) >= sc) && (r.particles || 0) > 0;
+      if (ok) chosen.add(r.class); else chosen.delete(r.class);
+    });
+    refresh();
+  };
+  const thrRow = selectable ? h('div', { class: 'cls-thr', hidden: true }, minPartsBox, maxResBox, minScoreBox,
+    btn('Select', byThresholds, { cls: 'small primary', title: 'Select the classes within these thresholds (the others are cleared)' })) : null;
+  for (const input of [minParts, maxRes, minScore].filter(Boolean)) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') byThresholds(); });
   const tools = selectable ? h('span', { class: 'cls-tools' },
     btn('All', pickAll(() => true), { cls: 'small', title: 'Select every class' }),
     btn('None', pickAll(() => false), { cls: 'small', title: 'Clear the selection' }),
-    btn('Invert', pickAll((r) => !chosen.has(r.class)), { cls: 'small', title: 'Invert the selection' })) : null;
+    btn('Invert', pickAll((r) => !chosen.has(r.class)), { cls: 'small', title: 'Invert the selection' }),
+    btn('By thresholds…', () => { thrRow.hidden = !thrRow.hidden; if (!thrRow.hidden) minParts.focus(); },
+      { cls: 'small', title: 'Select the classes by their number of particles, resolution or score' })) : null;
 
   const head = h('div', { class: 'cls-head' },
     h('h4', {}, sec.title, sec.running ? h('span', { class: 'chip running', title: 'Redrawn at every iteration' }, 'live') : null),
@@ -118,7 +144,7 @@ export function classGallery(sec, { puid, job, finish = null, newSelection = nul
   draw();
   // the bar follows the grid: it stays at the bottom of the panel while the classes are scrolled through
   return h('div', { class: `cls-gallery${selectable ? ' selectable' : ''}${decided ? ' decided' : ''}` },
-    head, meta ? h('div', { class: 'muted small cls-meta-line' }, meta) : null, grid, bar);
+    head, meta ? h('div', { class: 'muted small cls-meta-line' }, meta) : null, thrRow, grid, bar);
 }
 
 // Forget a finished selection (a new job of the same uid starts afresh).

@@ -460,6 +460,44 @@ def particle_images(tables: dict) -> np.ndarray:
     return np.stack(out)
 
 
+def stack_create(argv: list[str]) -> None:
+    """relion_stack_create: the images of a particle file into new stacks (one per micrograph with
+    --split_per_micrograph: <root>_<micrograph without extension>.mrcs), and <root>.star."""
+    a = parse(argv, "relion_stack_create")
+    need(a, "--i")
+    root = str(a.get("--o", "output"))
+    if "--ignore_optics" in a and ("--apply_transformation" in a or "--apply_rounded_offsets_only" in a):
+        die("ERROR: you cannot ignore optics and apply transformations")
+    tables = rl.read_star(str(a["--i"]))
+    ptab = rl.particle_table(tables)
+    if not ptab.has("rlnImageName"):
+        die("ERROR: Input STAR file does not contain the rlnImageName label.")
+    split = "--split_per_micrograph" in a
+    if split and not ptab.has("rlnMicrographName"):
+        die("ERROR: Input STAR file does not contain the rlnMicrographName label")
+    images = particle_images(tables)
+    _box, apix = rl.grid_from_star(tables)
+    if "--apply_rounded_offsets_only" in a and ptab.has("rlnOriginXAngst"):
+        ox, oy = ptab.floats("rlnOriginXAngst") / apix, ptab.floats("rlnOriginYAngst") / apix
+        rx, ry = np.round(ox), np.round(oy)
+        for k in range(len(images)):
+            images[k] = np.roll(images[k], (int(ry[k]), int(rx[k])), axis=(0, 1))
+        ptab.set_column("rlnOriginXAngst", (ox - rx) * apix)
+        ptab.set_column("rlnOriginYAngst", (oy - ry) * apix)
+    groups: dict[str, list[int]] = {}
+    for k, mic in enumerate(ptab.column("rlnMicrographName") if split else [""] * len(ptab)):
+        groups.setdefault(mic, []).append(k)
+    names = [""] * len(ptab)
+    for mic, rows in groups.items():
+        out = f"{root}_{os.path.splitext(mic)[0]}.mrcs" if split else f"{root}.mrcs"
+        write_image(out, images[rows], apix, "--float16" in a)
+        for n, k in enumerate(rows, 1):
+            names[k] = f"{n:06d}@{out}"
+    ptab.set_column("rlnImageName", names)
+    rl.write_star(f"{root}.star", list(tables.values()))
+    print(f"Written out: {root}.star")
+
+
 def kmeans_classes(images: np.ndarray, k: int) -> np.ndarray:
     small = images[:, ::4, ::4].reshape(len(images), -1)
     small = (small - small.mean(axis=1, keepdims=True)) / (small.std(axis=1, keepdims=True) + 1e-6)
@@ -918,4 +956,5 @@ PROGRAMS = {
     "relion_ctf_refine": ctf_refine, "relion_ctf_refine_mpi": ctf_refine,
     "relion_motion_refine": motion_refine, "relion_motion_refine_mpi": motion_refine,
     "relion_star_handler": star_handler, "relion_flex_analyse": flex_analyse, "relion_python_dynamight": dynamight,
+    "relion_stack_create": stack_create,
 }

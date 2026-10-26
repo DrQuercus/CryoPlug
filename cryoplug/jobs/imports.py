@@ -513,6 +513,23 @@ def star_summary(path: Path) -> dict[str, Any]:
     return info
 
 
+def star_image_root(src: Path) -> Path:
+    """The folder the image paths of a RELION particle file are relative to: the file's own, or the RELION project
+    folder above it (RELION writes the paths from the project folder: Extract/job005/...)."""
+    from cryoplug.particles import star_column
+    try:
+        first = next(iter(star_column(src, "_rlnImageName")), "")
+    except (OSError, ValueError):
+        return src.parent
+    rel = first.partition("@")[2] or first
+    if not rel or Path(rel).is_absolute():
+        return src.parent
+    for folder in [src.parent, *src.parent.parents][:6]:
+        if (folder / rel).exists():
+            return folder
+    return src.parent
+
+
 @register
 class ImportParticles(JobType):
     name = "import_particles"
@@ -560,8 +577,12 @@ class ImportParticles(JobType):
         info = star_summary(src)
         if not info.get("n_particles"):
             raise JobError(f"No particle found in {src.name}")
+        if datadir is None:
+            datadir = star_image_root(src)
+            if datadir != src.parent:
+                ctx.log(f"Image folder: {datadir} (the image paths are relative to the RELION project folder)")
         dst = _transfer(ctx, src, "copy", "particles.star")
-        meta = {**info, "format": "star", "datadir": str(datadir or src.parent), "source": str(src),
+        meta = {**info, "format": "star", "datadir": str(datadir), "source": str(src),
                 "has_images": True, "has_poses": True, "has_ctf": True}
         ctx.add_output("particles", "particles", dst, f"Particles ({info['n_particles']:,})", meta=meta)
         ctx.add_highlight("Particles", f"{info['n_particles']:,}")

@@ -239,7 +239,7 @@ Trie les micrographies sur leur ajustement CTF, leur défocus, leur astigmatisme
 
 - Des seuils fixés à l'aveugle : regardez d'abord les histogrammes et quelques micrographies (mode interactif).
 
-**Entrées conseillées** : Les micrographies avec CTF ; le mouvement et la dérive sont relus dans la correction de mouvement quand l'estimation de la CTF les a perdus.
+**Entrées conseillées** : Les micrographies avec CTF ; le mouvement et la dérive sont relus dans la correction de mouvement quand l'estimation de la CTF les a perdus. En option, des particules ou des picks : leur nombre par micrographie devient un critère et ceux des micrographies gardées forment une sortie.
 
 **Conseils**
 
@@ -247,6 +247,7 @@ Trie les micrographies sur leur ajustement CTF, leur défocus, leur astigmatisme
 - Clavier : ← → pour passer d'une micrographie à l'autre (dans l'ordre et le filtre du tableau), A accepte, R rejette, U rend la décision aux limites ; double-clic sur un histogramme : plus de limite.
 - Le travail est enregistré au fil de l'eau ; Done sans rien envoyer (agent) applique les seuils des paramètres.
 - La sortie « rejected » permet de vérifier ce qui a été écarté.
+- Avec les picks ou les particules connectés : écartez les micrographies trop chargées (agrégats, carbone) ou vides ; les particules des micrographies gardées suivent (sortie « particles » ou « coordinates »).
 
 **Étapes suivantes** : Auto-picking (RELION), Inspect picks / manual picking, Topaz training (RELION)
 
@@ -549,6 +550,7 @@ Garde les particules des bonnes classes 2D. Comme dans CryoSPARC, le job affiche
 - Maj + clic sélectionne une série de classes ; boutons Tout, Aucune, Inverser.
 - « Au plus N particules par classe » équilibre les vues avant un modèle initial.
 - Class ranker : score de 0 à 1 (0,5 par défaut) ; il demande l'environnement Python de RELION 5.
+- « By thresholds… » coche d'un coup les classes d'au moins N particules, à résolution donnée ou meilleure (et score du class ranker).
 
 **Étapes suivantes** : 3D initial model (RELION), 2D classification (RELION), 3D classification (RELION), 3D auto-refine (RELION), Topaz training (RELION), Auto-picking (RELION)
 
@@ -2429,7 +2431,7 @@ Répartit films, micrographies ou particules en groupes d'optique (comme les « 
 
 `relion_particle_sets` — intégré (aucun logiciel externe)
 
-Compare deux jeux de particules (comme le « Particle Sets Tool » de CryoSPARC) : les particules présentes dans les deux, celles de A seulement et celles de B seulement. Les particules se reconnaissent à leur image ou à leur position sur la micrographie.
+Compare deux jeux de particules (comme le « Particle Sets Tool » de CryoSPARC) : les particules présentes dans les deux, celles de A seulement et celles de B seulement. Les particules se reconnaissent à leur image ou à leur position sur la micrographie. Deux jeux de micrographies se comparent par leur nom, comme avec l'« Exposure Sets Tool ».
 
 **Quand l'utiliser**
 
@@ -2440,11 +2442,12 @@ Compare deux jeux de particules (comme le « Particle Sets Tool » de CryoSPARC)
 
 - La correspondance par image entre particules ré-extraites : elles ont d'autres noms d'image ; prenez la position.
 
-**Entrées conseillées** : Deux jeux de particules (RELION ou CryoSPARC).
+**Entrées conseillées** : Deux jeux de particules (RELION ou CryoSPARC), ou deux jeux de micrographies.
 
 **Conseils**
 
 - Position : distance d'environ un quart du diamètre ; les décalages de l'alignement sont pris en compte.
+- Micrographies : par nom complet, ou par nom de fichier quand les dossiers diffèrent (mouvement et CTF).
 - L'union des deux jeux se fait avec « Join star files ».
 
 **Étapes suivantes** : 3D auto-refine (RELION), 2D classification (RELION), Join star files (RELION)
@@ -2491,6 +2494,30 @@ Images ChimeraX hors écran du modèle et/ou de la carte sous trois vues orthogo
 **Conseils**
 
 - Nécessite une version de ChimeraX qui supporte --offscreen.
+
+### Restack particles
+
+`relion_restack` — logiciel : `relion`
+
+Réécrit les images d'un jeu de particules dans de nouvelles piles (relion_stack_create), comme « Restack Particles » de CryoSPARC : un sous-ensemble gardé après nettoyage ne lit plus que ses propres images, dans des fichiers moins nombreux et plus petits. Les particules peuvent être recentrées sur les décalages de l'alignement, arrondis au pixel (sans interpolation).
+
+**Quand l'utiliser**
+
+- Après le nettoyage 2D/3D d'un grand jeu : les jobs suivants lisent moins de données (disques réseau, cache).
+- Avant de supprimer une extraction volumineuse dont on ne garde qu'une partie.
+
+**À éviter / pièges**
+
+- Un jeu encore appelé à changer beaucoup : chaque restack réécrit toutes les images gardées.
+
+**Entrées conseillées** : Des particules (le recentrage demande leurs décalages : classification ou raffinement).
+
+**Conseils**
+
+- Une pile par micrographie par défaut, comme l'extraction ; une pile unique s'écrit image par image.
+- Le recentrage arrondi garde le reste du décalage dans le fichier ; pour un vrai recentrage avec nouvelle boîte, ré-extrayez (extraction avec « Particles to re-extract »).
+
+**Étapes suivantes** : 3D auto-refine (RELION), 2D classification (RELION), 3D classification (RELION)
 
 ### Subset selection (RELION)
 

@@ -983,7 +983,7 @@ La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes
 | Refinement | CTF refinement (RELION) · Bayesian polishing (RELION) · Real-space refinement (Phenix) · Refinement (Servalcat) · Add waters (phenix.douse) |
 | Validation | Local resolution (RELION) · Comprehensive validation (Phenix) · MolProbity · EMRinger · Map-model validation (Q-score, FSC) · Sequence register check (checkMySequence) · wwPDB validation report (OneDep) |
 | Deposition | Pre-deposition checks · Deposition package |
-| Utilities | Join star files (RELION) · Subset selection (RELION) · Particle sets (intersection, difference) · Curate particles (statistics) · Rebalance orientations · Downsample particles · Symmetry expansion (RELION) · Optics groups (beam shift, file names) · Model operations · Merge models · Render images (ChimeraX) · Custom command |
+| Utilities | Join star files (RELION) · Subset selection (RELION) · Particle sets (intersection, difference) · Curate particles (statistics) · Restack particles · Rebalance orientations · Downsample particles · Symmetry expansion (RELION) · Optics groups (beam shift, file names) · Model operations · Merge models · Render images (ChimeraX) · Custom command |
 
 Les métriques intégrées (FSC, résolution directionnelle, Q-score, FSC carte-modèle, CC, inclusion
 d'atomes) sont calculées en NumPy. La résolution directionnelle utilise des FSC coniques (demi-angle 20°,

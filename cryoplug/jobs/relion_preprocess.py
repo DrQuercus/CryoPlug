@@ -596,13 +596,38 @@ EXPOSURE_METRICS = [  # (key, STAR label, title, unit); the defocus is the mean 
     ("ice_fraction", "rlnCtfIceRingPowerFraction", "Ice ring power fraction", ""),
     ("ice_thickness", "rlnMicrographIceThickness", "Ice thickness", "Å"),
     ("phase_shift", "rlnPhaseShift", "Phase shift", "°"),
+    ("n_particles", "", "Particles", ""),  # from the particles or picks connected to the curation
 ]
 METRIC = {m[0]: m for m in EXPOSURE_METRICS}
 REPORTED = ("ctf_res", "defocus", "astigmatism", "ctf_fom", "motion", "ice")  # plotted in the curation report
 CURATION = {  # parameter -> (metric, bound: 0 lower, 1 upper)
     "max_ctf_resolution": ("ctf_res", 1), "min_defocus": ("defocus", 0), "max_defocus": ("defocus", 1),
     "max_astigmatism": ("astigmatism", 1), "min_fom": ("ctf_fom", 0), "max_motion": ("motion", 1), "max_ice": ("ice", 1),
+    "min_particles": ("n_particles", 0), "max_particles": ("n_particles", 1),
 }
+
+
+def particles_per_micrograph(ctx: JobContext, inp: Any, names: list[str]) -> np.ndarray:
+    """The number of particles (or picks) of each micrograph, matched by name, else by file name."""
+    from collections import Counter
+    counts: Counter[str] = Counter()
+    if inp.type == "coordinates":
+        listing = Path(inp.path)
+        for mic, coords in rl.coordinate_files(listing):
+            path = ctx.abs(coords)
+            counts[mic] += rl.star_rows(path) if path.exists() else 0
+        if rl.coordinate_pick_type(listing) == "startend":  # filaments: two rows each
+            counts = Counter({k: v // 2 for k, v in counts.items()})
+    else:
+        from cryoplug.jobs.relion_common import relion_particles
+        ptab = rl.particle_table(relion_particles(ctx, inp)["tables"])
+        if not ptab.has("rlnMicrographName"):
+            raise JobError("The particles have no rlnMicrographName: their micrographs are unknown")
+        counts.update(ptab.column("rlnMicrographName"))
+    by_base: Counter[str] = Counter()
+    for k, v in counts.items():
+        by_base[Path(k).name] += v
+    return np.array([counts[m] if m in counts else by_base.get(Path(m).name, 0) for m in names], dtype=np.float64)
 
 
 def motion_source(ctx: JobContext, meta: dict[str, Any], mics: rl.StarTable) -> tuple[dict[str, np.ndarray], list[str] | None]:
@@ -709,7 +734,10 @@ class RelionCurate(JobType):
                    "histograms), a scatter plot, the table of the micrographs and each micrograph with its CTF fit and "
                    "drift, accepted or rejected one by one. Or applies the thresholds below at once. The rejected "
                    "micrographs are an output too.")
-    inputs = [Slot("micrographs", ("micrographs",), "Micrographs", help="With CTF estimation for the CTF criteria.")]
+    inputs = [Slot("micrographs", ("micrographs",), "Micrographs", help="With CTF estimation for the CTF criteria."),
+              Slot("particles", ("particles", "coordinates"), "Particles or picks", required=False,
+                   help="Their number per micrograph becomes a criterion (crowded or empty micrographs), and those of the "
+                        "micrographs kept are an output.")]
     params = [
         Param("mode", "choice", "interactive", choices=["interactive", "thresholds"], label="Curation",
               labels={"interactive": "On the plots and micrographs (the job waits for you)",
@@ -725,9 +753,15 @@ class RelionCurate(JobType):
         Param("max_motion", "float", 0.0, label="Maximum total motion", unit="Å", min=0, help="0 = no limit."),
         Param("max_ice", "float", 0.0, label="Maximum ice ring density", min=0, advanced=True,
               help="CTFFIND 5 measure of crystalline ice. 0 = no limit."),
+        Param("min_particles", "int", 0, label="Fewest particles", min=0, advanced=True,
+              help="With particles or picks connected: micrographs with fewer are rejected. 0 = no limit."),
+        Param("max_particles", "int", 0, label="Most particles", min=0, advanced=True,
+              help="With particles or picks connected: micrographs with more (aggregates, carbon) are rejected. 0 = no limit."),
     ]
     outputs = [OutputDef("micrographs", "micrographs", "Kept micrographs"),
-               OutputDef("rejected", "micrographs", "Rejected micrographs")]
+               OutputDef("rejected", "micrographs", "Rejected micrographs"),
+               OutputDef("particles", "particles", "Particles of the kept micrographs"),
+               OutputDef("coordinates", "coordinates", "Picks of the kept micrographs")]
 
     def load(self, ctx: JobContext) -> tuple[Any, Path, dict[str, rl.StarTable], rl.StarTable, dict[str, np.ndarray], list[str] | None]:
         inp = ctx.require("micrographs")
@@ -735,7 +769,11 @@ class RelionCurate(JobType):
         tables = rl.read_star(star)
         mics = rl.micrograph_table(tables)
         motion, files = motion_source(ctx, inp.meta, mics)
-        return inp, star, tables, mics, exposure_metrics(mics, motion), files
+        values = exposure_metrics(mics, motion)
+        parts = ctx.inputs.get("particles")
+        if parts is not None:
+            values["n_particles"] = particles_per_micrograph(ctx, parts, mics.column("rlnMicrographName"))
+        return inp, star, tables, mics, values, files
 
     @staticmethod
     def start_limits(p: dict[str, Any], values: dict[str, np.ndarray]) -> dict[str, list[float | None]]:
@@ -747,6 +785,8 @@ class RelionCurate(JobType):
                 continue
             if key not in values:
                 label = METRIC[key][1]
+                if not label:
+                    raise JobError(f"{METRIC[key][2]}: connect the particles or picks of these micrographs")
                 raise JobError(f"{METRIC[key][2]}: the micrographs have no {label} column (run "
                                + ("motion correction" if label.startswith("rlnAccumMotion") else "CTF estimation")
                                + " first?)")
@@ -846,4 +886,39 @@ class RelionCurate(JobType):
                            meta=micrograph_meta(ctx, rej, "curate", **passed))
             micrograph_gallery(ctx, sample([names[i] for i in np.flatnonzero(~keep)], 2), "rejected_examples",
                                "Rejected examples")
+        parts = ctx.inputs.get("particles")
+        if parts is not None:
+            self.particles_of(ctx, parts, {names[i] for i in np.flatnonzero(keep)})
         return keep
+
+    def particles_of(self, ctx: JobContext, parts: Any, kept: set[str]) -> None:
+        """The particles (or picks) of the micrographs kept, as CryoSPARC's curation passes the particles on."""
+        bases = {Path(m).name for m in kept}
+        inside = lambda m: m in kept or Path(m).name in bases  # noqa: E731
+        if parts.type == "coordinates":
+            listing = Path(parts.path)
+            pairs = [(m, c) for m, c in rl.coordinate_files(listing) if inside(m)]
+            if not pairs:
+                ctx.warn("No pick on the micrographs kept")
+                return
+            pick_type = rl.coordinate_pick_type(listing)
+            out = rl.write_coordinate_list(ctx.path("coordinates.star"), pairs,
+                                           pick_type=None if pick_type == "particles" else pick_type)
+            n = sum(rl.star_rows(ctx.abs(c)) for _, c in pairs if ctx.abs(c).exists())
+            meta = {k: v for k, v in parts.meta.items() if k not in ("relion", "n_particles", "n_micrographs")}
+            meta.update({"n_particles": n, "n_micrographs": len(pairs), "micrographs": ctx.rel(ctx.path("micrographs.star")),
+                         "relion": {"star": ctx.rel(out), "kind": "curate"}})
+            ctx.add_output("coordinates", "coordinates", out, f"{n:,} picks on {len(pairs):,} micrographs", meta=meta)
+            return
+        from cryoplug.jobs.relion_common import particles_out_meta, relion_particles
+        pin = relion_particles(ctx, parts)
+        tables = pin["tables"]
+        ptab = rl.particle_table(tables)
+        keep = np.array([inside(m) for m in ptab.column("rlnMicrographName")], dtype=bool)
+        if not keep.any():
+            ctx.warn("No particle on the micrographs kept")
+            return
+        out = rl.write_star(ctx.path("particles.star"), [t if t is not ptab else ptab.select(np.flatnonzero(keep)) for t in tables.values()],
+                            comment=f"Particles of the micrographs kept, from {parts.source}")
+        ctx.add_output("particles", "particles", out, f"{int(keep.sum()):,} particles of the micrographs kept",
+                       meta=particles_out_meta(ctx, out, "curate"))
