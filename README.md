@@ -1,15 +1,16 @@
 # CryoPlug
 
-**Suite de post-traitement cryo-EM dans le navigateur, de la meilleure carte CryoSPARC jusqu'au dépôt PDB/EMDB.**
+**Suite cryo-EM dans le navigateur, des films du microscope (ou de la meilleure carte CryoSPARC) jusqu'au dépôt PDB/EMDB.**
 
-CryoPlug prend le relais une fois la reconstruction terminée dans CryoSPARC. Il pilote, depuis une
-interface web inspirée de CryoSPARC (projets, cartes de jobs, file d'attente, lanes, **choix des GPU**,
-**suivi du matériel en direct**, **comptes utilisateurs**), tous les logiciels installés sur votre serveur
-local :
+CryoPlug fait tout le traitement « single particle » avec **RELION 5** dans une interface à la CryoSPARC, ou prend
+le relais une fois la reconstruction terminée dans CryoSPARC. Il pilote, depuis une interface web inspirée de
+CryoSPARC (projets, cartes de jobs, file d'attente, lanes, **choix des GPU**, **suivi du matériel en direct**,
+**comptes utilisateurs**), tous les logiciels installés sur votre serveur local :
 
 | Étape | Logiciels pilotés | Jobs CryoPlug |
 |---|---|---|
-| Import | CryoSPARC, RELION, fichiers MRC, PDB, AlphaFold DB, UniProt | `Import from CryoSPARC`, `Import maps`, `Import atomic model`, `Import sequence` |
+| Import | Films (TIFF, EER, MRC), CryoSPARC, RELION, fichiers MRC, PDB, AlphaFold DB, UniProt | `Import movies (RELION)`, `Import from CryoSPARC`, `Import maps`, `Import atomic model`, `Import sequence` |
+| Des films à la carte (RELION) | **RELION 5.1** : correction de mouvement (RELION ou MotionCor2), CTF (**CTFFIND** 4.1/5), tri des micrographies, picking **LoG**, par **modèles** ou **Topaz** (et son entraînement), extraction, **classification 2D** (VDAM/EM), **sélection des classes en cliquant dans la galerie** (comme CryoSPARC, ou class ranker automatique), modèle initial, classification 3D, **auto-refine** gold-standard, masques, post-traitement, **CTF refinement**, **polissage bayésien**, résolution locale, **multi-corps**, **DynaMight** | les commandes du GUI de RELION 5.1, fichiers STAR de RELION ; histogrammes avec seuils, particules entourées sur les micrographies, ajustements CTF, galerie de classes en direct ; workflow *Movies to map* |
 | Raffinement local (RELION) | **RELION 5** : raffinement local gold-standard (recherches locales depuis les poses CryoSPARC, Blush), **soustraction de signal** recentrée et recadrée (avec expansion de symétrie), **classification 3D focalisée** sans alignement, post-traitement, reconstruction | conversion CryoSPARC → RELION automatique (conventions de pyem), cartes toujours rendues sur la grille de la carte consensus, workflows *Focused refinement* et *Focused classification* |
 | Amélioration de carte | **LocScale 2** (model-free / pseudo-modèle / model-based / hybride), **EMmerNet** (avec la carte de confiance pVDDT), **DeepEMhancer**, **EMReady2**, **spIsoNet** (correction de l'anisotropie due à l'orientation préférentielle), Phenix `resolve_cryo_em`, `map_sharpening` (Phenix 2), `auto_sharpen`, `local_aniso_sharpen`, **résolution locale** (`local_resolution`), **cartes composites** de raffinements locaux (`combine_focused_maps`) | + FSC demi-cartes (masquée, corrigée par randomisation de phase), **résolution directionnelle / 3D FSC**, **création de masques** (densité, chaînes du modèle, carte simulée du modèle comme `molmap`, densité proche du modèle ; dilatation et bord doux en Å), **masques dessinés à la main dans le visualiseur 3D** (comme Chimera : sphères, boîtes, cylindres, région de densité cliquée, zone autour de chaînes, carte simulée de chaînes) et opérations de carte (main, B-factor, filtre, masque, boîte) intégrées |
 | Hétérogénéité (variabilité 3D) | **cryoDRGN** (contrôle des entrées, entraînement en deux tours, convergence, analyse, paysage, trajectoires), **cryoDRGN-AI** (ab initio, sans consensus : poses apprises, main et repère, validation), **CryoSPARC 3D Variability** et *3D Variability Display* / 3D Flex (import des coordonnées des particules et des séries de volumes) | **Explorateur de l'espace latent** interactif (UMAP / PCA, coloration par densité, défocus ou orientation, galerie des volumes avec alertes junk, lasso, images des particules, clusters → volumes en 3D, sélection de particules, trajectoire), **lecture des séries** dans le visualiseur 3D, **analyse de série** (carte de variabilité, corrélation entre états, chaînes qui bougent ou disparaissent), sélection de particules vers CryoSPARC ou un nouvel entraînement |
@@ -164,9 +165,15 @@ même environnement Python que CryoPlug.
 [tools.phenix]             # Phenix 2.x (ou 1.21) : le script phenix_env.sh du dossier d'installation
 setup = "source /opt/phenix-2.2.1/phenix_env.sh"
 
-[tools.relion]             # RELION 4/5 (relion_refine_mpi, relion_particle_subtract_mpi, relion_postprocess…)
-bin_dir = "/opt/relion-5.0/bin"
+[tools.relion]             # RELION 5.1 (tout le pipeline : relion_run_motioncorr, relion_refine_mpi, relion_postprocess…)
+bin_dir = "/opt/relion-5.1/bin"
 env = { MPIRUN = "mpirun" }  # lanceur MPI : "mpirun --oversubscribe" (Open MPI), "srun --mpi=pmix" (SLURM)…
+
+[tools.ctffind]            # CTFFIND 4.1 ou 5, pour l'estimation de la CTF du pipeline RELION
+executable = "/opt/ctffind-5.0/bin/ctffind5"
+
+[tools.motioncor]          # facultatif : MotionCor2 / MotionCor3 sur GPU (la correction de mouvement de RELION n'en a pas besoin)
+executable = "/opt/motioncor2/MotionCor2_1.6.4_Cuda121"
 
 [tools.modelangelo]
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate model_angelo"
@@ -253,9 +260,9 @@ Les fichiers de particules `.cs` des versions récentes de CryoSPARC (format com
    de jobs : glissez-les sur les entrées. Cliquer sur un job l'ouvre dans la zone principale (comme dans
    CryoSPARC) sans fermer le constructeur : glissez ses sorties sur les entrées, ou « Use as input » ;
    « Jobs » revient aux cartes.
-4. **Workflows** crée une chaîne complète en un clic (de novo avec ModelAngelo ou CryoAtom2, modèle prédit
-   AlphaFold, identification de protéines inconnues, comparaison des méthodes d'amélioration de carte,
-   validation et dépôt), par exemple *De novo model → deposition (ModelAngelo)* :
+4. **Workflows** crée une chaîne complète en un clic (des films à la carte avec RELION, de novo avec ModelAngelo ou
+   CryoAtom2, modèle prédit AlphaFold, identification de protéines inconnues, comparaison des méthodes
+   d'amélioration de carte, validation et dépôt), par exemple *De novo model → deposition (ModelAngelo)* :
    import → LocScale → ModelAngelo → real_space_refine → ISOLDE → affinement final → validation →
    checklist → paquet de dépôt. Les étapes optionnelles (ISOLDE, LocScale…) peuvent être retirées, les
    jobs en aval sont recâblés automatiquement.
@@ -399,6 +406,28 @@ Une interface entre CryoSPARC et ChimeraX, dessinée par Mol\* (qui fonctionne h
   moyenne de la carte aux atomes, ou overlap / corrélation de la carte simulée du modèle ou d'une carte, localement ou
   par recherche depuis des placements aléatoires (`fitmap #2 inMap #1 resolution 8 search 50`). **Save as job** écrit
   le modèle placé ou la carte rééchantillonnée sur la grille de la cible (job *Fit in map (rigid body)*).
+
+### Des films à la carte (RELION)
+
+Tout le traitement « single particle » se fait dans CryoPlug avec **RELION 5.1**, dans la même interface que le reste :
+**Import movies (RELION)** (motif ou dossier des films, taille de pixel, dose, gain) → **Motion correction** →
+**CTF estimation (CTFFIND)** → **Curate micrographs** → **Auto-picking** (Laplacien de Gaussienne, modèles 2D/3D ou
+Topaz, avec son entraînement) → **Particle extraction** → **2D classification** → **Select 2D classes** →
+**3D initial model** → **3D classification** → **3D auto-refine** → **Mask creation** → **RELION post-processing**,
+puis **CTF refinement**, **Bayesian polishing** et un nouveau raffinement ; **Local resolution**, **3D multi-body
+refinement** et **DynaMight** pour la suite. Le workflow *Movies to map (RELION single particle)* crée la chaîne.
+
+- Chaque job lance la commande que construit l'interface de RELION 5.1 pour les mêmes réglages (`commands.sh` dans le
+  dossier du job), depuis le dossier du projet et avec des chemins relatifs : les fichiers STAR sont ceux de RELION.
+- **Comme CryoSPARC** : vignettes sur les cartes des jobs (micrographies, particules entourées, ajustements CTF,
+  moyennes de classes), histogrammes avec les seuils de tri, trajectoires de dérive, et une **galerie de classes 2D**
+  redessinée pendant la classification. *Select 2D classes* attend que vous cliquiez les bonnes classes (tri par
+  particules ou résolution, Maj + clic pour une série) puis **Done** ; depuis une classification terminée, cliquer des
+  classes puis **Select these classes** crée et lance la sélection.
+- Logiciels : RELION, **CTFFIND** (4.1 ou 5) et, au besoin, **MotionCor2/3** dans *Tools* (§2) ; Topaz, le class
+  ranker, Blush et DynaMight viennent de l'environnement Python installé avec RELION.
+
+![Sélection des classes 2D](docs/images/relion_select2d.png)
 
 ### Raffinement local et classification focalisée (RELION)
 
@@ -886,12 +915,13 @@ directement le chemin aux jobs d'import, s'il est dans les dossiers du compte (`
 
 | Skill | Contenu |
 |---|---|
-| `cryoplug` | méthode de travail et règles, concepts, quelle carte pour quoi, syntaxe des jobs, workflows ; index des 67 types de jobs (généré) |
+| `cryoplug` | méthode de travail et règles, concepts, quelle carte pour quoi, syntaxe des jobs, workflows ; index des 87 types de jobs (généré) |
 | `cryoplug-map-quality` | FSC, anisotropie, résolution locale, main ; LocScale, spIsoNet, modification de densité, cartes « réseau » |
 | `cryoplug-masks-and-fitting` | masques (densité, atomes, molmap, densité proche du modèle), placement de corps rigide, cartes composites |
 | `cryoplug-model-building` | stratégie selon la résolution, de novo, chaînes inconnues, modèles prédits, ligands |
 | `cryoplug-refinement-validation` | affinement, ISOLDE/Coot, valeurs de référence et signaux d'alerte, dépôt |
 | `cryoplug-heterogeneity` | 3DVA, protocole cryoDRGN, cryoDRGN-AI, sélection et validation des états |
+| `cryoplug-relion-spa` | des films à la carte avec RELION : mouvement, CTF, picking, 2D/3D, raffinement, polissage |
 | `cryoplug-relion-focused` | raffinement local et classification focalisée avec RELION |
 | `cryoplug-troubleshooting` | diagnostiquer et corriger un job en échec ou bloqué |
 
@@ -914,20 +944,23 @@ révision 2026-07-28 reviennent automatiquement à 2025-11-25.
 
 La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes) est dans
 [docs/JOBS.md](docs/JOBS.md), générée depuis `cryoplug/jobhelp.py` par `cryoplug docs-jobs`.
-`cryoplug jobtypes` liste les 67 types de jobs :
+`cryoplug jobtypes` liste les 87 types de jobs :
 
 | Catégorie | Jobs |
 |---|---|
-| Import | Import from CryoSPARC (cartes et particules, coordonnées de 3D variability) · Import maps · Import atomic model (fichier / PDB / AlphaFold DB) · Import sequence (FASTA / UniProt, séparation protéine/ARN/ADN) · Import particles (`.cs` CryoSPARC, `.star` RELION) · Import volume series (3DVA, 3D Flex, cryoDRGN…) |
-| Reconstruction | RELION local refinement · RELION signal subtraction · RELION 3D classification (focused) · RELION post-processing · RELION reconstruction |
-| Map processing | Half-map FSC · Directional resolution (3D FSC) · Local resolution (Phenix) · Create mask · Mask drawn in the 3D viewer · Composite map (focused maps) · Map operations · LocScale 2 · EMmerNet · DeepEMhancer · EMReady2 · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Map sharpening (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
-| Heterogeneity | cryoDRGN input check (backprojection) · cryoDRGN training · cryoDRGN-AI ab initio reconstruction · cryoDRGN continue training · cryoDRGN convergence check · cryoDRGN analysis · cryoDRGN landscape analysis · cryoDRGN trajectory · cryoDRGN volumes at particles · Select particles (latent space) · Volume series analysis · Extract volume from series |
+| Import | Import movies (RELION : films TIFF / EER / MRC et groupe optique) · Import from CryoSPARC (cartes et particules, coordonnées de 3D variability) · Import maps · Import atomic model (fichier / PDB / AlphaFold DB) · Import sequence (FASTA / UniProt, séparation protéine/ARN/ADN) · Import particles (`.cs` CryoSPARC, `.star` RELION) · Import volume series (3DVA, 3D Flex, cryoDRGN…) |
+| Preprocessing | Motion correction (RELION ou MotionCor2) · CTF estimation (CTFFIND) · Curate micrographs |
+| Picking | Auto-picking (LoG, modèles 2D/3D, Topaz) · Topaz training · Particle extraction (et ré-extraction) |
+| Classification | 2D classification (VDAM / EM) · Select 2D classes (galerie cliquable, liste ou class ranker) · 3D classification |
+| Reconstruction | 3D initial model · 3D auto-refine · RELION local refinement · RELION signal subtraction · RELION 3D classification (focused) · RELION post-processing · RELION reconstruction |
+| Map processing | Half-map FSC · Directional resolution (3D FSC) · Local resolution (Phenix) · Create mask · Mask creation (RELION) · Mask drawn in the 3D viewer · Composite map (focused maps) · Map operations · LocScale 2 · EMmerNet · DeepEMhancer · EMReady2 · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Map sharpening (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
+| Heterogeneity | 3D multi-body refinement (RELION) · DynaMight · cryoDRGN input check (backprojection) · cryoDRGN training · cryoDRGN-AI ab initio reconstruction · cryoDRGN continue training · cryoDRGN convergence check · cryoDRGN analysis · cryoDRGN landscape analysis · cryoDRGN trajectory · cryoDRGN volumes at particles · Select particles (latent space) · Volume series analysis · Extract volume from series |
 | Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · CryoAtom2 enhanced (meilleur de plusieurs essais) · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Fit in map (rigid body) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
 | Interactive | ISOLDE session · Coot session |
-| Refinement | Real-space refinement (Phenix) · Refinement (Servalcat) · Add waters (phenix.douse) |
-| Validation | Comprehensive validation (Phenix) · MolProbity · EMRinger · Map-model validation (Q-score, FSC) · Sequence register check (checkMySequence) · wwPDB validation report (OneDep) |
+| Refinement | CTF refinement (RELION) · Bayesian polishing (RELION) · Real-space refinement (Phenix) · Refinement (Servalcat) · Add waters (phenix.douse) |
+| Validation | Local resolution (RELION) · Comprehensive validation (Phenix) · MolProbity · EMRinger · Map-model validation (Q-score, FSC) · Sequence register check (checkMySequence) · wwPDB validation report (OneDep) |
 | Deposition | Pre-deposition checks · Deposition package |
-| Utilities | Model operations · Merge models · Render images (ChimeraX) · Custom command |
+| Utilities | Join star files (RELION) · Subset selection (RELION) · Model operations · Merge models · Render images (ChimeraX) · Custom command |
 
 Les métriques intégrées (FSC, résolution directionnelle, Q-score, FSC carte-modèle, CC, inclusion
 d'atomes) sont calculées en NumPy. La résolution directionnelle utilise des FSC coniques (demi-angle 20°,

@@ -1,36 +1,31 @@
 """Fake RELION 5.1 programs for the tests, dispatched on the program name (relion_refine[_mpi],
-relion_particle_subtract[_mpi], relion_particle_symmetry_expand, relion_postprocess, relion_reconstruct[_mpi]) and
-a fake ``mpirun -n N prog ...`` that runs ``prog`` with FAKE_MPI_SIZE=N.
+relion_particle_subtract[_mpi], relion_particle_symmetry_expand, relion_postprocess, relion_reconstruct[_mpi], and the
+single-particle programs of relion_spa.py: motion correction to DynaMight) and a fake ``mpirun -n N prog ...`` that
+runs ``prog`` with FAKE_MPI_SIZE=N.
 
-Like the real programs they reject unknown options, need MPI where RELION does (gold-standard refinement: 3 processes,
-subtraction of a refinement: 2), read the particle images named in the STAR files relative to the working directory
-(RELION runs from the project folder), check that references and masks are on the grid of the particles, and write
-the same files: run_class001.mrc, run_half[12]_class001_unfil.mrc, run_data/model/optimiser.star (auto-refinement),
-run_itNNN_* (classification), particles_subtracted.star + Particles/ (subtraction), postprocess.mrc/.star."""
+They refuse options RELION 5.1 does not know (relion_options.json; RELION warns and ignores them), need MPI where
+RELION does (gold-standard refinement: 3 processes, subtraction with separate half sets: 2), read the particle images
+named in the STAR files relative to the working directory (RELION runs from the project folder), check that references
+and masks are on the grid of the particles, and write the same files: run_class001.mrc, run_half[12]_class001_unfil.mrc,
+run_data/model/optimiser.star and run_itNNN_* (auto-refinement), run_itNNN_* (classification),
+particles_subtracted.star + Particles/ (subtraction), postprocess.mrc/.star, *_locres*.mrc (local resolution)."""
 import os
 import sys
 
 import numpy as np
 
 sys.path.insert(0, os.environ.get("CRYOPLUG_ROOT", ""))
+sys.path.insert(0, os.path.join(os.environ.get("CRYOPLUG_ROOT", ""), "tests", "fakes"))
+import relion_spa  # noqa: E402
 from cryoplug import relion as rl  # noqa: E402
 from cryoplug.mrc import MapVolume  # noqa: E402
 
-REFINE_OPTS = {
-    "--o": 1, "--i": 1, "--ref": 1, "--auto_refine": 0, "--split_random_halves": 0, "--firstiter_cc": 0,
-    "--trust_ref_size": 0, "--ini_high": 1, "--dont_combine_weights_via_disc": 0, "--pool": 1, "--pad": 1, "--ctf": 0,
-    "--particle_diameter": 1, "--flatten_solvent": 0, "--zero_mask": 0, "--solvent_mask": 1, "--solvent_correct_fsc": 0,
-    "--oversampling": 1, "--healpix_order": 1, "--auto_local_healpix_order": 1, "--offset_range": 1, "--offset_step": 1,
-    "--sym": 1, "--low_resol_join_halves": 1, "--norm": 0, "--scale": 0, "--j": 1, "--gpu": 1, "--blush": 0,
-    "--relax_sym": 1, "--preread_images": 0, "--iter": 1, "--tau2_fudge": 1, "--K": 1, "--skip_align": 0,
-    "--sigma_ang": 1,
-}
-SUBTRACT_OPTS = {"--i": 1, "--o": 1, "--mask": 1, "--data": 1, "--center_x": 1, "--center_y": 1, "--center_z": 1,
-                 "--new_box": 1, "--float16": 0, "--recenter_on_mask": 0, "--ignore_class": 0}
-POST_OPTS = {"--mask": 1, "--i": 1, "--i2": 1, "--o": 1, "--angpix": 1, "--auto_bfac": 0, "--autob_lowres": 1,
-             "--adhoc_bfac": 1, "--mtf": 1, "--locres": 0, "--skip_fsc_weighting": 0}
-RECON_OPTS = {"--i": 1, "--o": 1, "--ctf": 0, "--sym": 1, "--subset": 1, "--maxres": 1, "--angpix": 1, "--j": 1}
-EXPAND_OPTS = {"--i": 1, "--o": 1, "--sym": 1}
+# the options of RELION 5.1 (read from its sources), so that a misspelt or removed option fails as in RELION
+REFINE_OPTS = relion_spa.OPTIONS["relion_refine"]
+POST_OPTS = relion_spa.OPTIONS["relion_postprocess"]
+SUBTRACT_OPTS = relion_spa.OPTIONS["relion_particle_subtract"]
+RECON_OPTS = relion_spa.OPTIONS["relion_reconstruct"]
+EXPAND_OPTS = relion_spa.OPTIONS["relion_particle_symmetry_expand"]
 
 
 def die(message):
@@ -116,6 +111,19 @@ def refine(argv):
         for it in range(1, 5):
             print(f" Auto-refine: Iteration= {it}")
             print(f" Auto-refine: Resolution= {8.0 - it:.4f} (no gain for 0 iter) ")
+            # every iteration with the half sets apart: their maps, models, particles and optimiser
+            last = f"{root}_it{it:03d}"
+            models = []
+            for h in (1, 2):
+                ref.write(f"{last}_half{h}_class001.mrc")
+                classes = rl.StarTable("model_classes")
+                classes.set_column("rlnReferenceImage", [f"{last}_half{h}_class001.mrc"])
+                classes.set_column("rlnClassDistribution", [1.0])
+                general = rl.StarTable("model_general", ["rlnCurrentResolution"], [[f"{8.0 - it:.6f}"]], loop=False)
+                rl.write_star(f"{last}_half{h}_model.star", [general, classes])
+                models.append(f"{last}_half{h}_model.star")
+            rl.write_star(f"{last}_data.star", list(tables.values()))
+            write_optimiser(f"{last}_optimiser.star", f"{last}_data.star", models[0], True, root, models[1])
         print(" Auto-refine: Refinement has converged, entering last iteration where two halves will be combined...")
         ref.write(f"{root}_class001.mrc")
         for h in (1, 2):
@@ -123,7 +131,7 @@ def refine(argv):
         parts.set_column("rlnClassNumber", [1] * len(parts))
         if not parts.has("rlnRandomSubset"):
             parts.set_column("rlnRandomSubset", np.arange(len(parts)) % 2 + 1)
-        parts.set_column("rlnAngleRot", parts.floats("rlnAngleRot") + 0.5)
+        aligned(parts, rng)
         rl.write_star(f"{root}_data.star", list(tables.values()))
         curve, _f, _c = fsc_table(box, apix, res)
         general = rl.StarTable("model_general", ["rlnCurrentResolution"], [[f"{res:.6f}"]], loop=False)
@@ -134,7 +142,8 @@ def refine(argv):
         classes.set_column("rlnAccuracyTranslationsAngst", [0.6])
         classes.set_column("rlnEstimatedResolution", [res])
         rl.write_star(f"{root}_model.star", [general, classes, curve])
-        write_optimiser(f"{root}_optimiser.star", f"{root}_data.star", f"{root}_model.star", True, root)
+        # the last iteration joins the half sets: its optimiser no longer splits them (ml_optimiser_mpi.cpp)
+        write_optimiser(f"{root}_optimiser.star", f"{root}_data.star", f"{root}_model.star", False, root)
         return
     k, n_iter = int(a.get("--K", 1)), int(a.get("--iter", 25))
     if mpi_size() == 2:
@@ -147,6 +156,8 @@ def refine(argv):
         bump = np.exp(-((x - c) ** 2 + y ** 2 + z ** 2) / 8.0).astype(np.float32)
         ref.like(ref.data + 0.3 * bump).write(f"{last}_class{c:03d}.mrc")
     parts.set_column("rlnClassNumber", np.arange(len(parts)) % k + 1)
+    if "--skip_align" not in a:
+        aligned(parts, rng)
     rl.write_star(f"{last}_data.star", list(tables.values()))
     classes = rl.StarTable("model_classes")
     classes.set_column("rlnReferenceImage", [f"{last}_class{c:03d}.mrc" for c in range(1, k + 1)])
@@ -157,11 +168,25 @@ def refine(argv):
     write_optimiser(f"{last}_optimiser.star", f"{last}_data.star", f"{last}_model.star", False, root)
 
 
-def write_optimiser(path, data, model, halves, root):
-    t = rl.StarTable("optimiser_general", ["rlnOutputRootName", "rlnModelStarFile", "rlnExperimentalDataStarFile",
-                                           "rlnDoSplitRandomHalves"], [[root, model, data, "1" if halves else "0"]],
-                     loop=False)
-    rl.write_star(path, [t])
+def aligned(parts, rng):
+    """Poses after an alignment: those of the particles moved a little, or new ones (global searches)."""
+    n = len(parts)
+    if parts.has("rlnAngleRot") and parts.has("rlnAngleTilt"):
+        parts.set_column("rlnAngleRot", parts.floats("rlnAngleRot") + 0.5)
+        return
+    for lab, hi in (("rlnAngleRot", 360.0), ("rlnAngleTilt", 180.0), ("rlnAnglePsi", 360.0)):
+        parts.set_column(lab, rng.uniform(0, hi, n))
+    for lab in ("rlnOriginXAngst", "rlnOriginYAngst"):
+        parts.set_column(lab, rng.normal(0, 1.0, n))
+
+
+def write_optimiser(path, data, model, halves, root, model2=None):
+    labels = ["rlnOutputRootName", "rlnModelStarFile", "rlnExperimentalDataStarFile", "rlnDoSplitRandomHalves"]
+    values = [root, model, data, "1" if halves else "0"]
+    if model2:
+        labels.insert(2, "rlnModelStarFile2")
+        values.insert(2, model2)
+    rl.write_star(path, [rl.StarTable("optimiser_general", labels, [values], loop=False)])
 
 
 def subtract(argv):
@@ -214,19 +239,31 @@ def expand(argv):
 
 def postprocess(argv):
     a = parse(argv, POST_OPTS)
+    for need in ("--i", "--i2", "--o"):
+        if need not in a:
+            die(f"missing {need}")
     h1 = MapVolume.read(a["--i"])
     h2 = MapVolume.read(a["--i2"])
+    if h1.shape_xyz != h2.shape_xyz:
+        die("Postprocessing::initialise ERROR: The two half reconstructions are not of the same size!")
+    root = a["--o"]
+    if a.get("--locres"):
+        return locres(a, h1, h2, root)
+    if "--mask" not in a:
+        die("no mask: make a mask with relion_mask_create beforehand")
     mask = MapVolume.read(a["--mask"])
     if h1.shape_xyz != mask.shape_xyz:
         die("mask and half maps have different sizes")
-    root = a["--o"]
     full = h1.like((h1.data + h2.data) / 2)
     full.write(f"{root}.mrc")
     full.like(full.data * mask.data).write(f"{root}_masked.mrc")
     box, apix = h1.shape_xyz[0], float(a.get("--angpix", h1.pixel_size))
     _t, freq, fsc = fsc_table(box, apix, 3.6)
-    general = rl.StarTable("general", ["rlnFinalResolution", "rlnBfactorUsedForSharpening", "rlnRandomiseFrom"],
-                           [["3.600000", f"{float(a.get('--adhoc_bfac', -85.0)):.6f}", "7.000000"]], loop=False)
+    general = rl.StarTable("general", ["rlnFinalResolution", "rlnBfactorUsedForSharpening", "rlnUnfilteredMapHalf1",
+                                       "rlnUnfilteredMapHalf2", "rlnPostprocessedMap", "rlnMaskName", "rlnRandomiseFrom",
+                                       "rlnPostprocessedMapMasked"],
+                           [["3.600000", f"{float(a.get('--adhoc_bfac', -85.0)):.6f}", a["--i"], a["--i2"], f"{root}.mrc",
+                             a["--mask"], "7.000000", f"{root}_masked.mrc"]], loop=False)
     t = rl.StarTable("fsc")
     t.set_column("rlnSpectralIndex", np.arange(1, len(freq) + 1))
     t.set_column("rlnResolution", freq)
@@ -236,8 +273,27 @@ def postprocess(argv):
     t.set_column("rlnFourierShellCorrelationMaskedMaps", fsc)
     t.set_column("rlnCorrectedFourierShellCorrelationPhaseRandomizedMaskedMaps", fsc * 0.05)
     rl.write_star(f"{root}.star", [general, t])
-    if a.get("--locres"):
-        full.like(np.full(full.data.shape, 4.0, np.float32)).write(f"{root}_locres.mrc")
+
+
+def locres(a, h1, h2, root):
+    """relion_postprocess --locres: local resolution (best at the centre), the map filtered with it, local FSCs."""
+    if a.get("--auto_bfac"):
+        die("Postprocessing::initialise ERROR: for --locres, you cannot do --auto_bfac, use --adhoc_bfac instead!")
+    apix = float(a.get("--angpix", h1.pixel_size))
+    z, y, x = np.indices(h1.data.shape) - h1.shape_xyz[0] / 2
+    res = (3.5 + 0.08 * np.sqrt(x ** 2 + y ** 2 + z ** 2) * apix).astype(np.float32)
+    h1.like(res).write(f"{root}_locres.mrc")
+    h1.like((h1.data + h2.data) / 2).write(f"{root}_locres_filtered.mrc")
+    t = rl.StarTable("fsc")
+    t.set_column("rlnSpectralIndex", [1, 2, 3])
+    t.set_column("rlnFourierShellCorrelation", [1.0, 0.8, 0.1])
+    rl.write_star(f"{root}_locres_fscs.star", [t])
+    if "--mask" in a:
+        print(" WARNING: --mask is used only to make a histogram of local resolutions; it is not used for local "
+              "resolution calculation itself.", file=sys.stderr)
+        if MapVolume.read(a["--mask"]).shape_xyz != h1.shape_xyz:
+            die("The shape of the input half maps and the mask is not the same.")
+        print("Calculating a histogram of local resolutions within the mask.")
 
 
 def reconstruct(argv):
@@ -271,8 +327,11 @@ def mpirun(argv):
 
 PROGRAMS = {"relion_refine": refine, "relion_refine_mpi": refine, "relion_particle_subtract": subtract,
             "relion_particle_subtract_mpi": subtract, "relion_particle_symmetry_expand": expand,
-            "relion_postprocess": postprocess, "relion_reconstruct": reconstruct, "relion_reconstruct_mpi": reconstruct,
-            "mpirun": mpirun}
+            "relion_postprocess": postprocess, "relion_postprocess_mpi": postprocess, "relion_reconstruct": reconstruct,
+            "relion_reconstruct_mpi": reconstruct, "mpirun": mpirun}
+PROGRAMS.update(relion_spa.PROGRAMS)
+# relion_refine: 2D classification, initial model and multi-body refinement in relion_spa, the rest here
+PROGRAMS["relion_refine"] = PROGRAMS["relion_refine_mpi"] = lambda argv: relion_spa.refine_spa(argv, refine)
 
 if __name__ == "__main__":
     prog = os.path.basename(sys.argv[0])

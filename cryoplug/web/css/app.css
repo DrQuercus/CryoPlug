@@ -202,7 +202,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); out
   border: 1px solid var(--border); white-space: nowrap; }
 /* data types: the families of the tree view's lines (maps blue, models and sequences orange, particles green) */
 .tag.type-map, .tag.type-half_maps, .tag.type-mask, .tag.type-locres, .tag.type-variability, .tag.type-volume_series { background: rgba(42, 120, 214, .1); }
-.tag.type-particles, .tag.type-latent { background: rgba(27, 175, 122, .13); }
+.tag.type-particles, .tag.type-latent, .tag.type-coordinates, .tag.type-class_averages { background: rgba(27, 175, 122, .13); }
+.tag.type-movies, .tag.type-micrographs { background: rgba(237, 161, 0, .14); }
 .tag.type-model { background: rgba(235, 104, 52, .12); }
 .tag.type-sequence { background: rgba(235, 104, 52, .12); }
 .tag.type-report, .tag.type-fsc { background: rgba(74, 58, 167, .1); }
@@ -368,6 +369,9 @@ pre.log .cmd { color: #8ec5ff; }
 .plot .ref line { stroke: var(--ink-3); stroke-width: 1; }
 .plot .series path { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .plot .crosshair { stroke: var(--ink-3); stroke-width: 1; }
+.plot .thresholds line { stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.plot .thresholds text { fill: var(--ink-2); font-weight: 600; }
+.plot .bars path.on { fill: var(--accent-strong); }
 .plot .tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, .15); padding: 6px 9px; font-size: 12px; min-width: 130px; z-index: 5; }
 .plot .tip .tip-x { color: var(--ink-2); margin-bottom: 3px; }
@@ -385,6 +389,38 @@ pre.log .cmd { color: #8ec5ff; }
 .legend i { width: 14px; height: 2px; border-radius: 1px; display: inline-block; }
 .plot-head { display: flex; align-items: center; gap: 8px; }
 .plot-head h5 { margin: 0; font-size: 13px; font-weight: 600; }
+
+/* 2D class averages ------------------------------------------------------------ */
+.cls-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cls-head h4 { margin: 0; display: inline-flex; align-items: center; gap: 8px; }
+.cls-head .seg button { padding: 3px 10px; font-size: 12px; }
+.cls-zoom { display: inline-flex; align-items: center; gap: 4px; }
+.cls-zoom input { width: 90px; }
+.cls-meta-line { margin: 2px 0 4px; }
+.cls-bar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 8px;
+  padding: 8px 0 2px; border-top: 1px solid var(--border); background: var(--surface-1); font-size: 12.5px; color: var(--ink-2); }
+.cls-bar b { color: var(--ink-1); font-variant-numeric: tabular-nums; }
+.cls-tools { display: inline-flex; gap: 4px; }
+.cls-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--cls-size, 112px), 1fr)); gap: 6px; }
+.cls-tile { position: relative; display: flex; flex-direction: column; padding: 0; border: 2px solid transparent; border-radius: 6px;
+  overflow: hidden; background: #000; color: inherit; font: inherit; text-align: left; }
+button.cls-tile { cursor: pointer; }
+.cls-tile img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; user-select: none; }
+.cls-num, .cls-score { position: absolute; top: 3px; padding: 0 5px; border-radius: 4px; background: rgba(0, 0, 0, .6); color: #fff;
+  font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.cls-num { left: 3px; }
+.cls-score { right: 3px; }
+.cls-meta { display: flex; justify-content: space-between; gap: 4px; padding: 2px 5px; background: var(--surface-2); color: var(--ink-2);
+  font-size: 11px; font-variant-numeric: tabular-nums; }
+.cls-meta b { color: var(--ink-1); font-weight: 600; }
+button.cls-tile:hover { border-color: var(--border); }
+button.cls-tile:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.cls-tile.on { border-color: var(--accent); }
+.cls-tile.on .cls-meta { background: var(--accent); color: #fff; }
+.cls-tile.on .cls-meta b, .cls-tile.on .cls-meta .muted { color: #fff; }
+.cls-tile.on .cls-num { background: var(--accent); }
+.cls-tile.empty img { opacity: .35; }
+.decided .cls-tile:not(.on) { opacity: .45; }
 
 /* latent space explorer ------------------------------------------------------ */
 .lx-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
@@ -440,6 +476,7 @@ pre.log .cmd { color: #8ec5ff; }
 .fam-map { --fam: var(--series-1); }
 .fam-model { --fam: var(--series-2); }
 .fam-particles { --fam: var(--series-3); }
+.fam-micrographs { --fam: var(--series-4); }
 .fam-other { --fam: var(--ink-3); }
 .sw.fam-other line, .tlink.fam-other .line { stroke-dasharray: 4 4; }
 .tree-view { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); cursor: grab;

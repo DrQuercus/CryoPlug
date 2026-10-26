@@ -25,11 +25,17 @@ built-in. In: none. Out: half_maps: half_maps, map: map, map_sharp: map, mask: m
 Import half maps, full maps and masks from any software (RELION, cryoDRGN, EMDB entries...).
 Usually followed by: `map_fsc`, `directional_fsc`, `locscale`, `import_model`.
 
+### `relion_import` — Import movies (RELION)
+built-in. In: none. Out: movies: movies, micrographs: micrographs.
+
+Imports raw movies (or single-frame micrographs) with their optics group: pixel size, voltage, spherical aberration, amplitude contrast, MTF and gain reference. Writes the movies.star of relion_import; the movie folders are linked into the job folder, nothing is copied. The start of the RELION pipeline: motion correction, CTF estimation, picking...
+Usually followed by: `relion_motioncorr`.
+
 ### `import_particles` — Import particles
 built-in. In: none. Out: particles: particles, latent: latent.
 
 Particles for heterogeneity analysis (cryoDRGN): a CryoSPARC job folder or .cs file (merged with its passthrough file), or a RELION .star file. Only the metadata is read: the images stay in place.
-Usually followed by: `cryodrgn_backproject`, `cryodrgn_train`, `cryodrgn_abinit`, `relion_local_refine`, `relion_reconstruct`.
+Usually followed by: `cryodrgn_backproject`, `cryodrgn_train`, `cryodrgn_abinit`, `relion_local_refine`, `relion_reconstruct`, `relion_class2d`.
 
 ### `import_sequence` — Import sequence
 built-in. In: none. Out: sequence: sequence.
@@ -43,7 +49,79 @@ built-in. In: none. Out: series: volume_series.
 Series of volumes from CryoSPARC 3D Variability Display, 3D Flex Generate, cryoDRGN, RELION multi-body or any program: a folder, a ZIP file or a file pattern. One series per variability component; play them in the 3D viewer and analyse them with 'Volume series analysis'.
 Usually followed by: `series_analysis`, `extract_volume`.
 
+## Preprocessing
+
+### `relion_ctffind` — CTF estimation (CTFFIND)
+RELION. In: micrographs: micrographs. Out: micrographs: micrographs.
+
+Fits the contrast transfer function of every micrograph with CTFFIND 4.1 or 5 (run by relion_run_ctffind): defocus, astigmatism, phase shift, and the resolution to which the fit holds (the best criterion to curate the micrographs).
+Usually followed by: `relion_curate`, `relion_autopick`.
+
+### `relion_curate` — Curate micrographs
+built-in. In: micrographs: micrographs. Out: micrographs: micrographs, rejected: micrographs.
+
+Keeps the micrographs whose CTF fit, defocus, astigmatism, motion or ice meet thresholds (as CryoSPARC's Curate Exposures; relion_star_handler --select one criterion at a time). Shows the distributions with the thresholds; the rejected micrographs are an output too.
+Usually followed by: `relion_autopick`, `relion_topaz_train`.
+
+### `relion_motioncorr` — Motion correction (RELION)
+RELION · GPU optional. In: movies: movies. Out: micrographs: micrographs.
+
+Aligns the frames of each movie (beam-induced motion, in patches) and sums them with dose weighting: RELION's own CPU implementation of the MotionCor2 algorithm, or UCSF MotionCor2 on GPUs. Also writes the summed power spectra that CTFFIND uses. Gives the micrographs and the motion of every movie (for Bayesian polishing).
+Usually followed by: `relion_ctffind`.
+
+## Picking
+
+### `relion_autopick` — Auto-picking (RELION)
+RELION · GPU optional. In: micrographs: micrographs, references?: class_averages, map?: map, topaz_model?: topaz_model. Out: coordinates: coordinates.
+
+Picks particles on the micrographs with relion_autopick: Laplacian-of-Gaussian blob detection (no template: the way to start a new data set), template matching against 2D class averages or projections of a 3D map, or Topaz (a neural network, general or trained on this data set).
+Usually followed by: `relion_extract`.
+
+### `relion_extract` — Particle extraction (RELION)
+RELION. In: micrographs: micrographs, coordinates?: coordinates, particles?: particles. Out: particles: particles.
+
+Cuts the particles out of the micrographs (relion_preprocess --extract), with their CTF: box, down-scaling, contrast inversion and normalisation as RELION expects. Also re-extracts refined particles (re-centred on their refined positions, or at another pixel size).
+Usually followed by: `relion_class2d`, `relion_initial_model`, `relion_refine3d`.
+
+### `relion_topaz_train` — Topaz training (RELION)
+RELION · GPU. In: micrographs: micrographs, particles?: particles, coordinates?: coordinates. Out: topaz_model: topaz_model.
+
+Trains a Topaz picking network on this data set (relion_autopick --topaz_train): from particles picked and cleaned once (the particles of good 2D classes) or from coordinates. Pick the whole data set with the trained model next (Auto-picking, Topaz).
+Usually followed by: `relion_autopick`.
+
+## Classification
+
+### `relion_class2d` — 2D classification (RELION)
+RELION · GPU optional. In: particles: particles. Out: classes: class_averages, particles: particles.
+
+Sorts the particles into 2D class averages (relion_refine): VDAM, the fast gradient algorithm of RELION 4/5, or the classic EM algorithm. The class averages show up while it runs; the particles keep their class for the selection of the good classes (Select 2D classes).
+Usually followed by: `relion_select2d`, `relion_class2d`.
+
+### `relion_class3d_global` — 3D classification (RELION)
+RELION · GPU optional. In: particles: particles, map: map, mask?: mask. Out: maps: volume_series, particles: particles, map_1: map, class_1: particles.
+
+Sorts the particles into 3D classes against a reference (relion_refine --K): global angular searches, local ones, or none (classification with the poses kept). Every class gives a map and its particles; Blush regularisation helps small or flexible particles.
+Usually followed by: `relion_refine3d`, `relion_class3d_global`.
+
+### `relion_select2d` — Select 2D classes
+RELION · interactive: a person works in it. In: classes: class_averages. Out: particles: particles, rejected: particles, class_averages: class_averages.
+
+Keeps the particles of the good 2D classes. As in CryoSPARC, the job shows the class averages and waits: click the good classes (sorted by size or resolution), then Done. The classes can also be listed, or chosen automatically by RELION's class ranker. Gives the selected particles, the rejected ones, and the selected class averages (templates for picking).
+Usually followed by: `relion_initial_model`, `relion_class2d`, `relion_class3d_global`, `relion_refine3d`, `relion_topaz_train`, `relion_autopick`.
+
 ## Reconstruction
+
+### `relion_refine3d` — 3D auto-refine (RELION)
+RELION · GPU optional. In: particles: particles, map: map, mask?: mask. Out: map: map, half_maps: half_maps, map_sharp: map, mask: mask, fsc: fsc, particles: particles.
+
+Gold-standard 3D refinement of the particles against a reference (relion_refine --auto_refine): global angular searches first, local ones as it converges, two independent half sets. Gives the map, the half maps, the FSC, the refined particles and, with a mask, the post-processed map.
+Usually followed by: `relion_mask_create`, `relion_ctf_refine`, `relion_polish`, `relion_postprocess`, `relion_locres`, `relion_multibody`, `relion_dynamight`, `relion_local_refine`.
+
+### `relion_initial_model` — 3D initial model (RELION)
+RELION · GPU optional. In: particles: particles. Out: map: map, maps: volume_series, particles: particles.
+
+Makes a first 3D map from the particles without any reference (relion_refine --grad --denovo_3dref, VDAM), then aligns it on the symmetry axes and applies the symmetry (relion_align_symmetry): RELION's ab initio. Several classes separate different structures.
+Usually followed by: `relion_class3d_global`, `relion_refine3d`.
 
 ### `relion_class3d` — RELION 3D classification (focused)
 RELION · GPU optional. In: particles: particles, map: map, mask?: mask. Out: maps: volume_series, particles: particles, class_1: particles, map_1: map.
@@ -167,6 +245,12 @@ Phenix. In: half_maps?: half_maps, map?: map, model?: model, sequence?: sequence
 Phenix's sharpening tool (phenix.map_sharpening, which replaces auto_sharpen and local_aniso_sharpen in Phenix 2): shell scaling from two half maps (or a map and a fitted model), anisotropic and optionally local; or B-factor sharpening of a single map.
 Usually followed by: `modelangelo_build`, `cryoatom_build`, `cryoatom_enhanced`, `phenix_real_space_refine`, `local_resolution`.
 
+### `relion_mask_create` — Mask creation (RELION)
+RELION. In: map: map. Out: mask: mask.
+
+relion_mask_create: the map low-pass filtered, thresholded, extended by a few pixels and given a soft raised-cosine edge. The solvent mask of post-processing, refinement and CTF refinement.
+Usually followed by: `relion_refine3d`, `relion_ctf_refine`, `relion_polish`, `relion_postprocess`, `relion_locres`.
+
 ### `draw_mask` — Mask drawn in the 3D viewer
 built-in. In: map: map, model?: model. Out: mask: mask.
 
@@ -174,6 +258,18 @@ Mask drawn by hand on a map in the 3D viewer, as in Chimera: spheres, boxes and 
 Usually followed by: `relion_subtract`, `relion_local_refine`, `relion_class3d`, `map_fsc`, `locscale`.
 
 ## Heterogeneity
+
+### `relion_multibody` — 3D multi-body refinement (RELION)
+RELION · GPU optional. In: particles: particles, body_1: mask, body_2: mask, body_3?: mask, body_4?: mask, body_5?: mask, body_6?: mask. Out: particles: particles, body_1: map, motion_1: volume_series, selected: particles.
+
+Refines rigid bodies of a flexible complex separately, each with its own mask, starting from a consensus auto-refinement (relion_refine --multibody_masks), then analyses their motions (relion_flex_analyse): the main movements as series of maps to play in the 3D viewer.
+Usually followed by: `relion_subset`, `relion_refine3d`, `composite_map`.
+
+### `relion_dynamight` — DynaMight flexibility (RELION)
+RELION · GPU. In: particles: particles, map: map. Out: half_maps: half_maps, map: map.
+
+Learns the continuous motions of the particles as deformations of a Gaussian model of the consensus map (DynaMight, RELION 5), then optionally the inverse deformations and a deformed back-projection: a consensus map improved where the particle moves. Explore the latent space afterwards with relion_python_dynamight explore-latent-space (an interactive window).
+Usually followed by: `relion_postprocess`, `locscale`, `relion_locres`.
 
 ### `extract_volume` — Extract volume from series
 built-in. In: series: volume_series. Out: map: map.
@@ -337,6 +433,18 @@ Phenix. In: model: model, map: map. Out: model: model.
 Place ordered water molecules in the map around the model (phenix.douse). Useful for maps better than about 2.5-3 Å; refine and inspect the waters afterwards.
 Usually followed by: `phenix_real_space_refine`, `servalcat_refine`.
 
+### `relion_polish` — Bayesian polishing (RELION)
+RELION. In: particles: particles, micrographs: micrographs, half_maps: half_maps, mask: mask, params?: polish_params. Out: particles: particles, polish_params: polish_params.
+
+Tracks the motion of every particle through the movie frames and re-extracts them with frame weights fitted to the data (relion_motion_refine). Train the motion parameters once on a subset (optional), then polish; refine the polished ('shiny') particles again.
+Usually followed by: `relion_refine3d`.
+
+### `relion_ctf_refine` — CTF refinement (RELION)
+RELION. In: particles: particles, half_maps: half_maps, mask: mask. Out: particles: particles.
+
+Refines the optics of the data set and the CTF of every particle against the refined map (relion_ctf_refine): anisotropic magnification, beam tilt, trefoil and 4th-order aberrations per optics group, then defocus per particle and astigmatism per micrograph. 'Complete' runs the three passes of the RELION tutorial in a row; refine the particles again afterwards.
+Usually followed by: `relion_refine3d`, `relion_polish`.
+
 ### `phenix_real_space_refine` — Real-space refinement (Phenix)
 Phenix. In: model: model, map: map, restraints?: restraints. Out: model: model.
 
@@ -362,6 +470,12 @@ Phenix. In: model: model, map: map. Out: report: report.
 
 Side-chain density-based validation of model-to-map fit (Barad et al. 2015). Meaningful below ~4.5 Å.
 Usually followed by: `isolde_session`.
+
+### `relion_locres` — Local resolution (RELION)
+RELION. In: half_maps: half_maps, mask?: mask. Out: locres: locres, map: map.
+
+Local resolution with relion_postprocess --locres: FSC in a soft sphere moved over the map. Gives the local resolution map (to colour the map in the 3D viewer) and the map locally filtered to it.
+Usually followed by: `locscale`, `modelangelo_build`, `relion_multibody`.
 
 ### `mapmodel_validation` — Map-model validation (Q-score, FSC)
 built-in. In: model: model, map: map, fsc?: fsc. Out: report: report.
@@ -407,6 +521,12 @@ Shell (custom commands) · GPU optional · administrators only, not for agents. 
 
 Run any program on CryoPlug data (bash script template). Placeholders: {map} {map2} {half_map_a} {half_map_b} {model} {mask} {sequence} {job_dir} {resolution} {pixel_size} {gpus}. Files matching the output patterns are registered as outputs.
 
+### `relion_join` — Join star files (RELION)
+RELION. In: set_1: particles/micrographs/movies, set_2: particles/micrographs/movies, set_3?: particles/micrographs/movies, set_4?: particles/micrographs/movies. Out: particles: particles, micrographs: micrographs, movies: movies.
+
+Merges two to four particle, micrograph or movie sets into one (relion_star_handler --combine), removing particles present twice.
+Usually followed by: `relion_class2d`, `relion_refine3d`, `relion_subset`.
+
 ### `merge_models` — Merge models
 built-in. In: model_a: model, model_b: model, model_c?: model, model_d?: model. Out: model: model.
 
@@ -423,3 +543,9 @@ Usually followed by: `phenix_real_space_refine`.
 UCSF ChimeraX (+ ISOLDE). In: map?: map, model?: model. Out: images: files.
 
 Offscreen ChimeraX rendering of the map and/or model from three orthogonal views (figures, reports).
+
+### `relion_subset` — Subset selection (RELION)
+RELION. In: data: particles/micrographs. Out: particles: particles, micrographs: micrographs, subset_1: particles, subset_2: particles.
+
+relion_star_handler on a particle or micrograph set: remove duplicated particles (closer than a distance after alignment: they inflate the FSC), split into subsets, keep the rows of a metadata range, or discard images with outlying statistics.
+Usually followed by: `relion_refine3d`, `relion_class2d`, `relion_join`.

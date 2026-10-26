@@ -212,6 +212,49 @@ WORKFLOWS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "relion_spa",
+        "title": "Movies to map (RELION single particle)",
+        "description": ("The whole single-particle pipeline in RELION, as in CryoSPARC: movies imported → motion correction "
+                        "→ CTF estimation → micrographs curated on their CTF fit → Laplacian-of-Gaussian picking → "
+                        "extraction (down-scaled) → 2D classification → selection of the good classes (the job shows the "
+                        "class averages and waits for your clicks: the chain waits for it) → initial model → 3D "
+                        "auto-refine → mask → post-processing and local resolution. CTF refinement and a second "
+                        "refinement are optional."),
+        "nodes": [
+            {"id": "import", "type": "relion_import", "title": "Import movies",
+             "ask": ["movies", "pixel_size", "voltage", "cs", "dose_per_frame", "gain"]},
+            {"id": "motion", "type": "relion_motioncorr", "inputs": {"movies": ["import", "movies"]},
+             "ask": ["binning", "patches_x", "patches_y", "threads"]},
+            {"id": "ctf", "type": "relion_ctffind", "inputs": {"micrographs": ["motion", "micrographs"]}, "ask": ["mpi"]},
+            {"id": "curate", "type": "relion_curate", "params": {"max_ctf_resolution": 8.0},
+             "inputs": {"micrographs": ["ctf", "micrographs"]}, "ask": ["max_ctf_resolution", "max_motion"]},
+            {"id": "pick", "type": "relion_autopick", "title": "Auto-picking (Laplacian-of-Gaussian)",
+             "params": {"method": "log"}, "inputs": {"micrographs": ["curate", "micrographs"]},
+             "ask": ["diameter_min", "diameter_max", "log_threshold"]},
+            {"id": "extract", "type": "relion_extract",
+             "inputs": {"micrographs": ["curate", "micrographs"], "coordinates": ["pick", "coordinates"]},
+             "ask": ["box", "rescale"]},
+            {"id": "class2d", "type": "relion_class2d", "inputs": {"particles": ["extract", "particles"]},
+             "ask": ["classes", "gpus"]},
+            {"id": "select", "type": "relion_select2d", "title": "Select the good 2D classes",
+             "inputs": {"classes": ["class2d", "classes"]}},
+            {"id": "inimodel", "type": "relion_initial_model", "inputs": {"particles": ["select", "particles"]},
+             "ask": ["symmetry", "gpus"]},
+            {"id": "refine", "type": "relion_refine3d", "inputs": {"particles": ["select", "particles"], "map": ["inimodel", "map"]},
+             "ask": ["symmetry", "mpi", "gpus"]},
+            {"id": "mask", "type": "relion_mask_create", "inputs": {"map": ["refine", "map"]}, "ask": ["lowpass", "extend", "soft_edge"]},
+            {"id": "post", "type": "relion_postprocess", "inputs": {"half_maps": ["refine", "half_maps"], "mask": ["mask", "mask"]}},
+            {"id": "locres", "type": "relion_locres", "inputs": {"half_maps": ["refine", "half_maps"], "mask": ["mask", "mask"]},
+             "optional": True},
+            {"id": "ctfrefine", "type": "relion_ctf_refine", "optional": True, "default": False,
+             "inputs": {"particles": ["refine", "particles"], "half_maps": ["refine", "half_maps"], "mask": ["mask", "mask"]}},
+            {"id": "refine2", "type": "relion_refine3d", "title": "3D auto-refine after CTF refinement", "optional": True,
+             "default": False, "params": {"ini_high": 10.0},
+             "inputs": {"particles": ["ctfrefine", "particles"], "map": ["refine", "map"], "mask": ["mask", "mask"]},
+             "ask": ["symmetry", "mpi", "gpus"]},
+        ],
+    },
+    {
         "id": "relion_focused_refinement",
         "title": "Focused refinement with signal subtraction (RELION)",
         "description": ("Local refinement of a region in RELION, from a CryoSPARC consensus refinement: particles and maps "

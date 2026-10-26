@@ -125,6 +125,8 @@ const ICONS = {
   minus: 'M5 12h14',
   tree: 'M9.5 3h5v4h-5zM3.5 17h5v4h-5zM15.5 17h5v4h-5zM12 7v6M6 17v-3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v3',
   sort: 'M7 4v16M3.5 16.5L7 20l3.5-3.5M13 6h8M13 11h6M13 16h4',
+  film: 'M4 4h16v16H4zM8 4v16M16 4v16M4 8h4M4 12h4M4 16h4M16 8h4M16 12h4M16 16h4',
+  picks: 'M7.5 10a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM16.5 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM10 19.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 3h3M3 3v3M21 21h-3M21 21v-3',
   blank: 'M0 0', // draws nothing: keeps menu labels aligned
 };
 

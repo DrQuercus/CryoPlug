@@ -21,6 +21,9 @@ from cryoplug import tools as toolmod
 
 CATEGORIES = [
     "Import",
+    "Preprocessing",
+    "Picking",
+    "Classification",
     "Reconstruction",
     "Map processing",
     "Heterogeneity",
@@ -32,6 +35,12 @@ CATEGORIES = [
     "Utilities",
 ]
 DATA_TYPES = {
+    "movies": "Movies",
+    "micrographs": "Micrographs",
+    "coordinates": "Particle coordinates",
+    "class_averages": "2D classes",
+    "topaz_model": "Topaz model",
+    "polish_params": "Polishing parameters",
     "half_maps": "Half maps",
     "map": "Map",
     "mask": "Mask",
@@ -281,8 +290,9 @@ class JobType:
     def run(self, ctx: "JobContext") -> None:
         raise NotImplementedError
 
-    def prepare(self, ctx: "JobContext") -> None:
-        """Interactive jobs: prepare the session, then the job waits for the user."""
+    def prepare(self, ctx: "JobContext") -> bool | None:
+        """Interactive jobs: prepare the session, then the job waits for the user. True: nothing left for the user
+        (the choice was given in the parameters), the job is complete."""
         raise NotImplementedError
 
     def finalize(self, ctx: "JobContext", choice: str | None) -> None:
@@ -651,7 +661,10 @@ class JobContext:
 
     # ------------------------------------------------------------- outputs
     def add_output(self, name: str, type: str, files: str | Path | list[str | Path], label: str | None = None,
-                   meta: dict[str, Any] | None = None, inherit: Iterable[str] = ()) -> dict[str, Any]:
+                   meta: dict[str, Any] | None = None, inherit: Iterable[str] = (),
+                   thumbnail: str | Path | None = None) -> dict[str, Any]:
+        """``thumbnail``: a picture made by the job (micrographs, picks, class averages), instead of the one drawn
+        from the file for maps and models."""
         file_list = [files] if isinstance(files, (str, Path)) else list(files)
         for f in file_list:
             if not Path(f).exists():  # written next to an input instead? bring it back
@@ -676,7 +689,8 @@ class JobContext:
             "files": [self.rel(f) for f in file_list],
             "meta": full_meta,
         }
-        thumb = self._thumbnail(name, type, Path(file_list[len(file_list) // 2 if type == "volume_series" else 0]))
+        thumb = Path(thumbnail) if thumbnail and Path(thumbnail).exists() else \
+            self._thumbnail(name, type, Path(file_list[len(file_list) // 2 if type == "volume_series" else 0]))
         if thumb:
             out["thumbnail"] = self.rel(thumb)
         self.outputs = [o for o in self.outputs if o["name"] != name] + [out]
@@ -733,10 +747,19 @@ class JobContext:
 
     def add_plot(self, title: str, series: list[dict[str, Any]], x_label: str = "", y_label: str = "",
                  x_kind: str = "linear", hlines: list[dict[str, Any]] | None = None, y_range: list[float] | None = None,
-                 key: str | None = None, note: str = "") -> None:
-        """series: [{name, x: [...], y: [...]}]; x_kind 'resolution' labels 1/A axes in A."""
+                 key: str | None = None, note: str = "", style: str = "line",
+                 vlines: list[dict[str, Any]] | None = None) -> None:
+        """series: [{name, x: [...], y: [...]}]; x_kind 'resolution' labels 1/A axes in A; style 'bars' draws a
+        histogram (x: bin centres); vlines: thresholds across the x axis [{x, label}]."""
+        extra: dict[str, Any] = {}
+        if note:
+            extra["note"] = note
+        if style != "line":
+            extra["style"] = style
+        if vlines:
+            extra["vlines"] = vlines
         self._section("plot", title, key=key, series=series, x_label=x_label, y_label=y_label, x_kind=x_kind,
-                      hlines=hlines or [], y_range=y_range, **({"note": note} if note else {}))
+                      hlines=hlines or [], y_range=y_range, **extra)
 
     def add_heatmap(self, title: str, x_labels: list[str], y_labels: list[str], values: list[list[float]],
                     unit: str = "", x_label: str = "", y_label: str = "", note: str = "", key: str | None = None) -> None:
@@ -754,6 +777,11 @@ class JobContext:
 
     def add_image(self, title: str, path: str | Path, key: str | None = None) -> None:
         self._section("image", title, key=key, path=self.rel(path))
+
+    def add_classes(self, title: str, classes: list[dict[str, Any]], key: str | None = None, **data: Any) -> None:
+        """Gallery of 2D class averages: [{class, image (PNG), particles, fraction, resolution...}]; ``selectable``
+        lets the user pick classes (the Select 2D classes job, or a new selection from a 2D classification)."""
+        self._section("classes2d", title, key=key, classes=classes, **data)
 
     def add_latent(self, title: str, path: str | Path) -> None:
         """Interactive latent space explorer reading the JSON file at ``path`` (see jobs.heterogeneity)."""

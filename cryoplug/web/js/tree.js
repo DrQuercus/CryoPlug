@@ -18,15 +18,18 @@ const PAD = 40; // around the tree
 const K_MIN = 0.1;
 const K_MAX = 2;
 
-// The kind of data a line carries (its colour): density maps, models (and what builds them), particles, the rest.
+// The kind of data a line carries (its colour): density maps, models (and what builds them), particles, movies and
+// micrographs, the rest.
 const FAMILY = {
   map: 'map', half_maps: 'map', mask: 'map', locres: 'map', variability: 'map', volume_series: 'map',
   model: 'model', restraints: 'model', sequence: 'model', particles: 'particles', latent: 'particles',
+  coordinates: 'particles', class_averages: 'particles', movies: 'micrographs', micrographs: 'micrographs',
 };
-const FAMILIES = [['map', 'Maps'], ['model', 'Models, sequences'], ['particles', 'Particles'], ['other', 'Other data']];
+const FAMILIES = [['micrographs', 'Movies, micrographs'], ['map', 'Maps'], ['model', 'Models, sequences'], ['particles', 'Particles'],
+  ['other', 'Other data']];
 const familyOf = (types) => {
   const fams = new Set(types.map((t) => FAMILY[t] || 'other'));
-  return ['model', 'particles', 'map'].find((f) => fams.has(f)) || 'other';
+  return ['model', 'particles', 'map', 'micrographs'].find((f) => fams.has(f)) || 'other';
 };
 
 // ------------------------------------------------------------------ layout

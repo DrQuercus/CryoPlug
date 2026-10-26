@@ -244,10 +244,12 @@ def report_fsc(ctx: JobContext, frequency: list[float], curves: dict[str, list[f
 def postprocess(ctx: JobContext, half1: Path, half2: Path, mask: Path, apix: float, bfactor: float,
                 resolution: float | None, name: str = "postprocess", locres: bool = False, mtf: str = "",
                 extra: list[str] | None = None) -> dict[str, Any]:
-    """relion_postprocess of two half maps with a mask; returns its results (resolution, B-factor, curves)."""
+    """relion_postprocess of two half maps with a mask; returns its results (resolution, B-factor, curves).
+    ``locres``: then the local resolution, in a second run (with --locres relion_postprocess does only that, and
+    refuses --auto_bfac: the locally filtered map is sharpened with the B-factor of the first run)."""
     root = ctx.rel(ctx.path(name))
-    args = [ctx.program(TOOL, "relion_postprocess"), "--mask", ctx.rel(mask), "--i", ctx.rel(half1), "--i2", ctx.rel(half2),
-            "--o", root, "--angpix", f"{apix:g}"]
+    common = ["--mask", ctx.rel(mask), "--i", ctx.rel(half1), "--i2", ctx.rel(half2), "--o", root, "--angpix", f"{apix:g}"]
+    args = [ctx.program(TOOL, "relion_postprocess"), *common]
     if bfactor:
         args += ["--adhoc_bfac", f"{bfactor:g}"]
     elif resolution and resolution > 8.0:
@@ -256,14 +258,18 @@ def postprocess(ctx: JobContext, half1: Path, half2: Path, mask: Path, apix: flo
         args += ["--auto_bfac", "--autob_lowres", "10"]
     if mtf:
         args += ["--mtf", mtf]
-    if locres:
-        args.append("--locres")
     run_relion(ctx, [*args, *(extra or [])])
     star = ctx.path(f"{name}.star")
     if not star.exists():
         raise JobError(f"relion_postprocess did not write {star.name} (see the log)")
-    return {**rl.postprocess_results(star), "map": ctx.path(f"{name}.mrc"), "masked": ctx.path(f"{name}_masked.mrc"),
-            "locres": ctx.path(f"{name}_locres.mrc")}
+    results = {**rl.postprocess_results(star), "map": ctx.path(f"{name}.mrc"), "masked": ctx.path(f"{name}_masked.mrc"),
+               "locres": ctx.path(f"{name}_locres.mrc")}
+    if locres:
+        sharpen = bfactor or results.get("bfactor") or 0.0
+        ctx.progress(0.6, "relion_postprocess --locres (local resolution)")
+        run_relion(ctx, [ctx.program(TOOL, "relion_postprocess"), "--locres", *common, "--adhoc_bfac", f"{sharpen:g}",
+                         *(["--mtf", mtf] if mtf else [])])
+    return results
 
 
 def particles_meta(ctx: JobContext, star: Path, parts: dict[str, Any], kind: str, symmetry: str, **extra: Any) -> dict[str, Any]:
@@ -284,7 +290,7 @@ class Progress:
     """Live progress of relion_refine from its output."""
     ITER = re.compile(r"Auto-refine: Iteration=\s*(\d+)")
     RES = re.compile(r"Auto-refine: Resolution=\s*([\d.]+)")
-    EXP = re.compile(r"Expectation iteration\s+(\d+)(?:\s+of\s+(\d+))?")
+    EXP = re.compile(r"(?:Expectation|Gradient optimisation) iteration\s+(\d+)(?:\s+of\s+(\d+))?")
 
     def __init__(self, ctx: JobContext, total: int = 0, start: float = 0.05, end: float = 0.9):
         self.ctx, self.total, self.start, self.end = ctx, total, start, end

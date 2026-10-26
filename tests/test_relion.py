@@ -213,7 +213,9 @@ def test_relion_postprocess_and_reconstruct(manager, relion_project):
               {"half_maps": {"job": maps["uid"], "output": "half_maps"}, "mask": {"job": maps["uid"], "output": "mask"}})
     o = _outs(pp)
     assert o["map_sharp"]["meta"]["resolution"] == 3.6 and {"fsc", "map_masked", "map_locres"} <= set(o)
-    assert "--auto_bfac" in log_of(manager, puid, pp["uid"])
+    log = log_of(manager, puid, pp["uid"])
+    # --locres makes relion_postprocess do only the local resolution, without --auto_bfac: a second run
+    assert "--auto_bfac" in log and "--locres --mask" in log and "--adhoc_bfac -85" in log
     rec = _run(manager, puid, "relion_reconstruct", {},
                {"particles": {"job": parts["uid"], "output": "particles"}})
     assert {"map", "half_maps", "fsc"} <= set(_outs(rec))

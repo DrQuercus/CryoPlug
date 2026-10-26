@@ -539,6 +539,31 @@ def report_lines(report: dict[str, Any] | None, full: bool = False) -> list[str]
             lines.append(f"[{title}] image {sec.get('path', '')} (get_job_images shows it)")
         elif kind == "latent":
             lines.append(f"[{title}] interactive latent-space explorer (in the web interface)")
+        elif kind == "classes2d":
+            lines += class_lines(sec, rows_shown)
+    return lines
+
+
+def class_lines(sec: dict[str, Any], rows_shown: int) -> list[str]:
+    """2D class averages: the largest classes with their particles, share and resolution, and the selection made."""
+    classes = sorted(sec.get("classes") or [], key=lambda c: -(c.get("particles") or 0))
+    total = sum(c.get("particles") or 0 for c in classes) or 1
+    head = f"[{sec.get('title', '')}] {len(classes)} class averages, {total:,} particles"
+    if sec.get("selected"):
+        head += f"; kept: classes {', '.join(map(str, sec['selected']))}" + (f" ({sec['how']})" if sec.get("how") else "")
+    elif sec.get("selectable") and sec.get("waiting"):
+        head += ("; WAITING for a person to click the good classes in the job panel (or create a relion_select2d "
+                 "job with mode=list)")
+    lines = [head, "  class | particles | share | resolution (Å)" + (" | score" if any("score" in c for c in classes) else "")]
+    for c in classes[: max(rows_shown, 24)]:
+        res = c.get("resolution")
+        row = (f"  {c.get('class')} | {c.get('particles', 0):,} | {100 * (c.get('particles') or 0) / total:.1f} % | "
+               f"{value_text(res) if res and res < 900 else '-'}")
+        if "score" in c:
+            row += f" | {value_text(c['score'])}"
+        lines.append(row)
+    if len(classes) > max(rows_shown, 24):
+        lines.append(f"  … {len(classes) - max(rows_shown, 24)} smaller classes (get_job with full_report=true)")
     return lines
 
 

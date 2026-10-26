@@ -253,6 +253,9 @@ function lineage() {
 // Icon and colour of each job category: the picture of a card whose job has no image of its own.
 const CATEGORY_LOOK = {
   Import: ['download', '--cat-import'],
+  Preprocessing: ['film', '--series-5'],
+  Picking: ['picks', '--series-1'],
+  Classification: ['grid', '--series-4'],
   Reconstruction: ['target', '--series-8'],
   'Map processing': ['map', '--series-1'],
   Heterogeneity: ['layers', '--series-4'],

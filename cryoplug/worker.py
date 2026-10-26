@@ -63,8 +63,7 @@ def run_worker(job_dir: str | Path) -> int:
             ctx.log("Parameters: " + ", ".join(f"{k}={v!r}" for k, v in nondefault.items()))
         job = jt_cls()
         if jt_cls.interactive:
-            job.prepare(ctx)
-            final = "waiting"
+            final = "completed" if job.prepare(ctx) else "waiting"
         else:
             job.run(ctx)
             final = "completed"

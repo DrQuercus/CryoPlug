@@ -363,8 +363,14 @@ gpus = [0]
 # setup = "source /opt/phenix-2.2.1/phenix_env.sh"
 #
 # [tools.relion]
-# bin_dir = "/opt/relion-5.0/bin"
+# bin_dir = "/opt/relion-5.1/bin"
 # env = {{ MPIRUN = "mpirun" }}   # MPI launcher: "mpirun --oversubscribe" (Open MPI), "srun --mpi=pmix" (SLURM)...
+#
+# [tools.ctffind]                 # CTFFIND 4.1 or 5, for the CTF estimation of the RELION pipeline
+# executable = "/opt/ctffind-5.0/bin/ctffind5"
+#
+# [tools.motioncor]               # optional: MotionCor2 / MotionCor3 on GPUs (RELION's own motion correction needs none)
+# executable = "/opt/motioncor2/MotionCor2_1.6.4_Cuda121"
 #
 # [tools.modelangelo]
 # setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate model_angelo"

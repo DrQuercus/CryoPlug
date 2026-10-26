@@ -1,27 +1,28 @@
-# Guide CryoPlug — de la carte CryoSPARC au dépôt PDB/EMDB
+# Guide CryoPlug — des films (ou de la carte CryoSPARC) au dépôt PDB/EMDB
 
-Ce guide accompagne un projet complet : évaluer et améliorer la carte, construire le modèle, le corriger,
-l'affiner, le valider et préparer le dépôt. Il explique **quel job utiliser, dans quel cas, et comment
-lire les résultats**. La référence détaillée de chaque job est dans l'onglet « Référence des jobs » de
-la page d'aide (et dans `docs/JOBS.md`).
+Ce guide accompagne un projet complet : obtenir la carte à partir des films avec RELION (ou partir d'une carte
+CryoSPARC), l'évaluer et l'améliorer, construire le modèle, le corriger, l'affiner, le valider et préparer le dépôt.
+Il explique **quel job utiliser, dans quel cas, et comment lire les résultats**. La référence détaillée de chaque job
+est dans l'onglet « Référence des jobs » de la page d'aide (et dans `docs/JOBS.md`).
 
-> CryoPlug orchestre des logiciels reconnus (ModelAngelo, CryoAtom2, LocScale, Phenix, ISOLDE…). Il ne
+> CryoPlug orchestre des logiciels reconnus (RELION, ModelAngelo, CryoAtom2, LocScale, Phenix, ISOLDE…). Il ne
 > remplace pas l'expertise : chaque modèle doit être inspecté dans la carte avant d'être déposé.
 
 ## Sommaire
 
 1. [Démarrer](#1-démarrer)
-2. [Quelle carte pour quoi ?](#2-quelle-carte-pour-quoi-)
-3. [Étape 1 — Évaluer et améliorer la carte](#3-étape-1--évaluer-et-améliorer-la-carte)
-4. [Hétérogénéité avec cryoDRGN](#4-hétérogénéité-avec-cryodrgn)
-5. [Étape 2 — Construire le modèle](#5-étape-2--construire-le-modèle)
-6. [Étape 3 — Corriger et affiner](#6-étape-3--corriger-et-affiner)
-7. [Étape 4 — Valider](#7-étape-4--valider)
-8. [Étape 5 — Déposer](#8-étape-5--déposer)
-9. [Recettes par situation](#9-recettes-par-situation)
-10. [Dépannage](#10-dépannage)
-11. [Bonnes pratiques](#11-bonnes-pratiques)
-12. [Glossaire](#12-glossaire)
+2. [Étape 0 — Des films à la carte avec RELION](#2-étape-0--des-films-à-la-carte-avec-relion)
+3. [Quelle carte pour quoi ?](#3-quelle-carte-pour-quoi-)
+4. [Étape 1 — Évaluer et améliorer la carte](#4-étape-1--évaluer-et-améliorer-la-carte)
+5. [Hétérogénéité avec cryoDRGN](#5-hétérogénéité-avec-cryodrgn)
+6. [Étape 2 — Construire le modèle](#6-étape-2--construire-le-modèle)
+7. [Étape 3 — Corriger et affiner](#7-étape-3--corriger-et-affiner)
+8. [Étape 4 — Valider](#8-étape-4--valider)
+9. [Étape 5 — Déposer](#9-étape-5--déposer)
+10. [Recettes par situation](#10-recettes-par-situation)
+11. [Dépannage](#11-dépannage)
+12. [Bonnes pratiques](#12-bonnes-pratiques)
+13. [Glossaire](#13-glossaire)
 
 ---
 
@@ -209,7 +210,76 @@ conclure ou de déposer. Il cite les jobs (P3/J14) et les chiffres des rapports 
 
 ---
 
-## 2. Quelle carte pour quoi ?
+## 2. Étape 0 — Des films à la carte avec RELION
+
+CryoPlug fait tourner tout le traitement « single particle » de **RELION 5** avec une interface à la CryoSPARC : cartes
+des jobs avec vignettes (micrographies, particules repérées, classes), galerie de classes 2D qui se clique, histogrammes
+de CTF et de mouvement avec leurs seuils, jobs reliés par leurs sorties. Chaque job lance la commande que construit
+l'interface de RELION 5.1 pour les mêmes réglages, depuis le dossier du projet et avec des chemins relatifs : les
+fichiers STAR (`corrected_micrographs.star`, `micrographs_ctf.star`, `particles.star`, `run_data.star`…) restent ceux
+de RELION et se relisent dans RELION.
+
+### 2.1 La chaîne en un coup d'œil
+
+| Étape | Job | Réglages de départ | À regarder |
+|---|---|---|---|
+| Import | Import movies (RELION) | taille de pixel des films, dose par image, référence de gain | nombre de films, images par film |
+| Mouvement | Motion correction (RELION) | patchs 5 × 5, float16, spectres de puissance | mouvement cumulé, dérive, micrographies |
+| CTF | CTF estimation (CTFFIND) | 30–5 Å, spectres de puissance de l'étape précédente | résolution d'ajustement, défocus, image des ajustements |
+| Tri | Curate micrographs | ajustement CTF ≤ 6–8 Å, mouvement total | histogrammes avec les seuils, micrographies rejetées |
+| Picking | Auto-picking (RELION) | Laplacien de Gaussienne, diamètres min./max. de la particule | image des particules entourées, particules par micrographie |
+| Extraction | Particle extraction (RELION) | boîte ≈ 2 × le diamètre, réduite à 64–128 px | vignettes des particules |
+| 2D | 2D classification (RELION) | VDAM, 50–200 classes | galerie redessinée à chaque itération |
+| Sélection | Select 2D classes | les bonnes classes cliquées | particules gardées / rejetées |
+| Ab initio | 3D initial model (RELION) | C1, puis symétrie appliquée | carte initiale |
+| 3D (facultatif) | 3D classification (RELION) | 4–8 classes, T = 4 | cartes des classes (série dans le visualiseur) |
+| Raffinement | 3D auto-refine (RELION) | 3 processus MPI au moins, recherches locales dès 1,8° | FSC, résolution |
+| Masque | Mask creation (RELION) | filtre 15 Å, extension 3 px, bord 6 px | le masque sur la carte, dans le visualiseur |
+| Post-traitement | RELION post-processing, Local resolution (RELION) | facteur B automatique | FSC corrigée, facteur B, résolution locale |
+| Finitions | CTF refinement, Bayesian polishing, puis 3D auto-refine | les trois passes du tutoriel RELION | gain de résolution à chaque tour |
+
+Le workflow **Movies to map (RELION single particle)** crée toute la chaîne d'un coup : elle tourne jusqu'à la
+sélection des classes 2D, qui attend vos clics ; les jobs suivants attendent la sélection, puis repartent seuls.
+
+### 2.2 Configurer RELION, CTFFIND et MotionCor2
+
+- Page **Tools** : **RELION** (le dossier `bin` de RELION 5.1, où sont `relion_refine`, `relion_run_motioncorr`…),
+  **CTFFIND** (4.1 ou 5 : indispensable à l'estimation de la CTF) et, au besoin, **MotionCor2 / MotionCor3** (correction
+  de mouvement sur GPU ; l'implémentation de RELION n'a besoin que des CPU).
+- Topaz, le class ranker, Blush et DynaMight viennent de l'environnement Python installé avec RELION
+  (`relion_python_topaz`, `relion_python_dynamight`…).
+- MPI : la variable `MPIRUN` de l'outil RELION choisit le lanceur (`mpirun --oversubscribe`, `srun` sur un cluster).
+  Le job demande « processus MPI × threads » CPU ; le raffinement 3D et le multi-corps exigent au moins 3 processus.
+- RELION ne lit que des chemins relatifs au projet : l'import lie les dossiers des films dans son dossier de job, rien
+  n'est copié.
+
+### 2.3 Sélectionner les classes 2D comme dans CryoSPARC
+
+- La **2D classification** montre ses moyennes pendant le calcul. Chaque vignette porte le numéro de la classe, son
+  nombre de particules et sa résolution ; tri par nombre de particules, par résolution ou par numéro, curseur de taille.
+- **Select 2D classes** (mode par défaut) attend : cliquez les bonnes classes (Maj + clic pour une série, *All* /
+  *None* / *Invert*), puis **Done**. Le job donne les particules gardées, les rejetées et les moyennes sélectionnées
+  (`class_averages.star`, modèles du picking par correspondance de modèles, à recentrer au besoin).
+- Plus court : dans la galerie d'une classification terminée, cliquez des classes puis **Select these classes** : la
+  sélection est créée et lancée.
+- Mode *Automatic* : le class ranker de RELION garde les classes de score ≥ 0,5 (réglable).
+
+### 2.4 Conseils
+
+- Travaillez à pixel réduit pour la 2D, l'ab initio et la 3D ; avant le raffinement final, ré-extrayez à pleine
+  échelle (entrée *Particles to re-extract* de l'extraction, recentrée sur les positions raffinées).
+- Itérez : 2D → sélection → Topaz entraîné sur les bonnes particules (**Topaz training**) → repicking → 2D.
+- Masque seulement après un premier raffinement ; puis CTF refinement, polishing et nouveau raffinement pour les derniers
+  dixièmes d'Å. Le polishing retrouve tout seul le mouvement des films dans la correction de mouvement, même si vous
+  lui donnez les micrographies triées ou celles de la CTF.
+- Les particules RELION se chaînent avec le reste de CryoPlug : raffinement local et soustraction de signal (§4.6b),
+  cryoDRGN (§5), post-traitement, LocScale, construction de modèle.
+- Hétérogénéité dans RELION : **3D multi-body refinement** (domaines rigides, mouvements joués comme des séries de
+  cartes) et **DynaMight** (déformations continues).
+
+---
+
+## 3. Quelle carte pour quoi ?
 
 C'est la source d'erreurs la plus fréquente : chaque logiciel attend un type de carte précis.
 
@@ -227,9 +297,9 @@ C'est la source d'erreurs la plus fréquente : chaque logiciel attend un type de
 
 ---
 
-## 3. Étape 1 — Évaluer et améliorer la carte
+## 4. Étape 1 — Évaluer et améliorer la carte
 
-### 3.1 Vérifier la résolution et l'anisotropie
+### 4.1 Vérifier la résolution et l'anisotropie
 
 - **Half-map FSC** (`map_fsc`) recalcule la FSC gold-standard. On rapporte la courbe **corrigée**
   (randomisation de phase) au seuil 0,143. Un écart important avec CryoSPARC indique en général un masque différent.
@@ -242,7 +312,7 @@ C'est la source d'erreurs la plus fréquente : chaque logiciel attend un type de
 | 1,25 – 1,6 | Anisotropie modérée | LocScale ; surveillez l'aspect étiré de la densité |
 | > 1,6 | Anisotropie forte (orientation préférentielle) | spIsoNet, et si possible nouvelle collecte inclinée ou rééquilibrage des vues |
 
-### 3.2 Choisir une méthode d'amélioration
+### 4.2 Choisir une méthode d'amélioration
 
 | Situation | Recommandé | Alternatives / remarques |
 |---|---|---|
@@ -256,13 +326,13 @@ C'est la source d'erreurs la plus fréquente : chaque logiciel attend un type de
 Le workflow **Map enhancement comparison** lance ces méthodes côte à côte sur les mêmes demi-cartes ;
 comparez-les dans le visualiseur 3D (bouton *View 3D*) avant de choisir.
 
-### 3.3 Vérifier la main
+### 4.3 Vérifier la main
 
 Une main inversée donne des hélices gauches et des constructions automatiques en petits fragments.
 Corrigez avec **Map operations → Flip handedness** sur la carte utilisée pour la construction
 (et retournez de la même façon les autres cartes si vous changez la carte déposée).
 
-### 3.4 Résolution locale
+### 4.4 Résolution locale
 
 - **Local resolution** (`local_resolution`, Phenix) calcule la résolution de chaque région à partir des deux
   demi-cartes brutes et indépendantes. Le rapport donne la distribution dans la molécule (dans le masque, autour du
@@ -277,7 +347,7 @@ Corrigez avec **Map operations → Flip handedness** sur la carte utilisée pour
 - Elle sert à choisir les régions à raffiner localement, à décider où construire les chaînes latérales, et à faire
   la figure de résolution locale de l'article.
 
-### 3.5 Masques
+### 4.5 Masques
 
 **Create mask** (`create_mask`, intégré) fabrique des masques à bord doux sur la grille d'une carte :
 
@@ -325,7 +395,7 @@ La commande de ChimeraX marche aussi dans la ligne de commande du visualiseur : 
 carte simulée des chaînes A et B du modèle #2 à 10 Å (`molmap #2/C:10-250 15 displayThreshold 0.9` pour un segment et un
 autre contour ; `onGrid #1` choisit la carte ; `erase` ou `keep` changent le mode).
 
-### 3.6 Gros complexes : cartes composites
+### 4.6 Gros complexes : cartes composites
 
 Un gros complexe est souvent résolu par une carte consensus et plusieurs **raffinements locaux** dans CryoSPARC.
 Importez chacun (un *Import from CryoSPARC* par raffinement), ajustez le modèle dans la carte consensus, puis
@@ -338,7 +408,7 @@ lancez **Composite map** (`composite_map`, phenix.combine_focused_maps) :
 3. Construisez et affinez dans la carte composite ; déposez-la avec la carte consensus et les cartes locales (et
    leurs demi-cartes). Ne présentez pas la FSC de la carte composite comme une FSC gold-standard.
 
-### 3.6b Raffinement local et classification focalisée avec RELION
+### 4.6b Raffinement local et classification focalisée avec RELION
 
 Quand une région reste floue dans la carte consensus, CryoPlug peut la raffiner localement dans **RELION**, à partir des
 particules et des poses du raffinement CryoSPARC (conversion automatique, demi-jeux conservés) :
@@ -358,7 +428,7 @@ LocScale ou la construction de modèle. **RELION post-processing** donne la FSC 
 n'importe quelles demi-cartes ; **RELION reconstruction** reconstruit un sous-ensemble (sélection cryoDRGN) à pleine
 résolution.
 
-### 3.7 Hétérogénéité : variabilité 3D et cryoDRGN
+### 4.7 Hétérogénéité : variabilité 3D et cryoDRGN
 
 Une région floue dans la carte consensus (résolution locale médiocre, densité faible) peut venir d'un **mouvement**
 (un domaine qui bouge) ou d'une **occupation partielle** (une sous-unité absente d'une partie des particules), ou d'un
@@ -370,8 +440,8 @@ mélange d'états. Deux approches, qui se complètent :
 | Dans CryoPlug | *Import from CryoSPARC* du job 3DVA (coordonnées des particules) et *Import volume series* du job *3D Variability Display* | *Import from CryoSPARC* du raffinement consensus, puis *cryoDRGN training* (GPU) | *Import from CryoSPARC* d'un *Select 2D* ou d'un raffinement, puis *cryoDRGN-AI ab initio reconstruction* (GPU) |
 | Coût | Déjà calculé dans CryoSPARC | Une à quelques heures de GPU selon le nombre de particules et la taille d'image | Plus long : la recherche de poses coûte cher (128 px recommandé) |
 
-**cryoDRGN a son propre chapitre** (§4) : protocole en deux tours, contrôle des entrées, lecture des rapports,
-explorateur, nettoyage du junk, convergence, paysage des états et validation ; cryoDRGN-AI y est décrit au §4.12.
+**cryoDRGN a son propre chapitre** (§5) : protocole en deux tours, contrôle des entrées, lecture des rapports,
+explorateur, nettoyage du junk, convergence, paysage des états et validation ; cryoDRGN-AI y est décrit au §5.12.
 
 **3D Variability (CryoSPARC), pas à pas**
 
@@ -379,7 +449,7 @@ explorateur, nettoyage du junk, convergence, paysage des états et validation ; 
    importées comme un espace latent (explorateur, clusters k-means) ; **Import volume series** du job *3D Variability
    Display* (dossier ou ZIP) donne une série de volumes par composante. Le workflow *3D variability (CryoSPARC) →
    interpretation* crée cette chaîne en un clic.
-2. **Explorateur** : comme pour cryoDRGN (§4.6) — clusters, *Keep… / Remove…*, lasso, *Outliers*, images des particules.
+2. **Explorateur** : comme pour cryoDRGN (§5.6) — clusters, *Keep… / Remove…*, lasso, *Outliers*, images des particules.
 3. **Volume series analysis** sur une composante (ou sur des volumes cryoDRGN : clusters, états, trajectoire), avec le
    modèle ajusté dans la carte consensus :
    - la **carte de variabilité** (écart-type entre volumes, en σ de la densité de la molécule) ; *View 3D* l'affiche
@@ -410,7 +480,7 @@ un tour complet.
 
 ---
 
-## 4. Hétérogénéité avec cryoDRGN
+## 5. Hétérogénéité avec cryoDRGN
 
 cryoDRGN (Zhong et al. 2021) apprend, à partir des images de particules et des poses du raffinement consensus, un
 **espace latent** : chaque particule y reçoit des coordonnées, et deux particules proches ont des structures proches.
@@ -421,9 +491,9 @@ particules, et surtout le **junk** qu'on n'avait pas su retirer.
 CryoPlug suit le protocole publié par les auteurs (Kinman et al. 2023, *Nature Protocols* 18, 319) et ajoute à chaque
 étape les contrôles et les explications qui permettent de savoir si le résultat est fiable. Quand le consensus n'est
 pas fiable (grand mouvement, mélange, jeu peu filtré), **cryoDRGN-AI** fait la même analyse en apprenant aussi les
-poses (§4.12).
+poses (§5.12).
 
-### 4.1 Le principe en bref
+### 5.1 Le principe en bref
 
 - **Encodeur** : lit une image (et sa pose, son CTF) et la place dans l'espace latent (*z*, 8 dimensions par défaut).
 - **Décodeur** : à partir d'un point *z*, produit un volume 3D. L'entraînement ajuste les deux réseaux pour que les
@@ -435,9 +505,9 @@ poses (§4.12).
   centre d'un cluster k-means est remplacé par la particule la plus proche), jamais dans des régions vides.
 
 > ⚠️ Les volumes cryoDRGN sont **générés** par un réseau : ce ne sont pas des reconstructions gold-standard. Ils
-> montrent les états ; une carte publiable d'un état vient d'une reconstruction de ses particules (§4.10).
+> montrent les états ; une carte publiable d'un état vient d'une reconstruction de ses particules (§5.10).
 
-### 4.2 Le protocole en un coup d'œil
+### 5.2 Le protocole en un coup d'œil
 
 | Étape | Job CryoPlug | Réglages | Ce qu'on vérifie |
 |---|---|---|---|
@@ -452,7 +522,7 @@ poses (§4.12).
 
 Le workflow *Conformational heterogeneity (cryoDRGN)* crée les étapes 1 à 3 et le contrôle de convergence en un clic.
 
-### 4.3 Préparer et contrôler les entrées
+### 5.3 Préparer et contrôler les entrées
 
 **Quelles particules ?** Celles du **raffinement consensus** (NU-refine ou homogeneous) : leurs poses servent telles
 quelles. Évitez les classifications 2D/3D agressives avant cryoDRGN : elles retirent justement l'hétérogénéité qu'on
@@ -478,13 +548,13 @@ invert the images*, sinon tous les volumes sortent creux. Une FSC qui s'effondre
 lues. Avec *check, stop if it fails*, l'entraînement ne démarre pas sur des entrées fausses (des heures de GPU
 économisées).
 
-### 4.4 Entraîner : les paramètres
+### 5.4 Entraîner : les paramètres
 
 | Paramètre | Tour 1 (nettoyage) | Tour 2 (final) | Quand le changer |
 |---|---|---|---|
 | *Image size* | 128 px | 256 px | Plus petit pour une très grosse particule ou beaucoup de particules |
 | *Latent dimensions* (z) | 8 | 8 | 1–2 seulement pour un mouvement unique et simple ; au-delà de 10, rarement utile |
-| *Epochs* | 50 | 50 (→ 100 si non convergé) | Voir §4.8 |
+| *Epochs* | 50 | 50 (→ 100 si non convergé) | Voir §5.8 |
 | *Network size* | auto → petit (256 × 3) | auto → grand (1024 × 3) | Le mode auto suit le protocole (grand réseau au-delà de 128 px ou sur une sélection) |
 | *Input check* | check, then train | no check (déjà fait) | *stop if it fails* pour un long job sans surveillance |
 | *Volumes sampled* | 20 | 20 | 50–100 (dans *cryoDRGN analysis*) pour chercher des états rares |
@@ -501,13 +571,13 @@ perte se dessinent dans le rapport à chaque époque. La version de cryoDRGN est
 numérotation des époques changent entre les versions 3.x et 4.x) ; en cas d'échec, le message propose la cause la
 plus probable (mémoire GPU, mémoire vive, précision mixte).
 
-### 4.5 Lire le rapport d'un entraînement
+### 5.5 Lire le rapport d'un entraînement
 
 - **Tuiles du haut** : contrôle des entrées, temps par époque, nombre de particules, dimension latente et nombre de
   clusters, clusters signalés.
 - **Training loss** : l'erreur de reconstruction baisse vite puis se stabilise. **KL divergence** : monte pendant les
   premières époques puis se stabilise.
-- **Explorateur** (§4.6) : le cœur du rapport.
+- **Explorateur** (§5.6) : le cœur du rapport.
 - **Cluster volumes** (galerie sous l'explorateur) : trois projections de chaque volume, à la même échelle de gris.
   Signaux d'alerte : **weak** (peu de densité au seuil commun : morceaux manquants ou junk), **noisy** (densité
   éparpillée hors de la molécule), **blurry** (aucun détail fin : agrégats, junk), **rare** (moins de 1 % des
@@ -524,7 +594,7 @@ plus probable (mémoire GPU, mémoire vive, précision mixte).
 - **What to do next** : la marche à suivre, rédigée d'après ce que l'analyse a trouvé (clusters suspects, outliers,
   propriétés codées, tour 1 ou tour 2).
 
-### 4.6 Utiliser l'explorateur
+### 5.6 Utiliser l'explorateur
 
 Chaque point est une particule (12 000 au plus sont affichées ; les sélections portent toujours sur **toutes** les
 particules). Les numéros sont les centres des clusters k-means.
@@ -548,7 +618,7 @@ particules). Les numéros sont les centres des clusters k-means.
 - **UMAP / PCA** : basculer de projection ; le contrôle de convergence ajoute une projection par époque et le bouton
   *Play the epochs*.
 
-### 4.7 Nettoyer les particules
+### 5.7 Nettoyer les particules
 
 Le premier tour sert surtout à trouver le junk. Il se reconnaît à :
 
@@ -563,7 +633,7 @@ cluster au volume net est peut-être l'état rare que vous cherchez. Le tour 2 s
 training* sur la sortie de *Select particles*) : les images déjà réduites sont réutilisées et le grand réseau est
 choisi automatiquement. Un second nettoyage est possible si le tour 2 montre encore du junk.
 
-### 4.8 Vérifier la convergence
+### 5.8 Vérifier la convergence
 
 Un entraînement trop court mélange les états ; trop long, il apprend le bruit des images (volumes de plus en plus
 bruités : sur-apprentissage). Le job *cryoDRGN convergence check* compare les points de sauvegarde de l'entraînement :
@@ -581,7 +651,7 @@ puis refaites le contrôle). Si les volumes deviennent plus bruités aux derniè
 (*cryoDRGN analysis* avec *Epoch*). Une perte qui baisse encore un peu n'empêche pas la convergence : ce sont les volumes
 et l'organisation de l'espace latent qui décident.
 
-### 4.9 Explorer les états et les mouvements
+### 5.9 Explorer les états et les mouvements
 
 - **cryoDRGN analysis** : plus de volumes (50–100) pour voir des états rares, une autre époque, la main inversée
   (*Flip handedness*) si la consensus avait la mauvaise main.
@@ -596,9 +666,9 @@ et l'organisation de l'espace latent qui décident.
   mais au même volume se retrouvent ensemble. Résultats : les volumes des états, les trajectoires le long des
   composantes des volumes, et un espace latent où les états remplacent les clusters (explorateur, *Keep…*).
 - **Volume series analysis** sur les volumes des clusters, des états ou d'une trajectoire, avec le modèle : carte de
-  variabilité et chaînes qui bougent ou disparaissent (§3.7).
+  variabilité et chaînes qui bougent ou disparaissent (§4.7).
 
-### 4.10 Valider et publier
+### 5.10 Valider et publier
 
 - Pour chaque état d'intérêt : *Keep…* dans l'explorateur, puis dans CryoSPARC *Import Particle Stack* avec le fichier
   `.cs` produit (le rapport donne le chemin et le dossier des images) et *Homogeneous / NU refinement* : demi-cartes
@@ -608,7 +678,7 @@ et l'organisation de l'espace latent qui décident.
   nettoyage.
 - Ne déposez pas la « résolution » d'un volume cryoDRGN : elle n'existe pas au sens gold-standard.
 
-### 4.11 Pièges fréquents
+### 5.11 Pièges fréquents
 
 | Symptôme | Cause probable | Solution |
 |---|---|---|
@@ -625,7 +695,7 @@ et l'organisation de l'espace latent qui décident.
 | « Cannot find file … under datadir » | Projet CryoSPARC déplacé | *Import particles* avec *Image folder* |
 | Options refusées par cryodrgn | Version ancienne | CryoPlug s'adapte aux versions 3.x et 4.x ; mettez à jour (`pip install -U cryodrgn`) |
 
-### 4.12 Sans consensus : cryoDRGN-AI (ab initio)
+### 5.12 Sans consensus : cryoDRGN-AI (ab initio)
 
 cryoDRGN-AI (Levy et al. 2025, *Nature Methods* 22, 1486 ; commande `cryodrgn abinit`, cryoDRGN 4.2 ou plus récent)
 apprend **en même temps** la pose et les coordonnées latentes de chaque particule, à partir des images et de leur CTF :
@@ -703,7 +773,7 @@ poses dans le repère du consensus :
 - Si les poses concordent avec le consensus pour la plupart des particules : un entraînement cryoDRGN classique à
   256 px (grand réseau) sur les particules nettoyées donne plus de détail.
 - *cryoDRGN convergence check* (il suit aussi la stabilité des poses), *continue training* si besoin, puis validation
-  de chaque état dans CryoSPARC (§4.10).
+  de chaque état dans CryoSPARC (§5.10).
 
 > CryoPlug corrige pour ces modèles ce que les outils de cryoDRGN font différemment : translations enregistrées en
 > pixels (et non en fraction de boîte), analyse écrite dans le dossier de l'entraînement, volumes non réduits,
@@ -722,7 +792,7 @@ poses dans le repère du consensus :
 | Une trajectoire ne fait que tourner la carte | Pose et conformation ne sont pas séparées explicitement (limite de la méthode) | Vérifier que la forme change ; R² de la direction de vue dans le tableau des propriétés codées |
 | Trajectoires ou volumes refusés avec cryoDRGN 4.2 | `eval_vol` ne lit ces modèles qu'à partir de 4.3 | `pip install -U cryodrgn` |
 
-### 4.13 Mémo
+### 5.13 Mémo
 
 - **Tour 1** : *cryoDRGN training* sur les particules du raffinement consensus, 128 px, réglages par défaut. Lire :
   contrôle des entrées, galerie, outliers, tableau des propriétés codées. Retirer le junk.
@@ -732,13 +802,13 @@ poses dans le repère du consensus :
   particules, *landscape analysis* pour des états, *Volume series analysis* avec le modèle.
 - **Validation** : une reconstruction CryoSPARC par état, avant toute interprétation fine.
 - **Consensus douteux ou jeu peu filtré** : *cryoDRGN-AI ab initio reconstruction* (128 px), lire la comparaison avec
-  le consensus et la validation, retirer le junk, second tour cryoDRGN-AI (§4.12).
+  le consensus et la validation, retirer le junk, second tour cryoDRGN-AI (§5.12).
 
 ---
 
-## 5. Étape 2 — Construire le modèle
+## 6. Étape 2 — Construire le modèle
 
-### 5.1 Choisir la stratégie
+### 6.1 Choisir la stratégie
 
 | Situation | Stratégie | Jobs |
 |---|---|---|
@@ -748,7 +818,7 @@ poses dans le repère du consensus :
 | 4–8 Å ou régions mal résolues | Modèle prédit puis ajustement | AlphaFold DB / ColabFold / Boltz-2 → Process predicted model → **Fit in map** (intégré ; ou Rigid-body fit ChimeraX, Dock in map) → Real-space refinement (morphing) |
 | Ligand, cofacteur, médicament | Pose initiale + restreintes | Boltz-2 (pose) + Ligand restraints (eLBOW) → affinement → vérification Fo-Fc (Servalcat) |
 
-### 5.2 Contrôler une construction automatique
+### 6.2 Contrôler une construction automatique
 
 Ouvrez le job et vérifiez :
 
@@ -821,7 +891,7 @@ accès au projet. **Image** enregistre un PNG (avec l'échelle de couleur d'une 
 `lowpass`, `volume`, `bg`, `slab`, `record`, `distance`, `molmap`, `move`, `turn`, `fitmap`, `save`…), **?** les gestes
 souris et les touches.
 
-### 5.3 Placer un modèle, une carte ou un masque (Move & fit)
+### 6.3 Placer un modèle, une carte ou un masque (Move & fit)
 
 Comme dans Chimera, tout objet du visualiseur se **déplace dans l'espace** : bouton **Move** (ou « Move / fit in a
 map… » dans le menu ··· d'une carte, d'un masque ou d'un modèle). La souris déplace alors l'objet choisi au lieu de
@@ -859,16 +929,16 @@ workflow *Predicted model* l'emploie pour placer le modèle prédit (recherche d
 Un objet déplacé reste cohérent dans tout le visualiseur : clic, centrage, distances, coloration par résolution
 locale et éditeur de masque (les formes et les cartes simulées sont calculées là où on les voit).
 
-### 5.4 Assembler
+### 6.4 Assembler
 
 Des domaines ou sous-unités dockés séparément se combinent avec **Merge models** (les identifiants de
 chaîne en conflit sont renommés). **Model operations** renomme les chaînes comme dans l'article.
 
 ---
 
-## 6. Étape 3 — Corriger et affiner
+## 7. Étape 3 — Corriger et affiner
 
-### 6.1 La boucle typique
+### 7.1 La boucle typique
 
 ```
 construction auto / docking → Real-space refinement → ISOLDE (ou Coot) → Real-space refinement final → validation
@@ -879,7 +949,7 @@ construction auto / docking → Real-space refinement → ISOLDE (ou Coot) → R
 Les workflows *De novo* et *Predicted model* créent exactement cette boucle ; l'étape ISOLDE met la
 chaîne en pause jusqu'à ce que vous ayez fini.
 
-### 6.2 ISOLDE ou Coot ?
+### 7.2 ISOLDE ou Coot ?
 
 | | ISOLDE | Coot |
 |---|---|---|
@@ -887,7 +957,7 @@ chaîne en pause jusqu'à ce que vous ayez fini.
 | Idéal pour | Corriger un modèle entier (registre, rotamères, boucles, géométrie), 2,5–4,5 Å | Boucles manquantes, ligands, glycanes, eaux, retouches ponctuelles |
 | Point fort | Géométrie physiquement réaliste, outliers éliminés interactivement | Contrôle fin, outils de validation intégrés |
 
-### 6.3 Phenix ou Servalcat ?
+### 7.3 Phenix ou Servalcat ?
 
 | | Phenix real_space_refine | Servalcat |
 |---|---|---|
@@ -897,7 +967,7 @@ chaîne en pause jusqu'à ce que vous ayez fini.
 
 On peut utiliser les deux : Phenix pendant la construction, Servalcat pour l'affinement final et ses cartes de différence.
 
-### 6.4 Ligands et eaux
+### 7.4 Ligands et eaux
 
 1. **Ligand restraints (eLBOW)** à partir du code CCD (ou d'un SMILES) → sortie *restraints*.
 2. Placez le ligand (Boltz-2, Coot, ISOLDE), fusionnez si besoin (**Merge models**).
@@ -905,7 +975,7 @@ On peut utiliser les deux : Phenix pendant la construction, Servalcat pour l'aff
 4. Vérifiez la carte Fo-Fc de Servalcat : pas de pic négatif fort sur le ligand.
 5. Sous ~2,5–3 Å : **Add waters (phenix.douse)**, puis inspection et réaffinement.
 
-### 6.5 Sessions interactives en pratique
+### 7.5 Sessions interactives en pratique
 
 - **Open on server** ouvre ISOLDE/Coot sur l'écran configuré (`[interactive] display`, par exemple un bureau TurboVNC).
 - **Download session bundle** (la bonne option depuis un portable) : un zip prêt à lancer sur votre poste (`chimerax isolde_session.py` ou `./run_coot.sh`) ;
@@ -915,9 +985,9 @@ On peut utiliser les deux : Phenix pendant la construction, Servalcat pour l'aff
 
 ---
 
-## 7. Étape 4 — Valider
+## 8. Étape 4 — Valider
 
-### 7.1 Quels jobs ?
+### 8.1 Quels jobs ?
 
 - **Map-model validation (Q-score, FSC)** : toujours (intégré, rapide). Repère les résidus mal soutenus.
 - **Comprehensive validation (Phenix)** : géométrie MolProbity + accord carte–modèle, comme le rapport wwPDB.
@@ -929,7 +999,7 @@ On peut utiliser les deux : Phenix pendant la construction, Servalcat pour l'aff
   modèle et de la carte primaire, avec les centiles par rapport à toutes les entrées de la PDB. À lancer sur le
   modèle final ; le modèle et la carte sont envoyés au wwPDB.
 
-### 7.2 Valeurs de référence
+### 8.2 Valeurs de référence
 
 Elles dépendent de la résolution ; ce sont des ordres de grandeur pour un modèle bien affiné.
 
@@ -956,7 +1026,7 @@ Elles dépendent de la résolution ; ce sont des ordres de grandeur pour un mod�
 Un Q-score moyen proche de la valeur attendue indique un bon accord global ; les résidus avec Q < 0,3
 sont à revoir (ou situés dans des régions de basse résolution locale).
 
-### 7.3 Signaux d'alerte
+### 8.3 Signaux d'alerte
 
 | Symptôme | Cause probable | Action |
 |---|---|---|
@@ -970,21 +1040,21 @@ sont à revoir (ou situés dans des régions de basse résolution locale).
 
 ---
 
-## 8. Étape 5 — Déposer
+## 9. Étape 5 — Déposer
 
-### 8.1 Pre-deposition checks
+### 9.1 Pre-deposition checks
 
 Le job vérifie automatiquement : cohérence cartes / demi-cartes / masque (boîte, pixel, origine),
 atomes dans la boîte, CC et inclusion au contour suggéré, identifiants de chaîne, résidus inconnus,
 occupations nulles, B-factors non affinés ou de type pLDDT, chevauchements sévères, ruptures de chaîne,
 identité avec la séquence. **Corrigez chaque FAIL** ; chaque WARN doit être compris.
 
-### 8.2 Deposition package
+### 9.2 Deposition package
 
 Le paquet contient `model.cif`, `primary_map.mrc`, `half_map_1/2.mrc`, `mask.mrc`, `fsc.xml`, les rapports
 de validation, `CHECKLIST.md`, `methods_draft.md` et `table1_draft.md`.
 
-### 8.3 OneDep pas à pas
+### 9.3 OneDep pas à pas
 
 1. Lancez d'abord le job **wwPDB validation report** (ou le serveur validate.wwpdb.org) avec le modèle et la carte primaire.
 2. Dans OneDep (deposit.wwpdb.org) : déposez le modèle (mmCIF), la carte primaire, les deux demi-cartes,
@@ -993,7 +1063,7 @@ de validation, `CHECKLIST.md`, `methods_draft.md` et `table1_draft.md`.
 4. Les cartes LocScale, de modification de densité ou spIsoNet peuvent être ajoutées comme **cartes additionnelles**, avec leur description.
 5. La liste des logiciels et leurs versions se trouve dans `methods_draft.md` et dans les logs (`commands.sh` de chaque job).
 
-### 8.4 Pour l'article
+### 9.4 Pour l'article
 
 `methods_draft.md` contient un paragraphe *Méthodes* et les citations générés à partir de l'historique
 des jobs ; `table1_draft.md` pré-remplit le tableau de statistiques cryo-EM. Complétez les données de
@@ -1001,7 +1071,7 @@ collecte (tension, dose, défocus, nombre de particules) et relisez tout.
 
 ---
 
-## 9. Recettes par situation
+## 10. Recettes par situation
 
 ### A. Protéine membranaire à 3 Å, séquence connue
 
@@ -1094,7 +1164,7 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 
 ---
 
-## 10. Dépannage
+## 11. Dépannage
 
 | Symptôme | Cause probable | Solution |
 |---|---|---|
@@ -1126,12 +1196,17 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | Create mask : « Masks need SciPy » | SciPy absent de l'environnement de CryoPlug | `pip install scipy` (installé avec CryoPlug depuis cette version) |
 | wwPDB validation : « wwPDB validation server: … » | Serveur indisponible, pas d'accès internet depuis le serveur, fichier refusé | Vérifier l'accès internet (proxy) du serveur, relancer plus tard ; le message du serveur est dans le log |
 | checkMySequence : « needs HMMER » | `hmmsearch` absent de son environnement | `conda install -c bioconda hmmer` dans l'environnement de checkMySequence |
-| cryoDRGN : volumes creux, junk partout, mémoire, convergence… | — | Tableau des pièges de cryoDRGN : §4.11 (cryoDRGN-AI : §4.12) |
+| cryoDRGN : volumes creux, junk partout, mémoire, convergence… | — | Tableau des pièges de cryoDRGN : §5.11 (cryoDRGN-AI : §5.12) |
 | cryoDRGN : « Cannot find file … under datadir » | Le projet CryoSPARC a été déplacé, ou les chemins des images ne sont pas relatifs au dossier du projet | *Import particles* avec *Image folder* = le dossier du projet CryoSPARC qui contient les images |
 | « These particles have no poses » | Particules d'une extraction ou d'une classification 2D | Importez le job de **raffinement** (champs `alignments3D`) |
 | « … uses CryoSPARC's compressed format » | Fichiers `.cs` compressés des versions récentes de CryoSPARC | `pip install cryosparc-tools` dans l'environnement de CryoPlug |
 | Import d'un job 3DVA : « only the 3D variability coordinates are imported » | Le fichier `passthrough` du job manque | L'explorateur fonctionne ; pour entraîner ou réutiliser les particules, importez le raffinement consensus |
 | La série se charge lentement dans le visualiseur | Beaucoup de volumes, carte graphique logicielle | Normal la première fois (chaque volume est chargé une fois, trois à la fois) ; faites glisser le curseur vers un volume pour le charger d'abord ; **Detail** plus bas pour une longue série |
+| RELION : « mpirun found fewer CPU slots than MPI processes » | Open MPI compte les cœurs disponibles | Moins de processus MPI, ou la variable `MPIRUN` de l'outil RELION à `mpirun --oversubscribe` (page **Tools**) |
+| CTF estimation : « wrote no micrographs_ctf.star (is CTFFIND configured in Tools?) » | CTFFIND introuvable | Configurez l'outil **CTFFIND** (chemin de `ctffind` 4.1 ou 5) puis *Re-check* |
+| Bayesian polishing : « has no movie motion (rlnMicrographMetadata) » | Micrographies importées déjà sommées : pas de films ni de trajectoires | Le polissage a besoin des films corrigés par **Motion correction (RELION)** |
+| Select 2D classes reste en `waiting` | Normal : le job attend votre sélection | Ouvrez-le, cliquez les bonnes classes, puis **Done** |
+| Auto-picking Topaz : « Give the particle diameter » | RELION déduit de ce diamètre la réduction d'échelle et le rayon des particules de Topaz | Renseignez *Particle diameter* (ou branchez un modèle Topaz entraîné, qui le connaît) |
 | Relancer un job à l'identique hors CryoPlug | — | `commands.sh` dans le dossier du job contient les commandes exactes |
 
 Le **log** (onglet *Log*) montre la commande exécutée, la sortie du programme et l'erreur en rouge. Quand un
@@ -1141,7 +1216,7 @@ Après correction : **Clear** remet le job en préparation, **Clone** crée une 
 
 ---
 
-## 11. Bonnes pratiques
+## 12. Bonnes pratiques
 
 - Un projet par structure ; donnez des **titres** parlants aux jobs et utilisez les **notes**.
 - Ne supprimez pas un job utilisé par d'autres (CryoPlug le signale) ; préférez *Clone* pour essayer une variante.
@@ -1152,7 +1227,7 @@ Après correction : **Clear** remet le job en préparation, **Clone** crée une 
 
 ---
 
-## 12. Glossaire
+## 13. Glossaire
 
 | Terme | Définition |
 |---|---|
@@ -1186,3 +1261,12 @@ Après correction : **Clear** remet le job en préparation, **Clone** crée une 
 | Auto-décodeur | Les coordonnées latentes et les poses de chaque particule sont des paramètres optimisés directement, sans encodeur (cryoDRGN-AI). |
 | Main (chiralité) | Une reconstruction à partir de projections ne distingue pas une molécule de son image miroir : la main se vérifie (hélices α, modèle connu, référence). |
 | Repère | Orientation et origine arbitraires d'une reconstruction ab initio ; CryoPlug le ramène sur celui du consensus ou d'une carte de référence. |
+| Correction de mouvement | Alignement des images d'un film (le faisceau fait bouger l'échantillon) puis somme pondérée par la dose. |
+| CTF | Fonction de transfert de contraste du microscope (défocus, astigmatisme) : à estimer sur chaque micrographie puis à corriger. |
+| Résolution d'ajustement CTF | Résolution jusqu'à laquelle les anneaux de Thon calculés suivent ceux de la micrographie : le meilleur critère de tri. |
+| LoG | Laplacien de Gaussienne : picking sans modèle, qui cherche des taches de la taille de la particule. |
+| Topaz | Picking par réseau de neurones, entraînable sur les bonnes particules d'un jeu de données. |
+| VDAM | Algorithme par gradient (mini-lots) de RELION 4/5 pour la classification 2D et le modèle initial : rapide, sans MPI. |
+| Class ranker | Réseau de RELION qui note les moyennes de classes 2D (0 à 1) pour une sélection automatique. |
+| Polissage bayésien | Suivi du mouvement de chaque particule dans le film et ré-extraction avec des poids par image (relion_motion_refine). |
+| Groupe optique | Ensemble d'images de mêmes conditions optiques (pixel, tension, aberrations) dans les fichiers STAR de RELION. |

@@ -131,6 +131,7 @@ Steps marked optional are chosen with `include`; the parameters a step asks for 
 | De novo building, predicted models, unknown chains, ligands | `cryoplug-model-building` |
 | Refinement, ISOLDE/Coot, validation metrics, deposition | `cryoplug-refinement-validation` |
 | Flexible or partially occupied regions, cryoDRGN, 3D variability | `cryoplug-heterogeneity` |
+| Movies or micrographs to a refined map with RELION (motion, CTF, picking, 2D/3D, refinement, polishing) | `cryoplug-relion-spa` |
 | Focused refinement or classification of a region with RELION | `cryoplug-relion-focused` |
 | A job failed or behaves strangely | `cryoplug-troubleshooting` |
 

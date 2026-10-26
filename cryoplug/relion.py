@@ -198,8 +198,137 @@ def grid_from_star(tables: dict[str, StarTable]) -> tuple[int, float]:
     return 0, 0.0
 
 
+def micrograph_table(tables: dict[str, StarTable]) -> StarTable:
+    """The movies or micrographs table of a RELION file (``data_micrographs``, ``data_movies``, or the table holding
+    their names)."""
+    for name in ("micrographs", "movies"):
+        if name in tables:
+            return tables[name]
+    for t in tables.values():
+        if t.loop and (t.has("rlnMicrographName") or t.has("rlnMicrographMovieName")):
+            return t
+    raise ValueError("No micrograph table (no data_micrographs / data_movies block)")
+
+
+def optics_value(tables: dict[str, StarTable], label: str, default: Any = None) -> Any:
+    """A column of the first optics group."""
+    optics = tables.get("optics")
+    if optics is None or not optics.rows or not optics.has(label):
+        return default
+    return optics.value(label, default)
+
+
+def micrograph_pixel_size(tables: dict[str, StarTable]) -> float:
+    """Pixel size of the micrographs (binned by motion correction), else of the movies."""
+    for label in ("rlnMicrographPixelSize", "rlnMicrographOriginalPixelSize"):
+        value = optics_value(tables, label)
+        if value is not None:
+            return float(value)
+    return 0.0
+
+
+def coordinate_files(path: str | Path) -> list[tuple[str, str]]:
+    """(micrograph, coordinate file) of a list written by RELION's picking jobs (``data_coordinate_files``)."""
+    tables = read_star(path)
+    table = tables.get("coordinate_files")
+    if table is None:
+        table = next((t for t in tables.values() if t.loop and t.has("rlnMicrographCoordinates")), None)
+    if table is None:
+        raise ValueError(f"{Path(path).name} is not a list of coordinate files (no rlnMicrographCoordinates)")
+    return list(zip(table.column("rlnMicrographName"), table.column("rlnMicrographCoordinates")))
+
+
+def read_coordinates(path: str | Path) -> tuple[np.ndarray, np.ndarray | None]:
+    """Particle positions (x, y in pixels of the micrograph) of a coordinate file, and their figure of merit."""
+    tables = read_star(path)
+    table = next((t for t in tables.values() if t.loop and t.has("rlnCoordinateX")), None)
+    if table is None or not table.rows:
+        return np.zeros((0, 2)), None
+    xy = np.stack([table.floats("rlnCoordinateX"), table.floats("rlnCoordinateY")], axis=1)
+    fom = table.floats("rlnAutopickFigureOfMerit") if table.has("rlnAutopickFigureOfMerit") else None
+    return xy, fom
+
+
+def model_classes(path: str | Path) -> list[dict[str, Any]]:
+    """Classes of a ``run_itNNN_model.star``: number, reference image (``N@stack``), share of the particles,
+    accuracies and estimated resolution."""
+    tables = read_star(path)
+    table = tables.get("model_classes")
+    if table is None:
+        raise ValueError(f"{Path(path).name} has no data_model_classes block")
+    out = []
+    for i, row in enumerate(table.rows):
+        rec = dict(zip(table.labels, row))
+
+        def num(label: str) -> float | None:
+            try:
+                v = float(rec[label])
+            except (KeyError, ValueError):
+                return None
+            return v if math.isfinite(v) else None
+        out.append({"class": i + 1, "image": rec.get("rlnReferenceImage", ""),
+                    "distribution": num("rlnClassDistribution") or 0.0,
+                    "accuracy_rotations": num("rlnAccuracyRotations"),
+                    "accuracy_translations": num("rlnAccuracyTranslationsAngst") or num("rlnAccuracyTranslations"),
+                    "resolution": num("rlnEstimatedResolution"),
+                    "completeness": num("rlnOverallFourierCompleteness")})
+    return out
+
+
+def iteration_files(folder: Path, root: str = "run") -> tuple[int, dict[str, Path]]:
+    """Latest iteration written by relion_refine (classification, initial model) and its files."""
+    found = sorted(int(m.group(1)) for p in folder.glob(f"{root}_it*_optimiser.star")
+                   if (m := re.fullmatch(rf"{re.escape(root)}_it(\d+)_optimiser\.star", p.name)))
+    if not found:
+        return 0, {}
+    it = found[-1]
+    stem = f"{root}_it{it:03d}"
+    return it, {"data": folder / f"{stem}_data.star", "model": folder / f"{stem}_model.star",
+                "optimiser": folder / f"{stem}_optimiser.star", "classes": folder / f"{stem}_classes.mrcs"}
+
+
+def subset_star(src: str | Path, dst: str | Path, keep: Iterable[int] | np.ndarray, comment: str = "") -> Path:
+    """A copy of a RELION file (particles, micrographs or movies) with only some rows of its main table."""
+    tables = read_star(src)
+    try:
+        main = particle_table(tables)
+    except ValueError:
+        main = micrograph_table(tables)
+    rows = np.flatnonzero(keep) if isinstance(keep, np.ndarray) and keep.dtype == bool else list(keep)
+    return write_star(dst, [t if t is not main else main.select(rows) for t in tables.values()], comment=comment)
+
+
+def star_rows(path: str | Path) -> int:
+    """Number of rows of the main table (particles, micrographs, movies or coordinate files)."""
+    tables = read_star(path)
+    for getter in (particle_table, micrograph_table):
+        try:
+            return len(getter(tables))
+        except ValueError:
+            continue
+    table = next((t for t in tables.values() if t.loop), None)
+    return len(table) if table is not None else 0
+
+
+def parse_numbers(text: str) -> list[int]:
+    """Class numbers written as "1, 4, 7-9" (ranges included)."""
+    out: list[int] = []
+    for part in re.split(r"[,;\s]+", str(text or "").strip()):
+        if not part:
+            continue
+        m = re.fullmatch(r"(\d+)\s*-\s*(\d+)", part)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            out.extend(range(min(a, b), max(a, b) + 1))
+        elif part.isdigit():
+            out.append(int(part))
+        else:
+            raise ValueError(f"'{part}' is not a class number or a range (e.g. 1, 4, 7-9)")
+    return sorted(set(out))
+
+
 # ---------------------------------------------------------- CryoSPARC -> RELION
-CS_NEEDED = ("blob/path", "blob/idx", "blob/shape", "blob/psize_A", "ctf/df1_A", "ctf/df2_A", "ctf/df_angle_rad",
+CS_NEEDED =("blob/path", "blob/idx", "blob/shape", "blob/psize_A", "ctf/df1_A", "ctf/df2_A", "ctf/df_angle_rad",
              "ctf/accel_kv", "ctf/cs_mm", "ctf/amp_contrast")
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 

@@ -35,12 +35,24 @@ TOOLS: dict[str, ToolDef] = {
                 "https://phenix-online.org",
                 "Liebschner D. et al. (2019) Acta Cryst. D75, 861-877.", version_program="phenix.version"),
         ToolDef("relion", "RELION", ["relion_refine_mpi", "relion_refine"],
-                "Local (focused) refinement, signal subtraction, focused 3D classification, post-processing and "
-                "reconstruction of particles (RELION 4/5).",
+                "The whole single-particle pipeline from movies to the final map (RELION 5): motion correction, CTF "
+                "estimation, picking (LoG, templates, Topaz), extraction, 2D/3D classification, initial model, "
+                "auto-refinement, CTF refinement, Bayesian polishing, post-processing, local resolution, multi-body, "
+                "DynaMight; local (focused) refinement and signal subtraction of particles from CryoSPARC.",
                 "https://relion.readthedocs.io",
                 "Scheres S.H.W. (2012) J. Struct. Biol. 180, 519-530; Kimanius D. et al. (2021) Biochem. J. 478, 4169-4185 "
                 "(RELION 4); Kimanius D. et al. (2024) Nat. Struct. Mol. Biol. 31, 1771-1777 (Blush).",
                 version_args=["--version"]),
+        ToolDef("ctffind", "CTFFIND", ["ctffind5", "ctffind"],
+                "CTF estimation of the micrographs (CTFFIND 4.1 or 5), run by RELION's CTF estimation job.",
+                "https://grigoriefflab.umassmed.edu/ctffind5",
+                "Rohou A., Grigorieff N. (2015) J. Struct. Biol. 192, 216-221; Elferich J. et al. (2024) eLife 13, "
+                "RP97227 (CTFFIND5)."),
+        ToolDef("motioncor", "MotionCor2 / MotionCor3", ["MotionCor3", "MotionCor2", "motioncor3", "motioncor2"],
+                "GPU motion correction of movies, used by RELION's motion correction job instead of RELION's own "
+                "implementation when chosen.",
+                "https://emcore.ucsf.edu/ucsf-software",
+                "Zheng S.Q. et al. (2017) Nat. Methods 14, 331-332."),
         ToolDef("modelangelo", "ModelAngelo", ["model_angelo"],
                 "Automated de novo model building with graph neural networks.",
                 "https://github.com/3dem/model-angelo",

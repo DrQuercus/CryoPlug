@@ -4,6 +4,9 @@ Fichier généré par `cryoplug docs-jobs` à partir de `cryoplug/jobhelp.py` �
 Les mêmes fiches sont affichées dans l'interface (constructeur de job, détails, page d'aide).
 
 - [Import](#import)
+- [Prétraitement (films, CTF)](#prétraitement-films-ctf)
+- [Sélection et extraction de particules](#sélection-et-extraction-de-particules)
+- [Classification 2D / 3D](#classification-2d--3d)
 - [Reconstruction (RELION)](#reconstruction-relion)
 - [Traitement de carte](#traitement-de-carte)
 - [Hétérogénéité (variabilité 3D)](#hétérogénéité-variabilité-3d)
@@ -93,6 +96,33 @@ Importe des demi-cartes, une carte complète, une carte affûtée et un masque v
 
 **Étapes suivantes** : Half-map FSC, Directional resolution (3D FSC), LocScale 2, Import atomic model
 
+### Import movies (RELION)
+
+`relion_import` — intégré (aucun logiciel externe)
+
+Importe les films bruts (ou des micrographies déjà alignées) avec leur groupe optique : taille de pixel, tension, aberration sphérique, contraste d'amplitude, gain et MTF. Écrit le movies.star de relion_import ; les dossiers des films sont liés, rien n'est copié. Le point de départ du pipeline RELION.
+
+**Quand l'utiliser**
+
+- Démarrer un nouveau jeu de données à partir des films du microscope (TIFF, EER, MRC, MRC compressés).
+- Reprendre dans RELION des micrographies déjà sommées par un autre logiciel.
+
+**À éviter / pièges**
+
+- Particules déjà extraites ailleurs (CryoSPARC) : « Import particles » les prend directement.
+- Sessions de tailles de pixel ou de détecteurs différents dans un seul import : importez-les séparément (un groupe optique chacune) puis réunissez-les avec « Join star files ».
+
+**Entrées conseillées** : Un motif (/data/session/Movies/*.tiff, « ** » pour les sous-dossiers) ou le dossier des films ; la référence de gain quand les films ne sont pas corrigés.
+
+**Conseils**
+
+- Taille de pixel des films tels qu'enregistrés : en super-résolution, la taille super-résolution, et un binning de 2 dans la correction de mouvement.
+- La dose par image (e⁻/Å²) sert à la pondération par la dose ; pour l'EER, la dose par fraction.
+- Rotation et retournement du gain comme dans MotionCor2 (-RotGain / -FlipGain) : vérifiez l'orientation sur une première micrographie corrigée.
+- Le fichier MTF du détecteur (wiki RELION) sert au post-traitement.
+
+**Étapes suivantes** : Motion correction (RELION)
+
 ### Import particles
 
 `import_particles` — intégré (aucun logiciel externe)
@@ -115,7 +145,7 @@ Importe des particules pour l'analyse d'hétérogénéité (cryoDRGN) : un job C
 - « Import from CryoSPARC » importe déjà les particules du job en même temps que les cartes.
 - Si les chemins des images sont cassés, indiquez le dossier des images (Image folder).
 
-**Étapes suivantes** : cryoDRGN input check (backprojection), cryoDRGN training, cryoDRGN-AI ab initio reconstruction, RELION local refinement, RELION reconstruction
+**Étapes suivantes** : cryoDRGN input check (backprojection), cryoDRGN training, cryoDRGN-AI ab initio reconstruction, RELION local refinement, RELION reconstruction, 2D classification (RELION)
 
 ### Import sequence
 
@@ -166,7 +196,296 @@ Importe des séries de volumes : 3D Variability Display et 3D Flex Generate de C
 
 **Étapes suivantes** : Volume series analysis, Extract volume from series
 
+## Prétraitement (films, CTF)
+
+### CTF estimation (CTFFIND)
+
+`relion_ctffind` — logiciel : `relion`
+
+Ajuste la fonction de transfert de contraste de chaque micrographie avec CTFFIND 4.1 ou 5 (lancé par relion_run_ctffind) : défocus, astigmatisme, déphasage (plaque de phase) et résolution jusqu'à laquelle l'ajustement tient.
+
+**Quand l'utiliser**
+
+- Après la correction de mouvement, avant le picking : les particules extraites emportent leur CTF.
+
+**À éviter / pièges**
+
+- Gctf n'est pas proposé : il ne lit pas le float16 et n'est plus maintenu.
+
+**Entrées conseillées** : Les micrographies de « Motion correction (RELION) ».
+
+**Conseils**
+
+- Résolution maximale 5 Å par défaut, 3-4 Å pour de bonnes données.
+- Les spectres de puissance de la correction de mouvement donnent de meilleurs anneaux de Thon (indispensables pour des micrographies en float16).
+- Le meilleur critère de tri est la résolution de l'ajustement : filtrez avec « Curate micrographs » (≤ 6 Å par exemple).
+- L'image des ajustements (meilleur, médian, pire) permet de les vérifier d'un coup d'œil.
+
+**Étapes suivantes** : Curate micrographs, Auto-picking (RELION)
+
+### Curate micrographs
+
+`relion_curate` — intégré (aucun logiciel externe)
+
+Garde les micrographies dont la CTF, le défocus, l'astigmatisme, le mouvement ou la glace respectent des seuils (comme « Curate Exposures » de CryoSPARC) et montre les distributions avec les seuils. Les micrographies rejetées forment une seconde sortie.
+
+**Quand l'utiliser**
+
+- Avant le picking : retirer glace épaisse, dérive, contamination, ajustements CTF ratés.
+- Ne garder qu'une gamme de défocus pour un essai rapide.
+
+**À éviter / pièges**
+
+- Des seuils fixés à l'aveugle : regardez d'abord les histogrammes (un premier passage sans seuil strict).
+
+**Entrées conseillées** : Les micrographies avec CTF ; le mouvement est relu dans la correction de mouvement quand l'estimation de la CTF l'a perdu.
+
+**Conseils**
+
+- Résolution d'ajustement CTF ≤ 5-8 Å selon les données ; mouvement total < 30-50 Å.
+- La sortie « rejected » permet de vérifier ce qui a été écarté.
+
+**Étapes suivantes** : Auto-picking (RELION), Topaz training (RELION)
+
+### Motion correction (RELION)
+
+`relion_motioncorr` — logiciel : `relion`
+
+Aligne les images de chaque film (mouvement induit par le faisceau, globalement puis par patchs) et les somme avec pondération par la dose : l'implémentation CPU de RELION ou MotionCor2 sur GPU. Écrit aussi les spectres de puissance sommés que lit CTFFIND et la trajectoire de chaque film (pour le polissage).
+
+**Quand l'utiliser**
+
+- Toujours, juste après l'import des films.
+- Films super-résolution : binning 2 ici.
+
+**À éviter / pièges**
+
+- Micrographies importées déjà sommées : passez directement à l'estimation de la CTF.
+- MotionCor2 sans GPU : prenez l'implémentation de RELION (CPU).
+
+**Entrées conseillées** : Les films de « Import movies (RELION) ».
+
+**Conseils**
+
+- Patchs 5 × 5 pour K2, K3 ou Falcon 4 (1 × 1 = mouvement global seulement, le défaut du GUI de RELION).
+- Implémentation RELION : un nombre de threads qui divise le nombre d'images ; chaque processus MPI traite un film.
+- float16 divise la place disque par deux ; gardez les spectres de puissance pour CTFFIND.
+- Le graphe du mouvement cumulé montre les films aberrants : retirez-les avec « Curate micrographs ».
+
+**Étapes suivantes** : CTF estimation (CTFFIND)
+
+## Sélection et extraction de particules
+
+### Auto-picking (RELION)
+
+`relion_autopick` — logiciel : `relion`
+
+Repère les particules sur les micrographies (relion_autopick) : détection de blobs par Laplacien de Gaussienne (sans modèle), correspondance avec des modèles (classes 2D ou projections d'une carte 3D) ou Topaz (réseau de neurones, général ou entraîné sur ces données).
+
+**Quand l'utiliser**
+
+- Nouveau jeu de données : LoG pour une première série, puis les classes 2D comme modèles ou Topaz entraîné.
+- Repicker tout le jeu avec un modèle Topaz entraîné sur les bonnes particules.
+
+**À éviter / pièges**
+
+- Seuil LoG trop bas : beaucoup de faux positifs (glace, carbone) qui partent en 2D mais coûtent du temps.
+- Modèles 3D d'un autre jeu de données (autre taille de pixel, autre contraste) sans vérification.
+
+**Entrées conseillées** : Les micrographies avec CTF ; selon la méthode, des classes 2D sélectionnées, une carte 3D ou un modèle Topaz.
+
+**Conseils**
+
+- LoG : diamètres minimum et maximum encadrant la particule ; ajustez le seuil (σ) d'après l'image des particules repérées.
+- Modèles 2D : recentrez les classes (option de « Select 2D classes ») ; distance minimale ≈ le diamètre.
+- Topaz : le diamètre est obligatoire ; le seuil de figure de mérite se règle ensuite à l'extraction (-1 ou 0).
+- L'histogramme des figures de mérite aide à choisir ce seuil.
+
+**Étapes suivantes** : Particle extraction (RELION)
+
+### Particle extraction (RELION)
+
+`relion_extract` — logiciel : `relion`
+
+Découpe les particules dans les micrographies (relion_preprocess --extract) avec leur CTF : boîte, réduction d'échelle, inversion de contraste et normalisation comme RELION les attend. Ré-extrait aussi des particules raffinées (recentrées, autre boîte ou autre taille de pixel).
+
+**Quand l'utiliser**
+
+- Après le picking.
+- Après un raffinement à taille de pixel réduite : ré-extraction à pleine échelle, recentrée sur les positions raffinées.
+
+**À éviter / pièges**
+
+- Boîte trop serrée : comptez 1,5 à 2 fois le diamètre (la CTF délocalise le signal hors de la particule).
+
+**Entrées conseillées** : Les micrographies avec CTF et les coordonnées du picking (ou des particules à ré-extraire).
+
+**Conseils**
+
+- Réduire l'échelle (256 → 64 px par exemple) accélère la 2D et le modèle initial ; ré-extrayez à pleine échelle avant le raffinement final.
+- Boîtes paires uniquement ; la boîte réduite aussi.
+- Topaz : un seuil de figure de mérite (-1 par exemple) écarte les mauvais picks.
+
+**Étapes suivantes** : 2D classification (RELION), 3D initial model (RELION), 3D auto-refine (RELION)
+
+### Topaz training (RELION)
+
+`relion_topaz_train` — logiciel : `relion`
+
+Entraîne un réseau Topaz sur ce jeu de données (relion_autopick --topaz_train) à partir de particules propres (celles des bonnes classes 2D) ou de coordonnées vérifiées ; le modèle sert ensuite à repicker tout le jeu.
+
+**Quand l'utiliser**
+
+- Particules difficiles pour le LoG : petites, irrégulières, peu contrastées.
+- Après une première classification 2D : les bonnes particules montrent au réseau à quoi ressemble la protéine.
+
+**À éviter / pièges**
+
+- Particules d'entraînement non nettoyées : le réseau apprend aussi la glace et le carbone.
+- Sans GPU : l'entraînement est très lent.
+
+**Entrées conseillées** : Des micrographies (quelques centaines suffisent) et les particules sélectionnées (ou des coordonnées).
+
+**Conseils**
+
+- Particules par micrographie : une estimation large de la moyenne réelle.
+- Le modèle gardé est celui de l'époque à la meilleure précision de test (AUPRC), tracée dans le rapport.
+
+**Étapes suivantes** : Auto-picking (RELION)
+
+## Classification 2D / 3D
+
+### 2D classification (RELION)
+
+`relion_class2d` — logiciel : `relion`
+
+Trie les particules en moyennes de classes 2D (relion_refine) : VDAM, l'algorithme par gradient rapide de RELION 4/5, ou l'EM classique. Les moyennes s'affichent pendant le calcul ; les particules gardent leur classe pour la sélection des bonnes classes.
+
+**Quand l'utiliser**
+
+- Nettoyer les particules après le picking : glace, carbone, agrégats, particules cassées.
+- Voir les vues de la particule et choisir des modèles de picking.
+
+**À éviter / pièges**
+
+- VDAM avec plusieurs processus MPI : non supporté (des threads à la place) ; l'EM accepte le MPI.
+- Trop peu de classes pour un grand jeu : 100-200 classes isolent mieux les vues rares.
+
+**Entrées conseillées** : Les particules extraites (RELION ou CryoSPARC).
+
+**Conseils**
+
+- VDAM, 200 mini-lots : bons résultats pour la plupart des données ; 50 à 200 classes.
+- Masque circulaire un peu plus grand que la particule (0 = 90 % de la boîte).
+- T = 2 en 2D ; limiter la résolution de l'étape E (7-12 Å) évite le sur-ajustement des petites particules.
+- Dans la galerie, cliquez des classes puis « Select these classes » : la sélection est créée et lancée.
+
+**Étapes suivantes** : Select 2D classes, 2D classification (RELION)
+
+### 3D classification (RELION)
+
+`relion_class3d_global` — logiciel : `relion`
+
+Trie les particules en classes 3D contre une référence (relion_refine --K) : recherches angulaires globales, locales ou aucune (classification à poses fixes). Chaque classe donne une carte et ses particules ; Blush aide les particules petites ou flexibles.
+
+**Quand l'utiliser**
+
+- Nettoyer encore les particules après la 2D (particules cassées, mauvaises conformations).
+- Séparer des états discrets : ligand lié ou libre, conformations ouverte et fermée.
+
+**À éviter / pièges**
+
+- Hétérogénéité continue : multi-corps, DynaMight, cryoDRGN ou la 3D variability de CryoSPARC la décrivent mieux.
+- Référence trop détaillée : filtre passe-bas initial de 40 à 60 Å pour un modèle initial.
+
+**Entrées conseillées** : Les particules (sélection 2D) et une référence (modèle initial ou carte raffinée) ; un masque en option.
+
+**Conseils**
+
+- 4 à 8 classes, 25 itérations, T = 4.
+- Sans alignement, sur des particules raffinées et avec un masque : classification rapide et focalisée.
+- Les cartes des classes se jouent comme une série dans le visualiseur 3D.
+
+**Étapes suivantes** : 3D auto-refine (RELION), 3D classification (RELION)
+
+### Select 2D classes
+
+`relion_select2d` — logiciel : `relion`
+
+Garde les particules des bonnes classes 2D. Comme dans CryoSPARC, le job affiche les moyennes et attend : cliquez les bonnes classes (triées par taille ou résolution), puis Done. Sélection aussi par liste ou automatique (class ranker de RELION). Donne les particules gardées, les rejetées et les moyennes sélectionnées (modèles de picking).
+
+**Quand l'utiliser**
+
+- Après chaque classification 2D.
+- Préparer des modèles 2D pour le picking par correspondance de modèles (option de recentrage).
+- Sélection automatique dans une chaîne de traitement (score minimum du class ranker).
+
+**À éviter / pièges**
+
+- Ne garder que les plus belles classes : les vues rares sont souvent dans des classes moins nettes ; préférez plusieurs tours de 2D.
+
+**Entrées conseillées** : Les moyennes de classes d'une « 2D classification (RELION) ».
+
+**Conseils**
+
+- Maj + clic sélectionne une série de classes ; boutons Tout, Aucune, Inverser.
+- « Au plus N particules par classe » équilibre les vues avant un modèle initial.
+- Class ranker : score de 0 à 1 (0,5 par défaut) ; il demande l'environnement Python de RELION 5.
+
+**Étapes suivantes** : 3D initial model (RELION), 2D classification (RELION), 3D classification (RELION), 3D auto-refine (RELION), Topaz training (RELION), Auto-picking (RELION)
+
 ## Reconstruction (RELION)
+
+### 3D auto-refine (RELION)
+
+`relion_refine3d` — logiciel : `relion`
+
+Raffinement 3D gold-standard (relion_refine --auto_refine) : recherches globales puis locales à mesure qu'il converge, deux demi-jeux indépendants. Donne la carte, les demi-cartes, la FSC, les particules raffinées et, avec un masque, la carte post-traitée.
+
+**Quand l'utiliser**
+
+- Après la classification : la carte haute résolution.
+- Après une ré-extraction à pleine échelle, la CTF refinement ou le polissage : un nouveau raffinement.
+
+**À éviter / pièges**
+
+- Moins de 3 processus MPI : impossible (un maître et un processus par demi-jeu).
+
+**Entrées conseillées** : Les particules et une référence (classe 3D, modèle initial ou carte raffinée) ; un masque doux (« Mask creation (RELION) ») pour la FSC corrigée et le post-traitement.
+
+**Conseils**
+
+- Filtre initial 40-60 Å pour un modèle initial, 10-15 Å pour une carte déjà raffinée à partir des mêmes particules.
+- Recherches locales à partir de 1,8° (le défaut du GUI de RELION).
+- « Solvent-flattened FSC » (avec un masque) aide une petite particule dans une grande boîte.
+- Blush (RELION 5) pour les particules petites ou flexibles.
+
+**Étapes suivantes** : Mask creation (RELION), CTF refinement (RELION), Bayesian polishing (RELION), RELION post-processing, Local resolution (RELION), 3D multi-body refinement (RELION), DynaMight flexibility (RELION), RELION local refinement
+
+### 3D initial model (RELION)
+
+`relion_initial_model` — logiciel : `relion`
+
+Calcule une première carte 3D sans référence (relion_refine --grad --denovo_3dref, VDAM) puis l'aligne sur les axes de symétrie et applique la symétrie (relion_align_symmetry) : l'ab initio de RELION.
+
+**Quand l'utiliser**
+
+- Aucune carte de départ : après une sélection 2D propre.
+- Plusieurs classes : séparer dès le départ des structures différentes.
+
+**À éviter / pièges**
+
+- Vues préférentielles extrêmes : le modèle sera déformé (regardez la distribution angulaire ensuite).
+
+**Entrées conseillées** : Quelques milliers à quelques dizaines de milliers de bonnes particules de vues variées (à taille de pixel réduite pour aller vite).
+
+**Conseils**
+
+- Calcul en C1 puis symétrie appliquée : plus robuste que la symétrie imposée dès le départ.
+- T = 4 et 200 mini-lots, comme le GUI de RELION.
+- La carte est sur l'échelle de gris absolue de RELION : les jobs 3D suivants s'en servent sans --firstiter_cc.
+
+**Étapes suivantes** : 3D classification (RELION), 3D auto-refine (RELION)
 
 ### RELION 3D classification (focused)
 
@@ -687,6 +1006,31 @@ L'outil d'affûtage de Phenix 2 (phenix.map_sharpening, qui remplace auto_sharpe
 
 **Étapes suivantes** : ModelAngelo build, CryoAtom2 build, CryoAtom2 enhanced (best of several runs), Real-space refinement (Phenix), Local resolution
 
+### Mask creation (RELION)
+
+`relion_mask_create` — logiciel : `relion`
+
+relion_mask_create : la carte filtrée passe-bas, seuillée, dilatée de quelques pixels et adoucie par un bord en cosinus. Le masque de solvant du post-traitement, du raffinement et de la CTF refinement.
+
+**Quand l'utiliser**
+
+- Après le premier raffinement 3D, pour le post-traitement et les raffinements suivants.
+
+**À éviter / pièges**
+
+- Seuil trop haut : le masque coupe de la densité, la FSC est surestimée.
+- Carte affûtée en entrée : prenez la carte non affûtée du raffinement.
+
+**Entrées conseillées** : Une carte raffinée non affûtée.
+
+**Conseils**
+
+- Filtre 15 Å, extension 3-5 px, bord doux 6-10 px.
+- Seuil 0 = automatique (seuil d'Otsu de la carte filtrée) ; vérifiez le masque sur la carte dans le visualiseur.
+- Masque dessiné à la main ou tiré d'un modèle : « Mask drawn in the 3D viewer » ou « Create mask ».
+
+**Étapes suivantes** : 3D auto-refine (RELION), CTF refinement (RELION), Bayesian polishing (RELION), RELION post-processing, Local resolution (RELION)
+
 ### Mask drawn in the 3D viewer
 
 `draw_mask` — intégré (aucun logiciel externe)
@@ -718,6 +1062,55 @@ Masque dessiné à la main sur une carte dans le visualiseur 3D, comme dans Chim
 **Étapes suivantes** : RELION signal subtraction, RELION local refinement, RELION 3D classification (focused), Half-map FSC, LocScale 2
 
 ## Hétérogénéité (variabilité 3D)
+
+### 3D multi-body refinement (RELION)
+
+`relion_multibody` — logiciel : `relion`
+
+Raffine séparément des corps rigides d'un complexe flexible, chacun avec son masque, à partir d'un raffinement consensus (relion_refine --multibody_masks), puis analyse leurs mouvements (relion_flex_analyse) : les mouvements principaux en séries de cartes à jouer dans le visualiseur.
+
+**Quand l'utiliser**
+
+- Complexe fait de domaines rigides qui bougent les uns par rapport aux autres.
+
+**À éviter / pièges**
+
+- Corps trop petits (moins de 100-150 kDa) : leur alignement devient instable.
+- Flexibilité continue sans domaines rigides : DynaMight ou cryoDRGN.
+
+**Entrées conseillées** : Les particules d'un « 3D auto-refine (RELION) » et deux à six masques doux de corps dessinés sur la carte consensus.
+
+**Conseils**
+
+- Le job reprend la dernière itération du raffinement aux demi-jeux séparés (RELION refuse l'itération finale, où ils sont réunis).
+- Les plus grands corps d'abord ; priors de 10° et 2 Å par défaut.
+- L'analyse en composantes principales donne la part de variance de chaque mouvement.
+
+**Étapes suivantes** : Subset selection (RELION), 3D auto-refine (RELION), Composite map (focused maps)
+
+### DynaMight flexibility (RELION)
+
+`relion_dynamight` — logiciel : `relion` · GPU
+
+Apprend les déformations continues des particules à partir d'un modèle de gaussiennes de la carte consensus (DynaMight, RELION 5), puis, au choix, les déformations inverses et une rétroprojection déformée : une carte consensus améliorée là où la particule bouge.
+
+**Quand l'utiliser**
+
+- Flexibilité continue qui floute la carte consensus.
+
+**À éviter / pièges**
+
+- Sans GPU : très lent.
+- Particules sans poses raffinées : DynaMight part d'un raffinement consensus.
+
+**Entrées conseillées** : Les particules raffinées et la carte consensus (même boîte et même taille de pixel).
+
+**Conseils**
+
+- Nombre de gaussiennes : 1 à 2 par résidu de la structure.
+- L'exploration de l'espace latent est une fenêtre interactive à lancer à la main (la commande est dans le rapport).
+
+**Étapes suivantes** : RELION post-processing, LocScale 2, Local resolution (RELION)
 
 ### Extract volume from series
 
@@ -1408,6 +1801,55 @@ Place des molécules d'eau ordonnées dans la carte autour du modèle (phenix.do
 
 **Étapes suivantes** : Real-space refinement (Phenix), Refinement (Servalcat)
 
+### Bayesian polishing (RELION)
+
+`relion_polish` — logiciel : `relion`
+
+Suit le mouvement de chaque particule à travers les images du film et la ré-extrait avec des poids par image ajustés aux données (relion_motion_refine) : le polissage bayésien. Entraîner une fois les paramètres sur un sous-ensemble (facultatif), puis polir ; raffiner ensuite les particules « shiny ».
+
+**Quand l'utiliser**
+
+- Après la CTF refinement, pour les derniers dixièmes d'Å.
+
+**À éviter / pièges**
+
+- Micrographies importées déjà sommées : il faut les films et la correction de mouvement de RELION.
+
+**Entrées conseillées** : Les particules raffinées, les micrographies de la correction de mouvement (ou n'importe quelles micrographies qui en descendent : le mouvement y est retrouvé), les demi-cartes et un masque.
+
+**Conseils**
+
+- Entraînement : environ 10 000 particules suffisent ; branchez ses paramètres sur le job de polissage (entrée « Trained parameters »).
+- Sans entraînement : sigmas par défaut 0,2 / 5000 / 2.
+- Le facteur B par image montre la perte de signal au fil de l'exposition.
+
+**Étapes suivantes** : 3D auto-refine (RELION)
+
+### CTF refinement (RELION)
+
+`relion_ctf_refine` — logiciel : `relion`
+
+Affine l'optique du jeu de données et la CTF de chaque particule contre la carte raffinée (relion_ctf_refine) : grandissement anisotrope, tilt du faisceau, aberrations d'ordre 3 et 4 par groupe optique, puis défocus par particule et astigmatisme par micrographie. « Complete » enchaîne les trois passes du tutoriel de RELION.
+
+**Quand l'utiliser**
+
+- Résolution meilleure que ~4,5 Å : le gain est net.
+- Tilt du faisceau (coma) ou grandissement anisotrope suspectés.
+
+**À éviter / pièges**
+
+- Carte à basse résolution (au-delà de 6 Å) : les ajustements sont mal contraints.
+
+**Entrées conseillées** : Les particules d'un « 3D auto-refine (RELION) », ses demi-cartes et un masque doux.
+
+**Conseils**
+
+- Le job fait lui-même le post-traitement (FSC des demi-cartes) dont relion_ctf_refine a besoin.
+- Raffinez ensuite les particules à nouveau : la résolution doit s'améliorer.
+- Le tableau des groupes optiques montre les paramètres ajustés (tilt, Zernike, matrice de grandissement).
+
+**Étapes suivantes** : 3D auto-refine (RELION), Bayesian polishing (RELION)
+
 ### Real-space refinement (Phenix)
 
 `phenix_real_space_refine` — logiciel : `phenix`
@@ -1506,6 +1948,29 @@ Validation complète du modèle : géométrie MolProbity et accord carte–modè
 - Score > 2 : bon à < 4 Å ; ≈ 1 : médiocre ; proche de 0 : registre ou main douteux.
 
 **Étapes suivantes** : ISOLDE session
+
+### Local resolution (RELION)
+
+`relion_locres` — logiciel : `relion`
+
+Résolution locale avec relion_postprocess --locres : FSC dans une sphère douce déplacée sur la carte. Donne la carte de résolution locale (pour colorer la carte dans le visualiseur) et la carte filtrée localement.
+
+**Quand l'utiliser**
+
+- Repérer les régions flexibles ou mal définies après un raffinement.
+
+**À éviter / pièges**
+
+- Demi-cartes non indépendantes (spIsoNet, carte composite) : la résolution locale serait surestimée.
+
+**Entrées conseillées** : Les demi-cartes d'un raffinement ; un masque en option (statistiques dans le masque).
+
+**Conseils**
+
+- Facteur B : celui du post-traitement convient.
+- « Local resolution » (Phenix) donne une estimation indépendante à comparer.
+
+**Étapes suivantes** : LocScale 2, ModelAngelo build, 3D multi-body refinement (RELION)
 
 ### Map-model validation (Q-score, FSC)
 
@@ -1670,6 +2135,29 @@ Lance n'importe quel programme sur les données du projet (script bash avec des 
 
 - Indiquez les motifs de sortie (ex. result*.mrc) pour récupérer cartes et modèles.
 
+### Join star files (RELION)
+
+`relion_join` — logiciel : `relion`
+
+Réunit deux à quatre jeux de particules, de micrographies ou de films en un seul (relion_star_handler --combine), en retirant les particules présentes deux fois.
+
+**Quand l'utiliser**
+
+- Plusieurs sessions de collecte traitées séparément.
+- Réunir les particules de plusieurs classes 2D ou 3D.
+
+**À éviter / pièges**
+
+- Jeux de types différents (particules et micrographies) : impossible.
+
+**Entrées conseillées** : Deux à quatre sorties du même type.
+
+**Conseils**
+
+- Les groupes optiques de chaque jeu sont conservés.
+
+**Étapes suivantes** : 2D classification (RELION), 3D auto-refine (RELION), Subset selection (RELION)
+
 ### Merge models
 
 `merge_models` — intégré (aucun logiciel externe)
@@ -1734,3 +2222,27 @@ Images ChimeraX hors écran du modèle et/ou de la carte sous trois vues orthogo
 **Conseils**
 
 - Nécessite une version de ChimeraX qui supporte --offscreen.
+
+### Subset selection (RELION)
+
+`relion_subset` — logiciel : `relion`
+
+relion_star_handler sur un jeu de particules ou de micrographies : retirer les particules en double (plus proches qu'une distance après alignement : elles gonflent la FSC), découper en sous-ensembles, garder une plage d'une étiquette de métadonnées ou écarter les images aux statistiques aberrantes.
+
+**Quand l'utiliser**
+
+- Après une ré-extraction recentrée : doublons d'un picking trop dense.
+- Découper un gros jeu pour des essais rapides.
+
+**À éviter / pièges**
+
+- Distance de doublons proche du diamètre : de vraies particules voisines seraient retirées.
+
+**Entrées conseillées** : Des particules ou des micrographies.
+
+**Conseils**
+
+- Doublons : une distance de 30 à 50 % du diamètre.
+- Sélection par valeur : n'importe quelle étiquette (rlnCtfMaxResolution, rlnDefocusU...).
+
+**Étapes suivantes** : 3D auto-refine (RELION), 2D classification (RELION), Join star files (RELION)

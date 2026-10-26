@@ -102,7 +102,8 @@ HELP: dict[str, dict[str, Any]] = {
             "« Import from CryoSPARC » importe déjà les particules du job en même temps que les cartes.",
             "Si les chemins des images sont cassés, indiquez le dossier des images (Image folder).",
         ],
-        "next": ["cryodrgn_backproject", "cryodrgn_train", "cryodrgn_abinit", "relion_local_refine", "relion_reconstruct"],
+        "next": ["cryodrgn_backproject", "cryodrgn_train", "cryodrgn_abinit", "relion_local_refine", "relion_reconstruct",
+                 "relion_class2d"],
     },
     "import_volume_series": {
         "purpose": "Importe des séries de volumes : 3D Variability Display et 3D Flex Generate de CryoSPARC, cryoDRGN, "
@@ -225,6 +226,369 @@ HELP: dict[str, dict[str, Any]] = {
                   "pour la FSC masquée.",
         "tips": ["Les demi-jeux de CryoSPARC (alignments3D/split) sont repris quand ils existent."],
         "next": ["relion_local_refine", "map_fsc", "locscale"],
+    },
+    # ------------------------------------------------- RELION : des films à la carte
+    "relion_import": {
+        "purpose": "Importe les films bruts (ou des micrographies déjà alignées) avec leur groupe optique : taille de pixel, "
+                   "tension, aberration sphérique, contraste d'amplitude, gain et MTF. Écrit le movies.star de "
+                   "relion_import ; les dossiers des films sont liés, rien n'est copié. Le point de départ du pipeline RELION.",
+        "when": [
+            "Démarrer un nouveau jeu de données à partir des films du microscope (TIFF, EER, MRC, MRC compressés).",
+            "Reprendre dans RELION des micrographies déjà sommées par un autre logiciel.",
+        ],
+        "avoid": [
+            "Particules déjà extraites ailleurs (CryoSPARC) : « Import particles » les prend directement.",
+            "Sessions de tailles de pixel ou de détecteurs différents dans un seul import : importez-les séparément (un "
+            "groupe optique chacune) puis réunissez-les avec « Join star files ».",
+        ],
+        "inputs": "Un motif (/data/session/Movies/*.tiff, « ** » pour les sous-dossiers) ou le dossier des films ; la "
+                  "référence de gain quand les films ne sont pas corrigés.",
+        "tips": [
+            "Taille de pixel des films tels qu'enregistrés : en super-résolution, la taille super-résolution, et un "
+            "binning de 2 dans la correction de mouvement.",
+            "La dose par image (e⁻/Å²) sert à la pondération par la dose ; pour l'EER, la dose par fraction.",
+            "Rotation et retournement du gain comme dans MotionCor2 (-RotGain / -FlipGain) : vérifiez l'orientation sur "
+            "une première micrographie corrigée.",
+            "Le fichier MTF du détecteur (wiki RELION) sert au post-traitement.",
+        ],
+        "next": ["relion_motioncorr"],
+    },
+    "relion_motioncorr": {
+        "purpose": "Aligne les images de chaque film (mouvement induit par le faisceau, globalement puis par patchs) et les "
+                   "somme avec pondération par la dose : l'implémentation CPU de RELION ou MotionCor2 sur GPU. Écrit aussi "
+                   "les spectres de puissance sommés que lit CTFFIND et la trajectoire de chaque film (pour le polissage).",
+        "when": [
+            "Toujours, juste après l'import des films.",
+            "Films super-résolution : binning 2 ici.",
+        ],
+        "avoid": [
+            "Micrographies importées déjà sommées : passez directement à l'estimation de la CTF.",
+            "MotionCor2 sans GPU : prenez l'implémentation de RELION (CPU).",
+        ],
+        "inputs": "Les films de « Import movies (RELION) ».",
+        "tips": [
+            "Patchs 5 × 5 pour K2, K3 ou Falcon 4 (1 × 1 = mouvement global seulement, le défaut du GUI de RELION).",
+            "Implémentation RELION : un nombre de threads qui divise le nombre d'images ; chaque processus MPI traite un film.",
+            "float16 divise la place disque par deux ; gardez les spectres de puissance pour CTFFIND.",
+            "Le graphe du mouvement cumulé montre les films aberrants : retirez-les avec « Curate micrographs ».",
+        ],
+        "next": ["relion_ctffind"],
+    },
+    "relion_ctffind": {
+        "purpose": "Ajuste la fonction de transfert de contraste de chaque micrographie avec CTFFIND 4.1 ou 5 (lancé par "
+                   "relion_run_ctffind) : défocus, astigmatisme, déphasage (plaque de phase) et résolution jusqu'à laquelle "
+                   "l'ajustement tient.",
+        "when": ["Après la correction de mouvement, avant le picking : les particules extraites emportent leur CTF."],
+        "avoid": ["Gctf n'est pas proposé : il ne lit pas le float16 et n'est plus maintenu."],
+        "inputs": "Les micrographies de « Motion correction (RELION) ».",
+        "tips": [
+            "Résolution maximale 5 Å par défaut, 3-4 Å pour de bonnes données.",
+            "Les spectres de puissance de la correction de mouvement donnent de meilleurs anneaux de Thon (indispensables "
+            "pour des micrographies en float16).",
+            "Le meilleur critère de tri est la résolution de l'ajustement : filtrez avec « Curate micrographs » (≤ 6 Å par exemple).",
+            "L'image des ajustements (meilleur, médian, pire) permet de les vérifier d'un coup d'œil.",
+        ],
+        "next": ["relion_curate", "relion_autopick"],
+    },
+    "relion_curate": {
+        "purpose": "Garde les micrographies dont la CTF, le défocus, l'astigmatisme, le mouvement ou la glace respectent des "
+                   "seuils (comme « Curate Exposures » de CryoSPARC) et montre les distributions avec les seuils. Les "
+                   "micrographies rejetées forment une seconde sortie.",
+        "when": [
+            "Avant le picking : retirer glace épaisse, dérive, contamination, ajustements CTF ratés.",
+            "Ne garder qu'une gamme de défocus pour un essai rapide.",
+        ],
+        "avoid": ["Des seuils fixés à l'aveugle : regardez d'abord les histogrammes (un premier passage sans seuil strict)."],
+        "inputs": "Les micrographies avec CTF ; le mouvement est relu dans la correction de mouvement quand l'estimation de "
+                  "la CTF l'a perdu.",
+        "tips": [
+            "Résolution d'ajustement CTF ≤ 5-8 Å selon les données ; mouvement total < 30-50 Å.",
+            "La sortie « rejected » permet de vérifier ce qui a été écarté.",
+        ],
+        "next": ["relion_autopick", "relion_topaz_train"],
+    },
+    "relion_autopick": {
+        "purpose": "Repère les particules sur les micrographies (relion_autopick) : détection de blobs par Laplacien de "
+                   "Gaussienne (sans modèle), correspondance avec des modèles (classes 2D ou projections d'une carte 3D) ou "
+                   "Topaz (réseau de neurones, général ou entraîné sur ces données).",
+        "when": [
+            "Nouveau jeu de données : LoG pour une première série, puis les classes 2D comme modèles ou Topaz entraîné.",
+            "Repicker tout le jeu avec un modèle Topaz entraîné sur les bonnes particules.",
+        ],
+        "avoid": [
+            "Seuil LoG trop bas : beaucoup de faux positifs (glace, carbone) qui partent en 2D mais coûtent du temps.",
+            "Modèles 3D d'un autre jeu de données (autre taille de pixel, autre contraste) sans vérification.",
+        ],
+        "inputs": "Les micrographies avec CTF ; selon la méthode, des classes 2D sélectionnées, une carte 3D ou un modèle Topaz.",
+        "tips": [
+            "LoG : diamètres minimum et maximum encadrant la particule ; ajustez le seuil (σ) d'après l'image des particules repérées.",
+            "Modèles 2D : recentrez les classes (option de « Select 2D classes ») ; distance minimale ≈ le diamètre.",
+            "Topaz : le diamètre est obligatoire ; le seuil de figure de mérite se règle ensuite à l'extraction (-1 ou 0).",
+            "L'histogramme des figures de mérite aide à choisir ce seuil.",
+        ],
+        "next": ["relion_extract"],
+    },
+    "relion_topaz_train": {
+        "purpose": "Entraîne un réseau Topaz sur ce jeu de données (relion_autopick --topaz_train) à partir de particules "
+                   "propres (celles des bonnes classes 2D) ou de coordonnées vérifiées ; le modèle sert ensuite à repicker "
+                   "tout le jeu.",
+        "when": [
+            "Particules difficiles pour le LoG : petites, irrégulières, peu contrastées.",
+            "Après une première classification 2D : les bonnes particules montrent au réseau à quoi ressemble la protéine.",
+        ],
+        "avoid": [
+            "Particules d'entraînement non nettoyées : le réseau apprend aussi la glace et le carbone.",
+            "Sans GPU : l'entraînement est très lent.",
+        ],
+        "inputs": "Des micrographies (quelques centaines suffisent) et les particules sélectionnées (ou des coordonnées).",
+        "tips": [
+            "Particules par micrographie : une estimation large de la moyenne réelle.",
+            "Le modèle gardé est celui de l'époque à la meilleure précision de test (AUPRC), tracée dans le rapport.",
+        ],
+        "next": ["relion_autopick"],
+    },
+    "relion_extract": {
+        "purpose": "Découpe les particules dans les micrographies (relion_preprocess --extract) avec leur CTF : boîte, "
+                   "réduction d'échelle, inversion de contraste et normalisation comme RELION les attend. Ré-extrait aussi "
+                   "des particules raffinées (recentrées, autre boîte ou autre taille de pixel).",
+        "when": [
+            "Après le picking.",
+            "Après un raffinement à taille de pixel réduite : ré-extraction à pleine échelle, recentrée sur les positions raffinées.",
+        ],
+        "avoid": ["Boîte trop serrée : comptez 1,5 à 2 fois le diamètre (la CTF délocalise le signal hors de la particule)."],
+        "inputs": "Les micrographies avec CTF et les coordonnées du picking (ou des particules à ré-extraire).",
+        "tips": [
+            "Réduire l'échelle (256 → 64 px par exemple) accélère la 2D et le modèle initial ; ré-extrayez à pleine "
+            "échelle avant le raffinement final.",
+            "Boîtes paires uniquement ; la boîte réduite aussi.",
+            "Topaz : un seuil de figure de mérite (-1 par exemple) écarte les mauvais picks.",
+        ],
+        "next": ["relion_class2d", "relion_initial_model", "relion_refine3d"],
+    },
+    "relion_class2d": {
+        "purpose": "Trie les particules en moyennes de classes 2D (relion_refine) : VDAM, l'algorithme par gradient rapide "
+                   "de RELION 4/5, ou l'EM classique. Les moyennes s'affichent pendant le calcul ; les particules gardent "
+                   "leur classe pour la sélection des bonnes classes.",
+        "when": [
+            "Nettoyer les particules après le picking : glace, carbone, agrégats, particules cassées.",
+            "Voir les vues de la particule et choisir des modèles de picking.",
+        ],
+        "avoid": [
+            "VDAM avec plusieurs processus MPI : non supporté (des threads à la place) ; l'EM accepte le MPI.",
+            "Trop peu de classes pour un grand jeu : 100-200 classes isolent mieux les vues rares.",
+        ],
+        "inputs": "Les particules extraites (RELION ou CryoSPARC).",
+        "tips": [
+            "VDAM, 200 mini-lots : bons résultats pour la plupart des données ; 50 à 200 classes.",
+            "Masque circulaire un peu plus grand que la particule (0 = 90 % de la boîte).",
+            "T = 2 en 2D ; limiter la résolution de l'étape E (7-12 Å) évite le sur-ajustement des petites particules.",
+            "Dans la galerie, cliquez des classes puis « Select these classes » : la sélection est créée et lancée.",
+        ],
+        "next": ["relion_select2d", "relion_class2d"],
+    },
+    "relion_select2d": {
+        "purpose": "Garde les particules des bonnes classes 2D. Comme dans CryoSPARC, le job affiche les moyennes et attend : "
+                   "cliquez les bonnes classes (triées par taille ou résolution), puis Done. Sélection aussi par liste ou "
+                   "automatique (class ranker de RELION). Donne les particules gardées, les rejetées et les moyennes "
+                   "sélectionnées (modèles de picking).",
+        "when": [
+            "Après chaque classification 2D.",
+            "Préparer des modèles 2D pour le picking par correspondance de modèles (option de recentrage).",
+            "Sélection automatique dans une chaîne de traitement (score minimum du class ranker).",
+        ],
+        "avoid": ["Ne garder que les plus belles classes : les vues rares sont souvent dans des classes moins nettes ; "
+                  "préférez plusieurs tours de 2D."],
+        "inputs": "Les moyennes de classes d'une « 2D classification (RELION) ».",
+        "tips": [
+            "Maj + clic sélectionne une série de classes ; boutons Tout, Aucune, Inverser.",
+            "« Au plus N particules par classe » équilibre les vues avant un modèle initial.",
+            "Class ranker : score de 0 à 1 (0,5 par défaut) ; il demande l'environnement Python de RELION 5.",
+        ],
+        "next": ["relion_initial_model", "relion_class2d", "relion_class3d_global", "relion_refine3d", "relion_topaz_train",
+                 "relion_autopick"],
+    },
+    "relion_initial_model": {
+        "purpose": "Calcule une première carte 3D sans référence (relion_refine --grad --denovo_3dref, VDAM) puis l'aligne "
+                   "sur les axes de symétrie et applique la symétrie (relion_align_symmetry) : l'ab initio de RELION.",
+        "when": [
+            "Aucune carte de départ : après une sélection 2D propre.",
+            "Plusieurs classes : séparer dès le départ des structures différentes.",
+        ],
+        "avoid": ["Vues préférentielles extrêmes : le modèle sera déformé (regardez la distribution angulaire ensuite)."],
+        "inputs": "Quelques milliers à quelques dizaines de milliers de bonnes particules de vues variées (à taille de "
+                  "pixel réduite pour aller vite).",
+        "tips": [
+            "Calcul en C1 puis symétrie appliquée : plus robuste que la symétrie imposée dès le départ.",
+            "T = 4 et 200 mini-lots, comme le GUI de RELION.",
+            "La carte est sur l'échelle de gris absolue de RELION : les jobs 3D suivants s'en servent sans --firstiter_cc.",
+        ],
+        "next": ["relion_class3d_global", "relion_refine3d"],
+    },
+    "relion_class3d_global": {
+        "purpose": "Trie les particules en classes 3D contre une référence (relion_refine --K) : recherches angulaires "
+                   "globales, locales ou aucune (classification à poses fixes). Chaque classe donne une carte et ses "
+                   "particules ; Blush aide les particules petites ou flexibles.",
+        "when": [
+            "Nettoyer encore les particules après la 2D (particules cassées, mauvaises conformations).",
+            "Séparer des états discrets : ligand lié ou libre, conformations ouverte et fermée.",
+        ],
+        "avoid": [
+            "Hétérogénéité continue : multi-corps, DynaMight, cryoDRGN ou la 3D variability de CryoSPARC la décrivent mieux.",
+            "Référence trop détaillée : filtre passe-bas initial de 40 à 60 Å pour un modèle initial.",
+        ],
+        "inputs": "Les particules (sélection 2D) et une référence (modèle initial ou carte raffinée) ; un masque en option.",
+        "tips": [
+            "4 à 8 classes, 25 itérations, T = 4.",
+            "Sans alignement, sur des particules raffinées et avec un masque : classification rapide et focalisée.",
+            "Les cartes des classes se jouent comme une série dans le visualiseur 3D.",
+        ],
+        "next": ["relion_refine3d", "relion_class3d_global"],
+    },
+    "relion_refine3d": {
+        "purpose": "Raffinement 3D gold-standard (relion_refine --auto_refine) : recherches globales puis locales à mesure "
+                   "qu'il converge, deux demi-jeux indépendants. Donne la carte, les demi-cartes, la FSC, les particules "
+                   "raffinées et, avec un masque, la carte post-traitée.",
+        "when": [
+            "Après la classification : la carte haute résolution.",
+            "Après une ré-extraction à pleine échelle, la CTF refinement ou le polissage : un nouveau raffinement.",
+        ],
+        "avoid": ["Moins de 3 processus MPI : impossible (un maître et un processus par demi-jeu)."],
+        "inputs": "Les particules et une référence (classe 3D, modèle initial ou carte raffinée) ; un masque doux "
+                  "(« Mask creation (RELION) ») pour la FSC corrigée et le post-traitement.",
+        "tips": [
+            "Filtre initial 40-60 Å pour un modèle initial, 10-15 Å pour une carte déjà raffinée à partir des mêmes particules.",
+            "Recherches locales à partir de 1,8° (le défaut du GUI de RELION).",
+            "« Solvent-flattened FSC » (avec un masque) aide une petite particule dans une grande boîte.",
+            "Blush (RELION 5) pour les particules petites ou flexibles.",
+        ],
+        "next": ["relion_mask_create", "relion_ctf_refine", "relion_polish", "relion_postprocess", "relion_locres",
+                 "relion_multibody", "relion_dynamight", "relion_local_refine"],
+    },
+    "relion_mask_create": {
+        "purpose": "relion_mask_create : la carte filtrée passe-bas, seuillée, dilatée de quelques pixels et adoucie par un "
+                   "bord en cosinus. Le masque de solvant du post-traitement, du raffinement et de la CTF refinement.",
+        "when": ["Après le premier raffinement 3D, pour le post-traitement et les raffinements suivants."],
+        "avoid": [
+            "Seuil trop haut : le masque coupe de la densité, la FSC est surestimée.",
+            "Carte affûtée en entrée : prenez la carte non affûtée du raffinement.",
+        ],
+        "inputs": "Une carte raffinée non affûtée.",
+        "tips": [
+            "Filtre 15 Å, extension 3-5 px, bord doux 6-10 px.",
+            "Seuil 0 = automatique (seuil d'Otsu de la carte filtrée) ; vérifiez le masque sur la carte dans le visualiseur.",
+            "Masque dessiné à la main ou tiré d'un modèle : « Mask drawn in the 3D viewer » ou « Create mask ».",
+        ],
+        "next": ["relion_refine3d", "relion_ctf_refine", "relion_polish", "relion_postprocess", "relion_locres"],
+    },
+    "relion_ctf_refine": {
+        "purpose": "Affine l'optique du jeu de données et la CTF de chaque particule contre la carte raffinée "
+                   "(relion_ctf_refine) : grandissement anisotrope, tilt du faisceau, aberrations d'ordre 3 et 4 par groupe "
+                   "optique, puis défocus par particule et astigmatisme par micrographie. « Complete » enchaîne les trois "
+                   "passes du tutoriel de RELION.",
+        "when": [
+            "Résolution meilleure que ~4,5 Å : le gain est net.",
+            "Tilt du faisceau (coma) ou grandissement anisotrope suspectés.",
+        ],
+        "avoid": ["Carte à basse résolution (au-delà de 6 Å) : les ajustements sont mal contraints."],
+        "inputs": "Les particules d'un « 3D auto-refine (RELION) », ses demi-cartes et un masque doux.",
+        "tips": [
+            "Le job fait lui-même le post-traitement (FSC des demi-cartes) dont relion_ctf_refine a besoin.",
+            "Raffinez ensuite les particules à nouveau : la résolution doit s'améliorer.",
+            "Le tableau des groupes optiques montre les paramètres ajustés (tilt, Zernike, matrice de grandissement).",
+        ],
+        "next": ["relion_refine3d", "relion_polish"],
+    },
+    "relion_polish": {
+        "purpose": "Suit le mouvement de chaque particule à travers les images du film et la ré-extrait avec des poids par "
+                   "image ajustés aux données (relion_motion_refine) : le polissage bayésien. Entraîner une fois les "
+                   "paramètres sur un sous-ensemble (facultatif), puis polir ; raffiner ensuite les particules « shiny ».",
+        "when": ["Après la CTF refinement, pour les derniers dixièmes d'Å."],
+        "avoid": ["Micrographies importées déjà sommées : il faut les films et la correction de mouvement de RELION."],
+        "inputs": "Les particules raffinées, les micrographies de la correction de mouvement (ou n'importe quelles "
+                  "micrographies qui en descendent : le mouvement y est retrouvé), les demi-cartes et un masque.",
+        "tips": [
+            "Entraînement : environ 10 000 particules suffisent ; branchez ses paramètres sur le job de polissage "
+            "(entrée « Trained parameters »).",
+            "Sans entraînement : sigmas par défaut 0,2 / 5000 / 2.",
+            "Le facteur B par image montre la perte de signal au fil de l'exposition.",
+        ],
+        "next": ["relion_refine3d"],
+    },
+    "relion_locres": {
+        "purpose": "Résolution locale avec relion_postprocess --locres : FSC dans une sphère douce déplacée sur la carte. "
+                   "Donne la carte de résolution locale (pour colorer la carte dans le visualiseur) et la carte filtrée "
+                   "localement.",
+        "when": ["Repérer les régions flexibles ou mal définies après un raffinement."],
+        "avoid": ["Demi-cartes non indépendantes (spIsoNet, carte composite) : la résolution locale serait surestimée."],
+        "inputs": "Les demi-cartes d'un raffinement ; un masque en option (statistiques dans le masque).",
+        "tips": [
+            "Facteur B : celui du post-traitement convient.",
+            "« Local resolution » (Phenix) donne une estimation indépendante à comparer.",
+        ],
+        "next": ["locscale", "modelangelo_build", "relion_multibody"],
+    },
+    "relion_join": {
+        "purpose": "Réunit deux à quatre jeux de particules, de micrographies ou de films en un seul (relion_star_handler "
+                   "--combine), en retirant les particules présentes deux fois.",
+        "when": [
+            "Plusieurs sessions de collecte traitées séparément.",
+            "Réunir les particules de plusieurs classes 2D ou 3D.",
+        ],
+        "avoid": ["Jeux de types différents (particules et micrographies) : impossible."],
+        "inputs": "Deux à quatre sorties du même type.",
+        "tips": ["Les groupes optiques de chaque jeu sont conservés."],
+        "next": ["relion_class2d", "relion_refine3d", "relion_subset"],
+    },
+    "relion_subset": {
+        "purpose": "relion_star_handler sur un jeu de particules ou de micrographies : retirer les particules en double "
+                   "(plus proches qu'une distance après alignement : elles gonflent la FSC), découper en sous-ensembles, "
+                   "garder une plage d'une étiquette de métadonnées ou écarter les images aux statistiques aberrantes.",
+        "when": [
+            "Après une ré-extraction recentrée : doublons d'un picking trop dense.",
+            "Découper un gros jeu pour des essais rapides.",
+        ],
+        "avoid": ["Distance de doublons proche du diamètre : de vraies particules voisines seraient retirées."],
+        "inputs": "Des particules ou des micrographies.",
+        "tips": [
+            "Doublons : une distance de 30 à 50 % du diamètre.",
+            "Sélection par valeur : n'importe quelle étiquette (rlnCtfMaxResolution, rlnDefocusU...).",
+        ],
+        "next": ["relion_refine3d", "relion_class2d", "relion_join"],
+    },
+    "relion_multibody": {
+        "purpose": "Raffine séparément des corps rigides d'un complexe flexible, chacun avec son masque, à partir d'un "
+                   "raffinement consensus (relion_refine --multibody_masks), puis analyse leurs mouvements "
+                   "(relion_flex_analyse) : les mouvements principaux en séries de cartes à jouer dans le visualiseur.",
+        "when": ["Complexe fait de domaines rigides qui bougent les uns par rapport aux autres."],
+        "avoid": [
+            "Corps trop petits (moins de 100-150 kDa) : leur alignement devient instable.",
+            "Flexibilité continue sans domaines rigides : DynaMight ou cryoDRGN.",
+        ],
+        "inputs": "Les particules d'un « 3D auto-refine (RELION) » et deux à six masques doux de corps dessinés sur la "
+                  "carte consensus.",
+        "tips": [
+            "Le job reprend la dernière itération du raffinement aux demi-jeux séparés (RELION refuse l'itération finale, "
+            "où ils sont réunis).",
+            "Les plus grands corps d'abord ; priors de 10° et 2 Å par défaut.",
+            "L'analyse en composantes principales donne la part de variance de chaque mouvement.",
+        ],
+        "next": ["relion_subset", "relion_refine3d", "composite_map"],
+    },
+    "relion_dynamight": {
+        "purpose": "Apprend les déformations continues des particules à partir d'un modèle de gaussiennes de la carte "
+                   "consensus (DynaMight, RELION 5), puis, au choix, les déformations inverses et une rétroprojection "
+                   "déformée : une carte consensus améliorée là où la particule bouge.",
+        "when": ["Flexibilité continue qui floute la carte consensus."],
+        "avoid": [
+            "Sans GPU : très lent.",
+            "Particules sans poses raffinées : DynaMight part d'un raffinement consensus.",
+        ],
+        "inputs": "Les particules raffinées et la carte consensus (même boîte et même taille de pixel).",
+        "tips": [
+            "Nombre de gaussiennes : 1 à 2 par résidu de la structure.",
+            "L'exploration de l'espace latent est une fenêtre interactive à lancer à la main (la commande est dans le rapport).",
+        ],
+        "next": ["relion_postprocess", "locscale", "relion_locres"],
     },
     # ----------------------------------------------------------- Map processing
     "map_fsc": {
@@ -1247,6 +1611,9 @@ SECTION_TITLES = {
 }
 CATEGORY_TITLES_FR = {
     "Import": "Import",
+    "Preprocessing": "Prétraitement (films, CTF)",
+    "Picking": "Sélection et extraction de particules",
+    "Classification": "Classification 2D / 3D",
     "Reconstruction": "Reconstruction (RELION)",
     "Map processing": "Traitement de carte",
     "Heterogeneity": "Hétérogénéité (variabilité 3D)",

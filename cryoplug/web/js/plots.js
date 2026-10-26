@@ -1,4 +1,4 @@
-// Dependency-free SVG line charts (FSC curves, per-residue Q-scores...).
+// Dependency-free SVG charts: line charts (FSC curves, per-residue Q-scores...), histograms with thresholds and heatmaps.
 // Fixed categorical order, 2px lines, hairline grid, legend for >= 2 series,
 // crosshair tooltip listing every series, keyboard support and a table view.
 import { h, s } from './ui.js';
@@ -99,6 +99,7 @@ export function lineChart(section) {
     ref.appendChild(s('text', { x: W - m.r + 4, y: Y(hl.y) + 4 }, hl.label ?? hl.y));
   }
   svg.appendChild(ref);
+  svg.appendChild(thresholds(section.vlines, xmin, xmax, X, m.t, H - m.b));
 
   const sg = s('g', { class: 'series' });
   series.forEach((sr, i) => {
@@ -121,15 +122,17 @@ export function lineChart(section) {
   svg.append(cross, ...dots);
   const tip = h('div', { class: 'tip', hidden: true });
   const base = series[0].x;
+  // a path along x (a drift trajectory) is hovered point by point, in the order of the data
+  const ordered = base.every((v, k) => !k || v >= base[k - 1]) || base.every((v, k) => !k || v <= base[k - 1]);
   let current = -1;
   const show = (idx) => {
     if (idx < 0) return;
     current = idx;
     const x = base[idx];
-    cross.setAttribute('x1', X(x)); cross.setAttribute('x2', X(x)); cross.setAttribute('visibility', 'visible');
-    tip.replaceChildren(h('div', { class: 'tip-x' }, xLabel(x)));
+    if (ordered) { cross.setAttribute('x1', X(x)); cross.setAttribute('x2', X(x)); cross.setAttribute('visibility', 'visible'); }
+    tip.replaceChildren(h('div', { class: 'tip-x' }, ordered ? xLabel(x) : `Point ${idx + 1} · ${section.x_label || 'x'} ${fmtVal(x)}`));
     series.forEach((sr, i) => {
-      const k = nearestIndex(sr.x, x);
+      const k = ordered ? nearestIndex(sr.x, x) : Math.min(idx, sr.x.length - 1);
       const y = sr.y[k];
       if (Number.isFinite(y)) {
         dots[i].setAttribute('cx', X(sr.x[k])); dots[i].setAttribute('cy', Y(Math.max(ymin, Math.min(ymax, y))));
@@ -155,7 +158,14 @@ export function lineChart(section) {
       const rect = svg.getBoundingClientRect();
       const sx = ((e.clientX - rect.left) / rect.width) * W;
       const x = xmin + ((sx - m.l) / iw) * (xmax - xmin);
-      show(nearestIndex(base, x));
+      if (ordered) { show(nearestIndex(base, x)); return; }
+      const sy = ((e.clientY - rect.top) / rect.height) * H;
+      let best = -1, dist = Infinity;
+      base.forEach((bx, k) => {
+        const d = (X(bx) - sx) ** 2 + (Y(series[0].y[k]) - sy) ** 2;
+        if (d < dist) { dist = d; best = k; }
+      });
+      show(best);
     },
     onpointerleave: hide,
     onblur: hide,
@@ -194,6 +204,122 @@ export function lineChart(section) {
     svg, tip, tableBox,
     folded > 0 ? h('div', { class: 'muted small' }, `+${folded} more series not drawn (see the CSV/table output).`) : null,
   ].filter(Boolean));
+  return wrap;
+}
+
+// Thresholds across the x axis (dashed, labelled at the top): the limits of a selection on a distribution.
+function thresholds(vlines, xmin, xmax, X, top, bottom) {
+  const g = s('g', { class: 'thresholds' });
+  for (const vl of vlines || []) {
+    if (!Number.isFinite(vl.x) || vl.x < xmin || vl.x > xmax) continue;
+    g.appendChild(s('line', { x1: X(vl.x), x2: X(vl.x), y1: top, y2: bottom }));
+    g.appendChild(s('text', { x: X(vl.x) + 4, y: top + 10 }, vl.label ?? vl.x));
+  }
+  return g;
+}
+
+function barPath(x, y, w, hgt, r) {
+  const rr = Math.max(0, Math.min(r, w / 2, hgt));
+  return `M${x},${y + hgt}V${y + rr}Q${x},${y} ${x + rr},${y}H${x + w - rr}Q${x + w},${y} ${x + w},${y + rr}V${y + hgt}Z`;
+}
+
+// Histogram: x = bin centres, y = counts (one series). Rounded bar tops, 2px gaps, a tooltip per bin (with a hit target
+// as tall as the plot), thresholds (vlines), keyboard support and a table view.
+export function barChart(section) {
+  const sr = (section.series || []).find((x) => x.x && x.x.length);
+  if (!sr) return h('div', { class: 'muted small' }, 'No data');
+  const xs = sr.x, ys = sr.y.map((v) => (Number.isFinite(v) ? v : 0));
+  const W = 560, H = 230, m = { l: 46, r: 18, t: 14, b: 40 };
+  const step = xs.length > 1 ? Math.abs(xs[xs.length - 1] - xs[0]) / (xs.length - 1) : 1;
+  let xmin = Math.min(...xs) - step / 2, xmax = Math.max(...xs) + step / 2;
+  for (const vl of section.vlines || []) {
+    if (Number.isFinite(vl.x)) { xmin = Math.min(xmin, vl.x - step / 2); xmax = Math.max(xmax, vl.x + step / 2); }
+  }
+  const ymaxCount = Math.max(1, ...ys);
+  // counts: whole-number ticks only
+  const yticks = ymaxCount <= 4 ? Array.from({ length: ymaxCount + 1 }, (_, k) => k) : niceTicks(0, ymaxCount, 4).filter(Number.isInteger);
+  const ytop = Math.max(ymaxCount, yticks[yticks.length - 1]);
+  const longest = Math.max(1, ...yticks.map((t) => String(t).length));
+  m.l = Math.max(40, Math.round(longest * 6.4) + (section.y_label ? 26 : 12));
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const X = (x) => m.l + ((x - xmin) / (xmax - xmin || 1)) * iw;
+  const Y = (y) => m.t + (1 - y / ytop) * ih;
+  const fmtX = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
+
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': section.title || 'Histogram' });
+  const grid = s('g', { class: 'grid' });
+  const axis = s('g', { class: 'axis' });
+  for (const t of yticks) {
+    grid.appendChild(s('line', { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t) }));
+    axis.appendChild(s('text', { x: m.l - 6, y: Y(t) + 4, 'text-anchor': 'end' }, t));
+  }
+  for (const t of niceTicks(xmin, xmax, 6)) {
+    if (t < xmin || t > xmax) continue;
+    axis.appendChild(s('line', { x1: X(t), x2: X(t), y1: H - m.b, y2: H - m.b + 4 }));
+    axis.appendChild(s('text', { x: X(t), y: H - m.b + 16, 'text-anchor': 'middle' }, +t.toFixed(3)));
+  }
+  axis.appendChild(s('line', { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b }));
+  if (section.x_label) axis.appendChild(s('text', { x: m.l + iw / 2, y: H - 6, 'text-anchor': 'middle' }, section.x_label));
+  if (section.y_label) axis.appendChild(s('text', { x: 12, y: m.t + ih / 2, transform: `rotate(-90 12 ${m.t + ih / 2})`, 'text-anchor': 'middle' }, section.y_label));
+  svg.append(grid, axis);
+
+  const bars = s('g', { class: 'bars' });
+  const rects = xs.map((x, i) => {
+    const x0 = X(x - step / 2) + 1, x1 = X(x + step / 2) - 1;
+    const w = Math.max(1, x1 - x0), top = Y(ys[i]);
+    const bar = s('path', { d: ys[i] > 0 ? barPath(x0, top, w, H - m.b - top, 4) : '', fill: 'var(--series-1)' });
+    bars.appendChild(bar);
+    return bar;
+  });
+  svg.appendChild(bars);
+  svg.appendChild(thresholds(section.vlines, xmin, xmax, X, m.t, H - m.b));
+
+  const wrap = h('div', { class: 'plot' });
+  const tip = h('div', { class: 'tip', hidden: true });
+  let current = -1;
+  const total = ys.reduce((a, b) => a + b, 0) || 1;
+  const show = (i) => {
+    if (i < 0 || i >= xs.length) return;
+    if (current >= 0) rects[current].classList.remove('on');
+    current = i;
+    rects[i].classList.add('on');
+    tip.replaceChildren(h('div', { class: 'tip-x' }, `${fmtX(xs[i] - step / 2)} – ${fmtX(xs[i] + step / 2)}${section.x_label ? ` · ${section.x_label}` : ''}`),
+      h('div', { class: 'tip-row' }, h('span', { class: 'sq', style: { background: 'var(--series-1)' } }), h('b', {}, ys[i].toLocaleString()),
+        h('span', { class: 'muted' }, `${sr.name || section.y_label || ''} (${((100 * ys[i]) / total).toFixed(1)} %)`)));
+    tip.hidden = false;
+    const rect = svg.getBoundingClientRect();
+    const scale = rect.width / W;
+    const px = X(xs[i]) * scale;
+    tip.style.top = `${m.t * scale}px`;
+    tip.style.left = px > rect.width / 2 ? `${px - tip.offsetWidth - 12}px` : `${px + 12}px`;
+  };
+  const hide = () => { tip.hidden = true; if (current >= 0) rects[current].classList.remove('on'); };
+  const overlay = s('rect', { x: m.l, y: m.t, width: iw, height: ih, fill: 'transparent', tabindex: 0,
+    onpointermove: (e) => {
+      const rect = svg.getBoundingClientRect();
+      const x = xmin + ((((e.clientX - rect.left) / rect.width) * W - m.l) / iw) * (xmax - xmin);
+      show(nearestIndex(xs, x));
+    },
+    onpointerleave: hide,
+    onblur: hide,
+    onkeydown: (e) => {
+      if (e.key === 'ArrowRight') { show(Math.min(xs.length - 1, current + 1)); e.preventDefault(); }
+      if (e.key === 'ArrowLeft') { show(Math.max(0, current < 0 ? 0 : current - 1)); e.preventDefault(); }
+    } });
+  svg.appendChild(overlay);
+
+  const tableBox = h('div', { class: 'table-scroll', hidden: true });
+  const toggle = h('button', { class: 'btn small', type: 'button', onclick: () => {
+    if (!tableBox.childElementCount) {
+      tableBox.appendChild(h('table', { class: 'data' },
+        h('thead', {}, h('tr', {}, h('th', {}, section.x_label || 'Bin'), h('th', {}, sr.name || section.y_label || 'Count'))),
+        h('tbody', {}, xs.map((x, i) => h('tr', {}, h('td', {}, `${fmtX(x - step / 2)} – ${fmtX(x + step / 2)}`), h('td', {}, ys[i].toLocaleString()))))));
+    }
+    tableBox.hidden = !tableBox.hidden;
+    toggle.textContent = tableBox.hidden ? 'Table' : 'Chart';
+    svg.style.display = tableBox.hidden ? '' : 'none';
+  } }, 'Table');
+  wrap.append(h('div', { class: 'plot-head' }, h('h5', {}, section.title || ''), h('span', { class: 'grow' }), toggle), svg, tip, tableBox);
   return wrap;
 }
 

@@ -3,10 +3,11 @@
 // (as in CryoSPARC), where its outputs can be dragged onto the builder's inputs.
 import { api } from './api.js';
 import { builderConnect, builderPrefill, builderSetParams, builderSlotsFor, openBuilder } from './builder.js';
+import { classGallery, forgetSelection } from './classes.js';
 import { computeRows } from './compute.js';
 import { helpSheet } from './help.js';
 import { latentExplorer } from './latent.js';
-import { heatmap, lineChart } from './plots.js';
+import { barChart, heatmap, lineChart } from './plots.js';
 import { builderHref, jobHref, navigate, refreshJobs, restricted, state, typeTitle } from './state.js';
 import {
   ACTIVE, ago, btn, clear, confirmDialog, copyText, fmtSize, fmtTime, guard, h, icon, jobDuration, LIVE, liveAgo, liveDuration, popupMenu,
@@ -370,7 +371,13 @@ function renderOverview(body) {
   if (job.status === 'building' && job.problems && job.problems.length) {
     body.appendChild(h('div', { class: 'alert warn' }, 'Before queueing:', h('ul', { class: 'problems' }, job.problems.map((p) => h('li', {}, p)))));
   }
-  if (job.status === 'waiting') body.appendChild(interactivePanel(job));
+  if (job.status === 'waiting') {
+    const choosing = (job.report?.sections || []).some((sec) => sec.kind === 'classes2d' && sec.selectable && sec.waiting);
+    body.appendChild(choosing
+      ? h('div', { class: 'alert wait' }, h('b', {}, 'Waiting for your selection'),
+        h('div', { class: 'small', style: { marginTop: '4px' } }, 'Click the good classes below (sorted by number of particles or resolution), then Done.'))
+      : interactivePanel(job));
+  }
 
   if (job.highlights && job.highlights.length) {
     body.appendChild(h('div', { class: 'section' }, h('div', { class: 'tiles' }, job.highlights.map((hl) => h('div', { class: 'tile' },
@@ -395,12 +402,16 @@ function renderOverview(body) {
       },
         o.thumbnail ? h('img', { src: api.fileUrl(puid, o.thumbnail), alt: '', loading: 'lazy' })
           : h('div', { class: 'noimg' }, icon({ model: 'model', map: 'map', mask: 'map', half_maps: 'map', locres: 'map', variability: 'map', volume_series: 'map',
-            report: 'check', fsc: 'graph', restraints: 'file', particles: 'grid', latent: 'graph' }[o.type] || 'file')),
+            report: 'check', fsc: 'graph', restraints: 'file', particles: 'grid', latent: 'graph', movies: 'film', micrographs: 'film',
+            coordinates: 'picks', class_averages: 'grid', topaz_model: 'cpu', polish_params: 'sliders' }[o.type] || 'file')),
         h('div', {},
           h('div', { class: 'row' }, h('b', {}, o.label || o.name), h('span', { class: `tag type-${o.type}` }, state.info.data_types[o.type] || o.type),
             h('span', { class: 'muted small' }, o.name)),
-          o.meta && (o.meta.resolution || o.meta.pixel_size || o.meta.frames || o.meta.n_particles) ? h('div', { class: 'muted small' },
-            [o.meta.resolution ? `${(+o.meta.resolution).toFixed(2)} Å` : null, o.meta.pixel_size ? `${o.meta.pixel_size} Å/px` : null,
+          o.meta && (o.meta.resolution || o.meta.pixel_size || o.meta.frames || o.meta.n_particles || o.meta.n_micrographs || o.meta.n_movies) ? h('div', { class: 'muted small' },
+            [o.meta.n_movies ? `${Number(o.meta.n_movies).toLocaleString()} movies` : null,
+              o.meta.n_micrographs ? `${Number(o.meta.n_micrographs).toLocaleString()} micrographs` : null,
+              o.meta.n_classes ? `${o.meta.n_classes} classes` : null,
+              o.meta.resolution ? `${(+o.meta.resolution).toFixed(2)} Å` : null, o.meta.pixel_size ? `${o.meta.pixel_size} Å/px` : null,
               Array.isArray(o.meta.box) ? `box ${o.meta.box.join('×')}` : (o.meta.box ? `${o.meta.box} px` : null),
               o.type === 'volume_series' && o.meta.frames ? `${o.meta.frames} volumes` : null,
               o.meta.n_particles ? `${Number(o.meta.n_particles).toLocaleString()} particles` : null,
@@ -492,7 +503,7 @@ function reportSection(sec, puid, job) {
       h('tbody', {}, sec.metrics.map((m) => h('tr', {}, h('td', {}, m.label), h('td', {}, h('b', {}, String(m.value))),
         h('td', {}, statusMark(m.status) || ''), h('td', { class: 'muted' }, m.target || '')))))));
   } else if (sec.kind === 'plot') {
-    wrap.append(h('div', { class: 'box' }, lineChart(sec), note));
+    wrap.append(h('div', { class: 'box' }, sec.style === 'bars' ? barChart(sec) : lineChart(sec), note));
   } else if (sec.kind === 'heatmap') {
     wrap.append(h('div', { class: 'box' }, heatmap(sec)));
   } else if (sec.kind === 'table') {
@@ -503,11 +514,31 @@ function reportSection(sec, puid, job) {
         i === statusCol ? statusMark(String(cell).toLowerCase()) : String(cell))))))), note));
   } else if (sec.kind === 'text') {
     wrap.append(h('h4', {}, sec.title), h('div', { class: sec.mono ? 'box mono' : 'box', style: { whiteSpace: 'pre-wrap', overflowX: 'auto' } }, sec.text));
+  } else if (sec.kind === 'classes2d') {
+    const classesOut = (job.outputs || []).find((o) => o.type === 'class_averages' && o.name === 'classes');
+    wrap.append(h('div', { class: 'box' }, classGallery(sec, {
+      puid, job,
+      finish: (classes) => act(api.finish(puid, job.uid, JSON.stringify({ classes })), `${classes.length} classes kept`)
+        .then(() => forgetSelection(puid, job.uid)),
+      newSelection: classesOut ? (classes) => newSelectionJob(job, classesOut, classes) : null,
+    })));
   } else if (sec.kind === 'image') {
     wrap.append(h('h4', {}, sec.title), h('a', { href: api.fileUrl(puid, sec.path), target: '_blank', rel: 'noopener' },
       h('img', { src: api.fileUrl(puid, sec.path), alt: sec.title, style: { maxWidth: '100%', borderRadius: '8px' } })));
   }
   return wrap;
+}
+
+// A "Select 2D classes" job keeping the classes clicked in the gallery of a 2D classification, queued at once.
+async function newSelectionJob(job, out, classes) {
+  const puid = state.project.uid;
+  try {
+    const made = await guard(api.createJob(puid, { type: 'relion_select2d', params: { mode: 'list', classes: classes.join(', ') },
+      inputs: { classes: { job: job.uid, output: out.name } }, queue: true }), `${classes.length} classes of ${job.uid}: selection job queued`);
+    forgetSelection(puid, job.uid);
+    await refreshJobs();
+    navigate(jobHref(made.uid));
+  } catch { /* shown */ }
 }
 
 function interactivePanel(job) {

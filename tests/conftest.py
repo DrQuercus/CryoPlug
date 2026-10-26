@@ -142,6 +142,14 @@ def cs_particles(tmp_path_factory) -> dict[str, Path]:
     return {"root": root, "refine": job, "variability": va, "display": display, "n": n}
 
 
+@pytest.fixture(scope="session")
+def movies(tmp_path_factory) -> dict:
+    """Synthetic movies (MRC stacks of 6 frames, 1 Å/px) with a flat gain reference, for the RELION pipeline."""
+    sys.path.insert(0, str(ROOT / "tests" / "fakes"))
+    from spa_data import write_movies
+    return write_movies(tmp_path_factory.mktemp("movies") / "Movies", n_movies=4)
+
+
 def _script(path: Path, body: str) -> None:
     path.write_text("#!/bin/bash\n" + body)
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -499,9 +507,16 @@ exit 0
     relion.write_text(f"#!{sys.executable}\n" + (ROOT / "tests" / "fakes" / "relion.py").read_text())
     relion.chmod(relion.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     for prog in ("relion_refine", "relion_refine_mpi", "relion_particle_subtract", "relion_particle_subtract_mpi",
-                 "relion_particle_symmetry_expand", "relion_postprocess", "relion_reconstruct", "relion_reconstruct_mpi",
-                 "mpirun"):
+                 "relion_particle_symmetry_expand", "relion_postprocess", "relion_postprocess_mpi", "relion_reconstruct",
+                 "relion_reconstruct_mpi", "mpirun", "relion_run_motioncorr", "relion_run_motioncorr_mpi",
+                 "relion_run_ctffind", "relion_run_ctffind_mpi", "relion_autopick", "relion_autopick_mpi",
+                 "relion_preprocess", "relion_preprocess_mpi", "relion_align_symmetry", "relion_class_ranker",
+                 "relion_mask_create", "relion_ctf_refine", "relion_ctf_refine_mpi", "relion_motion_refine",
+                 "relion_motion_refine_mpi", "relion_star_handler", "relion_flex_analyse", "relion_python_dynamight"):
         (d / prog).symlink_to(relion)
+    # programs RELION calls (the fake RELION only checks that they can be run)
+    for prog in ("ctffind", "MotionCor2", "relion_python_topaz"):
+        _script(d / prog, f'echo "fake {prog} $@"\n')
     # Mimics LocScale 2.4.1 path handling: relative -o / -op are resolved against the folder of the first
     # input map (not the working directory), and the inputs are copied into the processing folder.
     _script(d / "locscale", """
@@ -538,7 +553,7 @@ def manager(tmp_path, fakebin) -> Manager:
         lanes=[LaneConfig(name="local", type="local", max_jobs=4, gpus=[0, 1])],
         tools={k: ToolConfig(name=k, bin_dir=str(fakebin))
                for k in ("modelangelo", "phenix", "locscale", "cryoatom", "boltz", "spisonet", "checkmysequence", "onedep",
-                         "cryodrgn", "relion", "colabfold", "servalcat", "deepemhancer")},
+                         "cryodrgn", "relion", "colabfold", "servalcat", "deepemhancer", "ctffind", "motioncor")},
     )
     m = Manager(cfg)
     m.check_tools()
