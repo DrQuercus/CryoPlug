@@ -364,12 +364,14 @@ Repère les particules sur les micrographies (relion_autopick) : détection de b
 
 `relion_pick_inspect` — intégré (aucun logiciel externe)
 
-Inspecte les particules repérées sur chaque micrographie et les corrige à la main (comme « Inspect Picks » et « Manual Picker » de CryoSPARC) : seuil de figure de mérite réglé sur son histogramme, particules retirées ou ajoutées d'un clic, zoom, déplacement, filtre passe-bas de l'affichage. Sans coordonnées en entrée, c'est un picking entièrement manuel.
+Inspecte les particules repérées sur chaque micrographie et les corrige à la main (comme « Inspect Picks » et « Manual Picker » de CryoSPARC) : seuil de figure de mérite et gamme de « power score » (puissance locale autour de chaque pick) réglés sur leurs histogrammes, avec le nuage des deux, particules retirées ou ajoutées d'un clic, zoom, déplacement, filtre passe-bas de l'affichage. Sans coordonnées en entrée, c'est un picking entièrement manuel ; en mode « Filaments », on clique le début puis la fin de chaque filament, comme le picking manuel d'hélices de RELION.
 
 **Quand l'utiliser**
 
 - Après le picking automatique : choisir le seuil de figure de mérite en regardant les micrographies.
+- Écarter les picks sur la glace cristalline, le carbone et la contamination (power score élevé) ou sur la glace vide (power score faible).
 - Picker à la main quelques centaines de particules pour entraîner Topaz ou faire de premières classes 2D.
+- Filaments, fibres amyloïdes, hélices : tracer les tubes, puis extraction avec « Helical processing » qui les découpe en segments.
 - Vérifier qu'un picking n'a pas pris la glace, le carbone ou les bords des trous.
 
 **À éviter / pièges**
@@ -385,6 +387,8 @@ Inspecte les particules repérées sur chaque micrographie et les corrige à la 
 - Le travail est enregistré au fil de l'eau : on peut fermer la page et revenir avant Done.
 - Les particules ajoutées à la main reçoivent une figure de mérite au-dessus de toutes les autres : un seuil appliqué plus tard les garde.
 - Depuis un picking terminé, « Inspect and edit… » crée directement ce job avec le seuil affiché.
+- Power score : les deux poignées de son histogramme (échelle log quand il s'étale) gardent une gamme ; le nuage figure de mérite / power score montre la boîte gardée. Le calcul lit chaque micrographie une fois (désactivable pour de très gros jeux).
+- Filaments : le diamètre est celui du tube ; un clic sur un filament le retire, Échap annule un début. L'extraction refuse ces coordonnées sans « Helical processing » (montée, diamètre du tube) qui les découpe.
 
 **Étapes suivantes** : Particle extraction (RELION), Topaz training (RELION)
 

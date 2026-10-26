@@ -228,7 +228,7 @@ de RELION et se relisent dans RELION.
 | CTF | CTF estimation (CTFFIND) | 30–5 Å, spectres de puissance de l'étape précédente | résolution d'ajustement, défocus, image des ajustements |
 | Tri | Curate micrographs | limites tirées sur les histogrammes (ajustement CTF ≤ 6–8 Å, mouvement…) | chaque micrographie avec sa CTF et sa dérive, rejets à la main |
 | Picking | Auto-picking (RELION) | Laplacien de Gaussienne, diamètres min./max. de la particule | image des particules entourées, particules par micrographie |
-| Inspection (facultatif) | Inspect picks / manual picking | seuil de figure de mérite sur l'histogramme | particules retirées ou ajoutées d'un clic |
+| Inspection (facultatif) | Inspect picks / manual picking | seuil de figure de mérite et gamme de power score sur leurs histogrammes | particules retirées ou ajoutées d'un clic |
 | Extraction | Particle extraction (RELION) | boîte ≈ 2 × le diamètre, réduite à 64–128 px | vignettes des particules |
 | 2D | 2D classification (RELION) | VDAM, 50–200 classes | galerie redessinée à chaque itération |
 | Sélection | Select 2D classes | les bonnes classes cliquées | particules gardées / rejetées |
@@ -269,10 +269,15 @@ attendent, puis repartent seuls.
   avancer. Les lignes du tableau et les points du nuage s'ouvrent d'un clic. Le travail est enregistré au fil de l'eau ;
   **Done** écrit les micrographies gardées et les rejetées. Le mode *thresholds* applique les seuils d'un coup.
 - **Inspect picks / manual picking** montre les particules repérées sur chaque micrographie : seuil de figure de mérite
-  glissé sur son histogramme (le nombre gardé par micrographie suit), clic sur un cercle pour le retirer, clic ailleurs
-  pour ajouter une particule, molette pour zoomer, glisser pour se déplacer, ← → pour changer de micrographie. Sans
-  coordonnées en entrée, c'est un picking manuel (un jeu d'entraînement pour Topaz). Depuis un picking terminé,
-  **Inspect and edit…** crée l'inspection avec le seuil affiché.
+  glissé sur son histogramme (le nombre gardé par micrographie suit), gamme de *power score* (puissance locale autour
+  de chaque pick, comme dans CryoSPARC : la glace cristalline, le carbone et la contamination sont hauts, la glace vide
+  basse) réglée par les deux poignées de son histogramme, nuage figure de mérite / power score avec la boîte gardée,
+  clic sur un cercle pour le retirer, clic ailleurs pour ajouter une particule, molette pour zoomer, glisser pour se
+  déplacer, ← → pour changer de micrographie. Sans coordonnées en entrée, c'est un picking manuel (un jeu
+  d'entraînement pour Topaz). Depuis un picking terminé, **Inspect and edit…** crée l'inspection avec le seuil affiché.
+  En mode **Filaments**, on clique le début puis la fin de chaque filament (un clic sur un tube le retire, Échap annule
+  un début) : les coordonnées sont écrites comme le picking manuel d'hélices de RELION (*start-end*) et l'extraction,
+  avec **Helical processing**, les découpe en segments espacés de la montée.
 
 - **Live preprocessing (RELION)** traite les films pendant la collecte, comme CryoSPARC Live : à chaque cycle
   (toutes les 60 s par défaut), les nouveaux films du dossier sont importés, corrigés du mouvement, leur CTF estimée,

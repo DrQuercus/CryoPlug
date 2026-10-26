@@ -259,12 +259,27 @@ def write_coordinates(path: str | Path, xy: np.ndarray, fom: np.ndarray | None =
     return write_star(path, [t])
 
 
-def write_coordinate_list(path: str | Path, pairs: list[tuple[str, str]]) -> Path:
-    """The list of coordinate files of a picking job (``data_coordinate_files``): micrograph, its coordinates."""
+def write_coordinate_list(path: str | Path, pairs: list[tuple[str, str]], pick_type: str | None = None) -> Path:
+    """The list of coordinate files of a picking job (``data_coordinate_files``): micrograph, its coordinates.
+    ``pick_type`` "startend" (filaments: each coordinate file holds the start and end of every tube, one after the
+    other) or "lines" goes in a ``data_general`` block first, as RELION 5's manual picker writes it."""
     t = StarTable("coordinate_files")
     t.set_column("rlnMicrographName", [m for m, _ in pairs])
     t.set_column("rlnMicrographCoordinates", [c for _, c in pairs])
-    return write_star(path, [t])
+    tables = [t]
+    if pick_type:
+        tables.insert(0, StarTable("general", ["rlnMicrographPickType"], [[pick_type]], loop=False))
+    return write_star(path, tables)
+
+
+def coordinate_pick_type(path: str | Path) -> str:
+    """What a list of coordinate files holds: "particles" (the default), "startend" or "lines" (filaments)."""
+    try:
+        general = read_star(path).get("general")
+    except (OSError, ValueError):
+        return "particles"
+    value = general.value("rlnMicrographPickType") if general is not None else None
+    return str(value) if value else "particles"
 
 
 def read_coordinates(path: str | Path) -> tuple[np.ndarray, np.ndarray | None]:

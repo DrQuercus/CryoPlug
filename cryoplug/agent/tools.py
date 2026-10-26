@@ -552,10 +552,14 @@ def report_lines(report: dict[str, Any] | None, full: bool = False) -> list[str]
                     line += f" ({len(sec['overrides'])} decided by hand)"
             lines.append(line)
         elif kind == "picks":
-            line = f"[{title}] picks drawn on the micrographs in the web interface"
-            if sec.get("waiting"):
-                line += ("; WAITING for a person to inspect the picks (threshold, particles removed or added) in the job "
-                         "panel (as an agent, set min_fom in relion_extract instead)")
+            filaments = sec.get("mode") == "filaments"
+            line = f"[{title}] {'filaments' if filaments else 'picks'} drawn on the micrographs in the web interface"
+            if sec.get("waiting") and filaments:
+                line += ("; WAITING for a person to click the start and end of each filament in the job panel (an agent "
+                         "cannot pick filaments: ask the user)")
+            elif sec.get("waiting"):
+                line += ("; WAITING for a person to inspect the picks (threshold, power range, particles removed or added) "
+                         "in the job panel (as an agent, set min_fom in relion_extract instead)")
             lines.append(line)
     return lines
 

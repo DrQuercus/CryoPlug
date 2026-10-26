@@ -443,13 +443,17 @@ button.cls-tile:focus-visible { outline: 2px solid var(--focus); outline-offset:
 .pk-legend i { width: 12px; height: 12px; border-radius: 50%; border: 2px solid; display: inline-block; }
 .pk-legend i.dashed { border-style: dashed; }
 .pk-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.pk-hist { width: 100%; height: auto; display: block; cursor: ew-resize; touch-action: none; }
+.pk-hist { width: 100%; height: auto; display: block; cursor: ew-resize; touch-action: none; user-select: none; -webkit-user-select: none; }
 .pk-hist rect { fill: var(--series-1); }
 .pk-hist rect.off { fill: var(--ink-3); opacity: .35; }
 .pk-hist .pk-thr { stroke: var(--ink-1); stroke-width: 2; }
 .pk-hist text { fill: var(--ink-3); font-size: 10px; font-family: var(--font); }
 .pk-hist .pk-thr-label { fill: var(--ink-1); font-weight: 600; }
 .pk-hist:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.pk-hist rect.pk-grip { fill: var(--ink-1); cursor: ew-resize; outline: none; }
+.pk-hist rect.pk-grip:focus-visible { stroke: var(--focus); stroke-width: 3; }
+.pk-joint { width: 100%; height: auto; aspect-ratio: 280 / 150; display: block; border: 1px solid var(--border); border-radius: 4px; }
+.pk-legend i.tube { width: 18px; height: 8px; border-radius: 4px; background: rgba(52, 199, 89, 0.25); }
 .pk-total { font-size: 12.5px; color: var(--ink-2); }
 .pk-total b { color: var(--ink-1); font-variant-numeric: tabular-nums; }
 .pk-list { max-height: 360px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }

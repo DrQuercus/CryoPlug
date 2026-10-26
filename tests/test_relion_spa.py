@@ -737,6 +737,7 @@ def test_inspect_picks_and_manual_picking(manager, spa):
     browser = _sections(manager, puid, pick, "picks")[0]  # auto-picking shows its picks, read-only
     assert not browser.get("waiting") and browser["diameter_px"] == 70.0
     info = json.loads((pdir / browser["data"]).read_text())
+    assert info["stride"] == 3 and not info.get("has_power") and info["pick_type"] == "particles"
     raw = np.frombuffer((pdir / info["binary"]).read_bytes(), dtype="<f4").reshape(-1, 3)
     assert len(raw) == info["n_picks"] == _outs(pick)["coordinates"]["meta"]["n_particles"]
     assert info["micrographs"][0]["shape"] == [384, 384] and info["has_fom"]
@@ -744,18 +745,25 @@ def test_inspect_picks_and_manual_picking(manager, spa):
     insp = _run(manager, puid, "relion_pick_inspect", {}, {"micrographs": mics, "coordinates": _ref(pick, "coordinates")},
                 status="waiting")
     tool = _sections(manager, puid, insp, "picks")[0]
-    assert tool["waiting"] and tool["editable"] and not tool["manual"] and tool["prompt"]
+    assert tool["waiting"] and tool["editable"] and not tool["manual"] and "power range" in tool["prompt"]
     info = json.loads((pdir / tool["data"]).read_text())
-    raw = np.frombuffer((pdir / info["binary"]).read_bytes(), dtype="<f4").reshape(-1, 3)
+    assert info["stride"] == 4 and info["has_power"] and info["power_range"][0] < info["power_range"][1]
+    raw = np.frombuffer((pdir / info["binary"]).read_bytes(), dtype="<f4").reshape(-1, 4)
+    assert np.isfinite(raw[:, 3]).all() and (raw[:, 3] >= 0).all()
     first, second = info["micrographs"][0], info["micrographs"][1]
     threshold = float(np.median(raw[:, 2]))
-    above = int((raw[:, 2] >= threshold).sum())
-    removed = [i for i in range(first["count"]) if raw[first["offset"] + i, 2] >= threshold][:2]
+    top_power = float(np.quantile(raw[:, 3], 0.8))  # the 20 % of highest power left out
+    kept = (raw[:, 2] >= threshold) & (raw[:, 3] <= top_power)
+    assert 0 < kept.sum() < (raw[:, 2] >= threshold).sum()
+    removed = [i for i in range(first["count"]) if kept[first["offset"] + i]][:2]
     edits = {first["name"]: {"removed": removed, "added": []},
              second["name"]: {"removed": [], "added": [[100.0, 120.0], [200.5, 50.0], [9999.0, 5.0]]}}  # the last is outside
-    done = manager.finish_interactive(puid, insp["uid"], json.dumps({"threshold": threshold, "edits": edits}))
+    done = manager.finish_interactive(puid, insp["uid"], json.dumps({"threshold": threshold, "power_range": [None, top_power],
+                                                                     "edits": edits}))
     out = _outs(done)["coordinates"]
-    assert done["status"] == "completed" and out["meta"]["n_particles"] == above - 2 + 2
+    assert done["status"] == "completed" and out["meta"]["n_particles"] == int(kept.sum()) - len(removed) + 2
+    rows = dict(next(s for s in _sections(manager, puid, done, "table") if s["title"] == "Picks kept")["rows"])
+    assert rows["Power range"].startswith("– to ")
     assert out["meta"]["picker"] == "inspected" and out["meta"]["relion"]["kind"] == "manualpick"
     pairs = dict(rl.coordinate_files(pdir / out["path"]))
     xy, fom = rl.read_coordinates(pdir / pairs[second["name"]])
@@ -784,6 +792,65 @@ def test_inspect_picks_and_manual_picking(manager, spa):
         manager.write_session(puid, man["uid"], "picks", {})
     with pytest.raises(Exception, match="Session names"):
         manager.read_session(puid, man["uid"], "../x")
+
+
+def test_local_power_of_the_picks(tmp_path):
+    """The power score is high on contamination (dark blob), low on empty ice."""
+    import mrcfile
+
+    from cryoplug.jobs.relion_picking import local_power
+    img = np.random.default_rng(3).normal(0, 1, (512, 512)).astype(np.float32)
+    yy, xx = np.indices(img.shape)
+    img[np.hypot(xx - 400, yy - 120) < 30] -= 12.0  # ice crystal / contamination
+    with mrcfile.new(tmp_path / "m.mrc") as m:
+        m.set_data(img)
+        m.voxel_size = 1.0
+    power = local_power(tmp_path / "m.mrc", np.array([[400.0, 120.0], [100.0, 400.0], [-50.0, 9999.0]]), 60, 1.0)
+    assert power[0] > 10 * power[1] and np.isfinite(power).all()
+
+
+def test_filament_picking_and_helical_extraction(manager, spa):
+    """Filaments clicked by their start and end are written as RELION's manual picking of helices writes them
+    ("startend" coordinates); the extraction refuses them without helical processing and cuts them into segments."""
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = _ref(ctf, "micrographs")
+    bad = manager.create_job(puid, "relion_pick_inspect", {"mode": "filaments"}, {"micrographs": mics})
+    with pytest.raises(Exception, match="tube diameter"):
+        manager.queue_job(puid, bad["uid"])
+    fil = _run(manager, puid, "relion_pick_inspect", {"mode": "filaments", "diameter": 60}, {"micrographs": mics},
+               status="waiting")
+    tool = _sections(manager, puid, fil, "picks")[0]
+    assert tool["mode"] == "filaments" and tool["title"] == "Filament picking" and "end of each filament" in tool["prompt"]
+    info = json.loads((pdir / tool["data"]).read_text())
+    a, b = info["micrographs"][0]["name"], info["micrographs"][1]["name"]
+    filaments = {a: [[50, 50, 330, 90], [60, 120, 70, 330], [10, 10, 10, 10]],  # the last has no length
+                 b: [[100, 100, 260, 300], [5, 5, 9999, 5]], "nowhere.mrc": [[1, 2, 3, 4]]}  # outside, unknown
+    manager.write_session(puid, fil["uid"], "picks", {"filaments": filaments})
+    done = manager.finish_interactive(puid, fil["uid"], "")
+    out = _outs(done)["coordinates"]
+    assert done["status"] == "completed" and out["label"] == "3 filaments"
+    assert out["meta"]["n_filaments"] == 3 and out["meta"]["pick_type"] == "startend" and out["meta"]["filament_length"] > 0
+    listing = pdir / out["path"]
+    assert rl.coordinate_pick_type(listing) == "startend" and "_rlnMicrographPickType" in listing.read_text()
+    pairs = dict(rl.coordinate_files(listing))
+    xy, _ = rl.read_coordinates(pdir / pairs[a])
+    assert xy.tolist() == [[50, 50], [330, 90], [60, 120], [70, 330]]
+    browser = _sections(manager, puid, done, "picks")[-1]
+    assert browser["mode"] == "filaments" and not browser.get("waiting")
+    assert any(s["title"] == "Length of the filaments" for s in _sections(manager, puid, done, "plot"))
+    coords = {"micrographs": mics, "coordinates": _ref(done, "coordinates")}
+    no = _run(manager, puid, "relion_extract", {"box": 64, "mpi": 1}, coords, ok=False)
+    assert no["status"] == "failed" and "Helical processing" in no["error"]
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "mpi": 1, "helical": True, "helical_rise": 4.75,
+                                                 "helical_outer_diameter": 60}, coords)
+    log = _command(manager, puid, ext)
+    assert "--helix" in log and "--helical_cut_into_segments" in log
+    table = dict(next(s for s in _sections(manager, puid, ext, "table") if s["title"] == "Extraction")["rows"])
+    assert table["Source"].startswith("3 filaments of")
+    parts = rl.particle_table(rl.read_star(pdir / _outs(ext)["particles"]["path"]))
+    assert len(parts) > 3 * 10 and set(parts.column("rlnHelicalTubeID")) == {"1", "2"}
+    assert float(parts.column("rlnAngleTiltPrior")[0]) == 90.0
 
 
 def test_micrograph_pictures_and_sessions_over_the_api(manager, spa):

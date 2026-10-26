@@ -35,7 +35,8 @@ selection jobs are interactive: a person drags the limits on the distributions o
 classes in the job panel. As an agent, read the CTF and motion statistics and the class table of the 2D job (particles
 and resolution per class), and use a `relion_curate` job with `mode=thresholds` and a `relion_select2d` job with
 `mode=list` instead, after showing the person your choice. `relion_pick_inspect` (picks shown on the micrographs,
-threshold, particles removed or added by hand, or manual picking) is for people only.
+figure-of-merit threshold and power-score range, particles removed or added by hand, manual picking, or
+`mode=filaments`: start and end of each tube clicked) is for people only.
 
 During a collection, `relion_live` runs steps 1–6 cycle after cycle on the movies that arrive (`movies` wildcard,
 `pixel_size`, `dose_per_frame`, `gain`, acceptance thresholds, optional `picking` and `extract`); it runs until
@@ -75,7 +76,8 @@ whose classes (`classes` output) go to `relion_select2d`.
 Also: `relion_optics_groups` (optics groups from EPU beam shifts, file names or acquisition order, before CTF
 refinement of AFIS data), `relion_topaz_denoise` (denoised micrographs for picking; extraction maps the picks back to
 the originals), and `helical=true` on autopick (templates), extraction, 2D/3D classification, auto-refine and mask
-creation for filaments (tube diameter, twist, rise, symmetry search).
+creation for filaments (tube diameter, twist, rise, symmetry search). Filaments picked by hand (start-end coordinates)
+need `helical=true` in `relion_extract`, which cuts them into segments one rise apart.
 
 ## Limits and pitfalls
 

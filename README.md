@@ -427,8 +427,9 @@ refinement** et **DynaMight** pour la suite. Le workflow *Movies to map (RELION 
 - **Outils interactifs** (le panneau du job s'élargit) : *Curate micrographs* attend avec un histogramme par mesure
   (ajustement CTF, défocus, astigmatisme, mouvement, glace…) dont on tire les limites, un nuage de points, le tableau
   de toutes les micrographies et chacune avec son ajustement CTF et sa dérive, acceptée ou rejetée au clavier (A / R) ;
-  *Inspect picks / manual picking* montre les particules sur les micrographies (seuil de figure de mérite sur son
-  histogramme, clic pour retirer ou ajouter, zoom, filtre passe-bas). Le travail en cours est enregistré sur le serveur.
+  *Inspect picks / manual picking* montre les particules sur les micrographies (seuil de figure de mérite et gamme de
+  power score sur leurs histogrammes, clic pour retirer ou ajouter, zoom, filtre passe-bas ; mode *Filaments* : début
+  et fin de chaque tube pour l'extraction hélicale). Le travail en cours est enregistré sur le serveur.
 - **Live preprocessing** traite les films pendant la collecte (import, mouvement, CTF, tri, picking, extraction des
   seuls nouveaux films à chaque cycle) avec un tableau de bord en direct ; *Stop after this cycle* donne les sorties.
 - **Diagnostics** à la CryoSPARC dans les raffinements et classifications : directions de vue (par classe aussi),

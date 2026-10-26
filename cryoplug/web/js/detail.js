@@ -552,7 +552,7 @@ function reportSection(sec, puid, job) {
   } else if (sec.kind === 'picks') {
     wrap.append(h('div', { class: 'box' }, pickInspector(sec, {
       puid, job,
-      finish: (payload) => act(api.finish(puid, job.uid, JSON.stringify(payload)), 'Picks saved'),
+      finish: (payload) => act(api.finish(puid, job.uid, JSON.stringify(payload)), payload.filaments ? 'Filaments saved' : 'Picks saved'),
       widen: () => widenFor(job),
       newInspection: job.status === 'completed' && (job.outputs || []).some((o) => o.type === 'coordinates') && job.inputs?.micrographs
         ? (threshold) => newPickInspection(job, threshold) : null,

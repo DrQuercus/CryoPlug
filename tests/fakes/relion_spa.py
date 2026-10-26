@@ -340,10 +340,28 @@ def preprocess(argv: list[str]) -> None:
     apix = rl.micrograph_pixel_size(mtables)
     picks: dict[str, list[dict]] = {}
     if "--coord_list" in a:
+        startend = rl.coordinate_pick_type(str(a["--coord_list"])) == "startend"
+        if startend and "--helix" not in a:
+            die("Start-end coordinates of filaments need --helix")
+        step = float(a.get("--helical_nr_asu", 1)) * float(a.get("--helical_rise", 0)) / apix
         for mic, coords in rl.coordinate_files(str(a["--coord_list"])):
             if mic not in mic_rows:
                 continue
             xy, fom = rl.read_coordinates(coords)
+            if startend and "--helical_cut_into_segments" in a:  # segments every nr_asu x rise along each tube
+                if step <= 0:
+                    die("--helical_rise must be positive to cut the tubes into segments")
+                for tube, k in enumerate(range(0, len(xy) - 1, 2), 1):
+                    (x1, y1), (x2, y2) = xy[k], xy[k + 1]
+                    length = float(np.hypot(x2 - x1, y2 - y1))
+                    psi = -np.degrees(np.arctan2(y2 - y1, x2 - x1))
+                    for t in np.arange(0.0, length + 1e-6, step):
+                        f = t / length if length else 0.0
+                        picks.setdefault(mic, []).append({
+                            "x": x1 + f * (x2 - x1), "y": y1 + f * (y2 - y1), "fom": 0.0,
+                            "helix": {"rlnHelicalTubeID": tube, "rlnAngleTiltPrior": 90.0, "rlnAnglePsiPrior": psi,
+                                      "rlnHelicalTrackLengthAngst": t * apix, "rlnAnglePsiFlipRatio": 0.5}})
+                continue
             for k, (x, y) in enumerate(xy):
                 picks.setdefault(mic, []).append({"x": x, "y": y, "fom": float(fom[k]) if fom is not None else 0.0})
     elif "--reextract_data_star" in a:
@@ -398,6 +416,7 @@ def preprocess(argv: list[str]) -> None:
                         "rlnImageName": f"{k:06d}@{name}", "rlnMicrographName": mic, "rlnOpticsGroup": 1})
             if "rec" not in pk:
                 row.update({"rlnClassNumber": 0, "rlnAutopickFigureOfMerit": pk["fom"], "rlnAnglePsi": -999.0})
+            row.update(pk.get("helix") or {})
             for lab in ("rlnCtfMaxResolution", "rlnCtfFigureOfMerit", "rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle"):
                 if lab in ctf:
                     row[lab] = ctf[lab]
