@@ -403,6 +403,270 @@ class RelionAutopick(RelionJob):
                        thumbnail=thumb)
 
 
+# ------------------------------------------------------------------ imports of picks and templates
+COORD_SUFFIXES = re.compile(r"(_(autopick|manualpick|coords?|picks?|particles|extract|cryolo|topaz))+$", re.I)
+
+
+def _star_picks(path: Path) -> dict[str, list[tuple[float, float, float]]]:
+    """Picks of a STAR file: a coordinate file of one micrograph (key: its file name), RELION's list of coordinate
+    files (autopick.star), or particles with their micrograph (rlnMicrographName)."""
+    tables = rl.read_star(path)
+    listing = tables.get("coordinate_files")
+    if listing is not None and listing.has("rlnMicrographCoordinates"):
+        out: dict[str, list[tuple[float, float, float]]] = {}
+        for mic, coords in zip(listing.column("rlnMicrographName"), listing.column("rlnMicrographCoordinates")):
+            for base in (path.parent, path.parent.parent, path.parent.parent.parent):
+                if (base / coords).is_file():
+                    xy, fom = rl.read_coordinates(base / coords)
+                    f = fom if fom is not None else np.zeros(len(xy))
+                    out[Path(mic).name] = [(float(x), float(y), float(s)) for (x, y), s in zip(xy, f)]
+                    break
+        return out
+    table = next((tb for tb in tables.values() if tb.loop and tb.has("rlnCoordinateX") and tb.has("rlnCoordinateY")), None)
+    if table is None:
+        return {}
+    xs, ys = table.floats("rlnCoordinateX"), table.floats("rlnCoordinateY")
+    fom = table.floats("rlnAutopickFigureOfMerit") if table.has("rlnAutopickFigureOfMerit") else np.zeros(len(xs))
+    if table.has("rlnMicrographName"):
+        out = {}
+        for mic, x, y, s in zip(table.column("rlnMicrographName"), xs, ys, fom):
+            out.setdefault(Path(mic).name, []).append((float(x), float(y), float(s)))
+        return out
+    return {path.name: [(float(x), float(y), float(s)) for x, y, s in zip(xs, ys, fom)]}
+
+
+def _box_picks(path: Path) -> dict[str, list[tuple[float, float, float]]]:
+    """EMAN / crYOLO .box: x y (corner of the box) width height [score] per line; the centre is kept."""
+    picks = []
+    for line in path.read_text().splitlines():
+        parts = line.replace(",", " ").split()
+        if len(parts) < 4:
+            continue
+        try:
+            x, y, w, hgt = (float(v) for v in parts[:4])
+        except ValueError:
+            continue
+        score = float(parts[4]) if len(parts) > 4 and parts[4].replace(".", "", 1).replace("-", "", 1).isdigit() else 0.0
+        picks.append((x + w / 2, y + hgt / 2, score))
+    return {path.name: picks}
+
+
+def _topaz_picks(path: Path) -> dict[str, list[tuple[float, float, float]]]:
+    """Topaz extract: image_name x_coord y_coord score (tab-separated, a header line)."""
+    out: dict[str, list[tuple[float, float, float]]] = {}
+    lines = [ln.split() for ln in path.read_text().splitlines() if ln.strip()]
+    if not lines:
+        return out
+    head = [h.lower() for h in lines[0]]
+    start = 1 if "x_coord" in head else 0
+    ix, iy = (head.index("x_coord"), head.index("y_coord")) if start else (1, 2)
+    iname = head.index("image_name") if start and "image_name" in head else 0
+    iscore = head.index("score") if start and "score" in head else 3
+    for parts in lines[start:]:
+        try:
+            score = float(parts[iscore]) if len(parts) > iscore else 0.0
+            out.setdefault(parts[iname], []).append((float(parts[ix]), float(parts[iy]), score))
+        except (ValueError, IndexError):
+            continue
+    return out
+
+
+def _cs_picks(path: Path) -> dict[str, list[tuple[float, float, float]]]:
+    """CryoSPARC picks (.cs): fractional centres on each micrograph, its shape (rows, columns)."""
+    from cryoplug.particles import read_cs
+    data = read_cs(path)
+    names = data.dtype.names or ()
+    need = ("location/micrograph_path", "location/center_x_frac", "location/center_y_frac", "location/micrograph_shape")
+    if not all(n in names for n in need):
+        raise JobError(f"{path.name} has no pick locations (location/center_x_frac, ...): export the picks of a picking job")
+    score_field = next((f for f in ("pick_stats/ncc_score", "pick_stats/power", "location/score") if f in names), None)
+    out: dict[str, list[tuple[float, float, float]]] = {}
+    for i in range(len(data)):
+        mic = data["location/micrograph_path"][i]
+        mic = mic.decode() if isinstance(mic, bytes) else str(mic)
+        rows, cols = (int(v) for v in data["location/micrograph_shape"][i])
+        score = float(data[score_field][i]) if score_field else 0.0
+        out.setdefault(Path(mic).name, []).append((float(data["location/center_x_frac"][i]) * cols,
+                                                   float(data["location/center_y_frac"][i]) * rows, score))
+    return out
+
+
+def given_files(value: str) -> list[Path]:
+    """The files of a parameter of paths or wildcards separated by ';', in the order given (each wildcard sorted)."""
+    import glob as globmod
+    from cryoplug.jobs.base import split_paths
+    found = []
+    for pattern in split_paths(value):
+        pattern = str(Path(pattern).expanduser())
+        found += sorted(globmod.glob(pattern)) or [pattern]
+    return [Path(f) for f in dict.fromkeys(found)]
+
+
+def read_pick_files(paths: list[Path], fmt: str = "auto") -> dict[str, list[tuple[float, float, float]]]:
+    """Picks of coordinate files of other programs, by the name of the file or micrograph they belong to."""
+    picks: dict[str, list[tuple[float, float, float]]] = {}
+    for path in paths:
+        kind = fmt if fmt != "auto" else {".star": "star", ".box": "box", ".cs": "cs"}.get(path.suffix.lower(), "topaz")
+        reader = {"star": _star_picks, "box": _box_picks, "topaz": _topaz_picks, "cs": _cs_picks}[kind]
+        for key, values in reader(path).items():
+            picks.setdefault(key, []).extend(values)
+    return picks
+
+
+def match_micrographs(keys: list[str], mic_names: list[str]) -> dict[str, str]:
+    """Coordinate files (or micrograph names) matched to the micrographs of the project by file name: the same stem,
+    or the stem followed by a picking suffix (mic_001_autopick.star, mic_001.box)."""
+    stems = {Path(m).name.rsplit(".", 1)[0]: m for m in mic_names}
+    ordered = sorted(stems, key=len, reverse=True)
+    found: dict[str, str] = {}
+    for key in keys:
+        stem = Path(key).name
+        stem = stem.rsplit(".", 1)[0] if "." in stem else stem
+        stem = COORD_SUFFIXES.sub("", stem)
+        if stem in stems:
+            found[key] = stems[stem]
+            continue
+        hit = next((s for s in ordered if stem.startswith(s) or (s.endswith(stem) and len(stem) >= 4)), None)
+        if hit:
+            found[key] = stems[hit]
+    return found
+
+
+@register
+class ImportCoordinates(JobType):
+    name = "import_coordinates"
+    title = "Import particle coordinates"
+    category = "Import"
+    software = ["CryoPlug"]
+    description = ("Particle positions picked by another program, matched to the micrographs of the project by file name, "
+                   "as RELION's import of coordinates: RELION or crYOLO STAR files (one per micrograph, an autopick.star "
+                   "list or a particle file), EMAN or crYOLO .box files, Topaz picks (.txt) or CryoSPARC picks (.cs). "
+                   "They feed the extraction, the inspection of picks or Topaz training.")
+    inputs = [Slot("micrographs", ("micrographs",), "Micrographs", help="Those the particles were picked on (matched by name).")]
+    params = [
+        Param("path", "path", "", label="Coordinate files", required=True, path_kind="files",
+              placeholder="/data/picks/*.star  (or *.box, picks.txt, picked_particles.cs)",
+              help="Files or wildcards, separated by ';'."),
+        Param("format", "choice", "auto", choices=["auto", "star", "box", "topaz", "cs"], label="Format",
+              labels={"auto": "From the extension", "star": "STAR (RELION, crYOLO)", "box": "BOX (EMAN, crYOLO)",
+                      "topaz": "Topaz (.txt)", "cs": "CryoSPARC (.cs)"}),
+        Param("scale", "float", 1.0, label="Coordinate scale", min=0.001, max=1000,
+              help="Multiplies the coordinates: e.g. 4 for picks made on micrographs binned 4 times."),
+        Param("diameter", "float", 0.0, label="Particle diameter", unit="Å", min=0,
+              help="Only for the circles on the pictures (0: none)."),
+        Param("flip_y", "bool", False, label="Count y from the other edge", advanced=True,
+              help="For coordinates whose y axis starts at the opposite edge of the micrograph."),
+    ]
+    outputs = [OutputDef("coordinates", "coordinates", "Imported coordinates")]
+
+    def run(self, ctx: JobContext) -> None:
+        p = ctx.params
+        mics_in = ctx.require("micrographs")
+        star, _ = star_of(ctx, mics_in)
+        mic_names = rl.micrograph_table(rl.read_star(star)).column("rlnMicrographName")
+        files = [f for f in given_files(p["path"]) if f.is_file()]
+        if not files:
+            raise JobError(f"No coordinate file found for {p['path']}")
+        ctx.progress(0.1, f"Reading {len(files):,} coordinate file{'s' if len(files) > 1 else ''}")
+        picks = read_pick_files(files, p["format"])
+        matched = match_micrographs(list(picks), mic_names)
+        unmatched = [k for k in picks if k not in matched]
+        if not matched:
+            raise JobError(f"No coordinate file matches a micrograph by name (e.g. {', '.join(list(picks)[:3])} against "
+                           f"{', '.join(Path(m).name for m in mic_names[:3])})")
+        out_dir = ctx.path("Coordinates")
+        out_dir.mkdir(exist_ok=True)
+        merged: dict[str, list[tuple[float, float, float]]] = {}
+        for key, mic in matched.items():
+            merged.setdefault(mic, []).extend(picks[key])
+        pairs, total = [], 0
+        scale = float(p["scale"])
+        for mic in mic_names:
+            values = merged.get(mic)
+            if not values:
+                continue
+            arr = np.array(values, dtype=np.float64)
+            xy = arr[:, :2] * scale
+            if p["flip_y"]:
+                from cryoplug.mrc import MapVolume
+                xy[:, 1] = MapVolume.read(ctx.abs(mic), header_only=True).shape_xyz[1] - xy[:, 1]
+            name = out_dir / (re.sub(r"\.[A-Za-z0-9]+$", "", Path(rl.pipeline_post(mic)).name) + "_coords.star")
+            rl.write_coordinates(name, xy, arr[:, 2])
+            pairs.append((mic, ctx.rel(name)))
+            total += len(xy)
+        listing = rl.write_coordinate_list(ctx.path("coords.star"), pairs)
+        if unmatched:
+            ctx.warn(f"{len(unmatched)} coordinate set(s) match no micrograph: {', '.join(unmatched[:5])}"
+                     + (" ..." if len(unmatched) > 5 else ""))
+        ctx.add_table("Import", ["", "Value"], [["Files read", f"{len(files):,}"], ["Micrographs with picks", f"{len(pairs):,} of {len(mic_names):,}"],
+                                               ["Not matched", f"{len(unmatched):,}"], ["Scale", f"{scale:g}"]])
+        meta = pick_report(ctx, listing, star, float(p["diameter"] or 0), "imported")
+        thumb = meta.pop("_thumbnail")
+        ctx.add_output("coordinates", "coordinates", listing, f"{total:,} imported picks", meta=meta, thumbnail=thumb)
+
+
+@register
+class ImportTemplates(JobType):
+    name = "import_templates"
+    title = "Import 2D templates"
+    category = "Import"
+    software = ["CryoPlug"]
+    description = ("2D images to pick particles by template matching (Auto-picking, Templates), as CryoSPARC's Import "
+                   "Templates: class averages from another program or project, projections, drawn shapes; a stack "
+                   "(.mrcs) or single images (.mrc).")
+    inputs: list[Slot] = []
+    params = [
+        Param("path", "path", "", label="Templates", required=True, path_kind="files",
+              placeholder="/data/templates.mrcs  or  /data/refs/*.mrc", help="Files or wildcards, separated by ';'."),
+        Param("pixel_size", "float", 0.0, label="Pixel size", unit="Å", min=0.0, max=50,
+              help="0 = from the header of the first file."),
+        Param("invert", "bool", False, label="Invert the contrast",
+              help="RELION's templates have white particles on a dark background (like class averages)."),
+    ]
+    outputs = [OutputDef("classes", "class_averages", "2D templates")]
+
+    def run(self, ctx: JobContext) -> None:
+        import mrcfile
+        from cryoplug.imaging import write_png
+        from cryoplug.micrographs import tile_sheet
+        p = ctx.params
+        files = [f for f in given_files(p["path"]) if f.is_file()]
+        if not files:
+            raise JobError(f"No template file found for {p['path']}")
+        images, apix = [], float(p["pixel_size"] or 0)
+        for f in files:
+            with mrcfile.open(str(f), permissive=True) as mrc:
+                data = np.asarray(mrc.data, dtype=np.float32)
+                if not apix:
+                    apix = float(mrc.voxel_size.x) or 0.0
+            images.extend(data if data.ndim == 3 else [data])
+        shapes = {im.shape for im in images}
+        if len(shapes) != 1:
+            raise JobError(f"The templates have different sizes: {', '.join('x'.join(map(str, s)) for s in sorted(shapes))}")
+        box = images[0].shape
+        if box[0] != box[1]:
+            raise JobError(f"Templates must be square ({box[1]} x {box[0]})")
+        if apix <= 0:
+            raise JobError("The pixel size is unknown (header 0): set it")
+        stack = np.stack(images)
+        if p["invert"]:
+            stack = -stack
+        out = ctx.path("templates.mrcs")
+        with mrcfile.new(str(out), overwrite=True) as mrc:
+            mrc.set_data(stack.astype(np.float32))
+            mrc.voxel_size = apix
+        tiles = []
+        for im in stack[:24]:
+            lo, hi = np.percentile(im, [1, 99.5])
+            tiles.append((np.clip((im - lo) / ((hi - lo) or 1.0), 0, 1) * 255).astype(np.uint8))
+        png = write_png(ctx.path("templates.png"), tile_sheet(tiles, per_row=8))
+        ctx.add_image(f"Templates ({len(stack)})", png)
+        ctx.add_highlight("Templates", str(len(stack)))
+        ctx.add_output("classes", "class_averages", out, f"{len(stack)} templates",
+                       meta={"pixel_size": round(apix, 4), "box": int(box[0]), "n_classes": len(stack), "templates": True},
+                       thumbnail=png)
+
+
 # ------------------------------------------------------------------ inspection and manual picking
 @register
 class RelionPickInspect(JobType):

@@ -257,6 +257,25 @@ def cmd_status(args: argparse.Namespace) -> None:
         print("  (no active jobs)")
 
 
+def cmd_project(args: argparse.Namespace) -> None:
+    """Projects of this CryoPlug: list them, attach a project folder, detach a project (its folder kept)."""
+    from cryoplug.manager import Manager, ManagerError
+    manager = Manager(load_config(args.config))
+    try:
+        if args.action == "attach":
+            proj = manager.attach_project(args.target, owner=args.owner or "")
+            print(f"Attached {proj['dir']} as {proj['uid']} \"{proj['title']}\" ({len(manager.db.list_jobs(proj['uid']))} jobs)"
+                  + (f"; skipped {', '.join(proj['skipped'])}" if proj["skipped"] else ""))
+        elif args.action == "detach":
+            done = manager.detach_project(args.target)
+            print(f"Detached {done['detached']}: its folder {done['dir']} can be attached again")
+        else:
+            for proj in manager.db.list_projects(include_archived=True):
+                print(f"{proj['uid']:<5} {proj['num_jobs']:>4} jobs  {proj['title']}  ({proj['dir']})")
+    except ManagerError as exc:
+        raise SystemExit(f"Error: {exc}") from None
+
+
 def cmd_jobtypes(args: argparse.Namespace) -> None:
     from cryoplug.jobs import all_job_types
 
@@ -561,6 +580,12 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("status", help="Show lanes and active jobs")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("project", help="List the projects, attach a project folder, detach a project (folder kept)")
+    p.add_argument("action", choices=["list", "attach", "detach"])
+    p.add_argument("target", nargs="?", default="", help="attach: the project folder; detach: the project (P3)")
+    p.add_argument("--owner", default="", help="attach: the account that owns the project (with user accounts)")
+    p.set_defaults(func=cmd_project)
 
     p = sub.add_parser("jobtypes", help="List available job types")
     p.set_defaults(func=cmd_jobtypes)

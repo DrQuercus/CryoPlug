@@ -85,6 +85,7 @@ export const api = {
   project: (p) => request('GET', `/api/projects/${p}`),
   updateProject: (p, body) => request('PATCH', `/api/projects/${p}`, body),
   deleteProject: (p, files) => request('DELETE', `/api/projects/${p}?delete_files=${!!files}`),
+  attachProject: (path) => request('POST', '/api/projects/attach', { path }),
 
   jobs: (p) => request('GET', `/api/projects/${p}/jobs`),
   createJob: (p, body) => request('POST', `/api/projects/${p}/jobs`, inWorkspace(body)),

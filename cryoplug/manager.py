@@ -16,7 +16,7 @@ from typing import Any, BinaryIO
 from cryoplug import __version__
 from cryoplug import tools as toolmod
 from cryoplug.config import SLURM_MEM_RE, SLURM_TIME_RE, Config, LaneConfig
-from cryoplug.db import Database
+from cryoplug.db import JOB_COLUMNS, Database
 from cryoplug.jobs import get_job_type
 from cryoplug.jobs.base import ACTIVE_STATUSES, JobContext, JobError, folder_size, split_paths
 from cryoplug.lanes import make_lane
@@ -265,6 +265,7 @@ class Manager:
         self.project(uid)
         allowed = {k: v for k, v in fields.items() if k in ("title", "description", "archived", "owner", "members")}
         self.db.update_project(uid, **allowed)
+        self._snapshot_project(uid)
         return self.project(uid)
 
     def delete_project(self, uid: str, delete_files: bool = False) -> None:
@@ -274,6 +275,135 @@ class Manager:
         self.db.delete_project(uid)
         if delete_files:
             shutil.rmtree(proj["dir"], ignore_errors=True)
+
+    # ================================================= project folders
+    # Every job folder keeps a copy of the job's record (cryoplug_job.json) and the project folder its description and
+    # workspaces (cryoplug_project.json): a folder detached from one CryoPlug can be attached to another (or after the
+    # database is lost), as CryoSPARC's detach / attach.
+    VOLATILE = ("pid", "cluster_job_id", "gpus")
+
+    def _snapshot_job(self, puid: str, juid: str) -> None:
+        job = self.db.get_job(puid, juid)
+        jdir = self.job_dir(puid, juid)
+        if not job or not jdir.is_dir():
+            return
+        record = {k: v for k, v in job.items() if k in JOB_COLUMNS and k not in ("project_uid", *self.VOLATILE)}
+        try:
+            tmp = jdir / ".cryoplug_job.json.tmp"
+            tmp.write_text(json.dumps(record, indent=1, default=str))
+            os.replace(tmp, jdir / "cryoplug_job.json")
+        except OSError:  # a read-only or full disc must not stop the work
+            pass
+
+    def _snapshot_project(self, puid: str) -> None:
+        proj = self.db.get_project(puid)
+        if not proj:
+            return
+        info = {"uid": proj["uid"], "title": proj["title"], "description": proj["description"], "owner": proj.get("owner", ""),
+                "members": proj.get("members", []), "created_at": proj["created_at"],
+                "workspaces": [{k: w[k] for k in ("uid", "num", "title", "description", "created_at", "created_by")}
+                               for w in self.db.list_workspaces(puid)]}
+        try:
+            (Path(proj["dir"]) / "cryoplug_project.json").write_text(json.dumps(info, indent=1))
+        except OSError:
+            pass
+
+    def detach_project(self, puid: str) -> dict[str, Any]:
+        """The project removed from this CryoPlug, its folder kept with everything needed to attach it elsewhere."""
+        proj = self.project(puid)
+        if self.db.list_jobs(puid, statuses=[*ACTIVE_STATUSES, "waiting"]):
+            raise ManagerError("Stop the running, queued or waiting jobs of this project first")
+        for job in self.db.list_jobs(puid):
+            self._snapshot_job(puid, job["uid"])
+        self._snapshot_project(puid)
+        self.db.delete_project(puid)
+        return {"detached": puid, "dir": proj["dir"]}
+
+    @staticmethod
+    def _job_record_from_folder(jdir: Path) -> dict[str, Any] | None:
+        """A job's record from its folder: its copy (cryoplug_job.json), else what the worker left (job.json,
+        state.json) for a folder written before the copies were kept."""
+        for name in ("cryoplug_job.json",):
+            if (jdir / name).is_file():
+                try:
+                    return json.loads((jdir / name).read_text())
+                except (OSError, ValueError):
+                    break
+        try:
+            spec = json.loads((jdir / "job.json").read_text())
+        except (OSError, ValueError):
+            return None
+        try:
+            state = json.loads((jdir / "state.json").read_text())
+        except (OSError, ValueError):
+            state = {}
+        inputs = {}
+        for slot, inp in (spec.get("inputs") or {}).items():
+            job, _dot, output = str((inp or {}).get("source") or "").partition(".")
+            if job and output:
+                inputs[slot] = {"job": job, "output": output}
+        return {"uid": spec.get("uid") or jdir.name, "num": int(jdir.name[1:]), "type": spec.get("type"),
+                "title": spec.get("title") or spec.get("type"), "params": spec.get("params") or {}, "inputs": inputs,
+                "status": state.get("status") or "failed", "outputs": state.get("outputs") or [],
+                "highlights": state.get("highlights") or [], "message": state.get("message") or "",
+                "error": state.get("error") or "", "progress": state.get("progress") or 0.0,
+                "started_at": state.get("started_at"), "ended_at": state.get("ended_at"),
+                "created_at": (jdir / "job.json").stat().st_mtime, "resources": spec.get("resources") or {}}
+
+    def attach_project(self, path: str, owner: str = "", roots: list[Path] | None = None) -> dict[str, Any]:
+        """A CryoPlug project folder (detached from another CryoPlug, moved, or whose database was lost) added with its
+        jobs, workspaces, notes and tags; the job numbers are kept (they are the folder names)."""
+        from cryoplug.jobs import REGISTRY, _load
+        _load()
+        pdir = Path(str(path or "")).expanduser()
+        if not pdir.is_dir():
+            raise ManagerError(f"No folder {pdir}")
+        pdir = pdir.resolve()
+        if not path_allowed(pdir, roots):
+            raise ManagerError(f"{pdir} is outside your folders")
+        info_path = pdir / "cryoplug_project.json"
+        if not info_path.is_file():
+            raise ManagerError(f"{pdir} is not a CryoPlug project folder (no cryoplug_project.json)")
+        for other in self.db.list_projects(include_archived=True):
+            if Path(other["dir"]).resolve() == pdir:
+                raise ManagerError(f"This folder is already the project {other['uid']}")
+        try:
+            info = json.loads(info_path.read_text())
+        except (OSError, ValueError) as exc:
+            raise ManagerError(f"Cannot read {info_path.name}: {exc}") from None
+        with self.lock:
+            proj = self.db.create_project(info.get("title") or pdir.name, info.get("description") or "", str(pdir),
+                                          owner or info.get("owner") or "")
+            puid = proj["uid"]
+            if info.get("members"):
+                self.db.update_project(puid, members=[m for m in info["members"] if m != (owner or info.get("owner"))])
+            known_ws = set()
+            for ws in info.get("workspaces") or []:
+                if ws.get("uid"):
+                    self.db.insert_workspace(puid, ws)
+                    known_ws.add(ws["uid"])
+            top, skipped = 0, []
+            folders = sorted((d for d in pdir.iterdir() if d.is_dir() and re.fullmatch(r"J\d+", d.name)), key=lambda d: int(d.name[1:]))
+            for jdir in folders:
+                rec = self._job_record_from_folder(jdir)
+                if not rec or rec.get("type") not in REGISTRY:
+                    skipped.append(jdir.name)
+                    continue
+                rec["uid"], rec["num"] = jdir.name, int(jdir.name[1:])
+                if rec.get("status") in (*ACTIVE_STATUSES, "waiting"):
+                    rec.update(status="killed", message="Interrupted (the project was moved)", ended_at=rec.get("ended_at") or time.time())
+                if rec.get("lane") not in self.lanes:
+                    rec["lane"] = None
+                rec["workspaces"] = [w for w in rec.get("workspaces") or [] if w in known_ws]
+                self.db.insert_job(puid, rec)
+                top = max(top, rec["num"])
+            self.db.update_project(puid, job_counter=top)
+        for job in self.db.list_jobs(puid):
+            self._snapshot_job(puid, job["uid"])
+        self._snapshot_project(puid)
+        result = self.project(puid)
+        result["skipped"] = skipped
+        return result
 
     # ========================================================== workspaces
     # As in CryoSPARC: named groups of the jobs of a project (one stage, one question); a job can be in several.
@@ -300,6 +430,7 @@ class Manager:
         ws = self.db.create_workspace(puid, title, (description or "").strip(), created_by)
         if jobs:
             self.workspace_jobs(puid, ws["uid"], add=jobs)
+        self._snapshot_project(puid)
         return self.workspace(puid, ws["uid"])
 
     def update_workspace(self, puid: str, wuid: str, **fields: Any) -> dict[str, Any]:
@@ -312,13 +443,18 @@ class Manager:
         if fields.get("description") is not None:
             changes["description"] = str(fields["description"]).strip()
         self.db.update_workspace(puid, wuid, **changes)
+        self._snapshot_project(puid)
         return self.workspace(puid, wuid)
 
     def delete_workspace(self, puid: str, wuid: str) -> None:
         """The workspace goes; its jobs stay in the project."""
         self.workspace(puid, wuid)
         with self.lock:
+            members = [j["uid"] for j in self.db.list_jobs(puid) if wuid in j["workspaces"]]
             self.db.delete_workspace(puid, wuid)
+            for juid in members:
+                self._snapshot_job(puid, juid)
+        self._snapshot_project(puid)
 
     def workspace_jobs(self, puid: str, wuid: str, add: list[str] | None = None, remove: list[str] | None = None) -> dict[str, Any]:
         """Jobs put in (``add``) or taken out of (``remove``) a workspace."""
@@ -331,6 +467,7 @@ class Manager:
                     ws.append(wuid)
                 if ws != job["workspaces"]:
                     self.db.update_job(puid, juid, workspaces=self._clean_workspaces(puid, ws))
+                    self._snapshot_job(puid, juid)
         return self.workspace(puid, wuid)
 
     def _clean_workspaces(self, puid: str, values: list[str] | None) -> list[str]:
@@ -443,6 +580,7 @@ class Manager:
             self.db.update_job(puid, job["uid"], **{k: v for k, v in extra.items() if v})
         jdir = self.job_dir(puid, job["uid"])
         jdir.mkdir(parents=True, exist_ok=True)
+        self._snapshot_job(puid, job["uid"])
         return self.job(puid, job["uid"])
 
     def update_job(self, puid: str, juid: str, roots: list[Path] | None = None, **fields: Any) -> dict[str, Any]:
@@ -489,6 +627,7 @@ class Manager:
                 updates["resources"] = self.job_resources(jt, params, chosen)
             if updates:
                 self.db.update_job(puid, juid, **updates)
+                self._snapshot_job(puid, juid)
             return self.job(puid, juid)
 
     def _lane_cfg(self, name: str | None):
@@ -540,6 +679,7 @@ class Manager:
                 return self.job(puid, juid)
             if job["status"] == "waiting":
                 self.db.update_job(puid, juid, status="killed", ended_at=time.time(), message="Session cancelled")
+                self._snapshot_job(puid, juid)
                 return self.job(puid, juid)
             if job["status"] not in ("launched", "running"):
                 raise ManagerError(f"Job is not running (status: {job['status']})")
@@ -547,6 +687,7 @@ class Manager:
             if lane:
                 lane.kill(job)
             self.db.update_job(puid, juid, status="killed", ended_at=time.time(), message="Killed by user", gpus=[])
+            self._snapshot_job(puid, juid)
             return self.job(puid, juid)
 
     CONTROL_MESSAGES = {"stop": "Stopping after the current cycle", "pause": "Paused (the movies wait)",
@@ -637,6 +778,7 @@ class Manager:
             ctx.log(f"Job marked as complete ({used})")
             self.sync_job_state(job)
             self.db.update_job(puid, juid, status="completed", error="")  # a killed job too
+            self._snapshot_job(puid, juid)
             return self.job(puid, juid)
 
     def clear_job(self, puid: str, juid: str) -> dict[str, Any]:
@@ -650,6 +792,7 @@ class Manager:
             self.db.update_job(puid, juid, status="building", outputs=[], highlights=[], progress=0.0, message="",
                                error="", pid=None, cluster_job_id=None, gpus=[], queued_at=None, started_at=None,
                                ended_at=None, disk_bytes=folder_size(jdir) if jdir.exists() else 0)
+            self._snapshot_job(puid, juid)
             return self.job(puid, juid)
 
     def clear_intermediate(self, puid: str, juid: str) -> dict[str, Any]:
@@ -683,6 +826,7 @@ class Manager:
                     continue
             size = folder_size(jdir)
             self.db.update_job(puid, juid, disk_bytes=size)
+            self._snapshot_job(puid, juid)
         if doomed:
             JobContext({"uid": juid, "project_uid": puid}, jdir).log(
                 f"Intermediate results cleared: {len(doomed)} files of the iterations before {last} ({freed / 1e9:.2f} GB)")
@@ -936,6 +1080,8 @@ class Manager:
         if job["status"] == "killed":  # do not resurrect a job the user killed
             updates.pop("status", None)
         self.db.update_job(job["project_uid"], job["uid"], **updates)
+        if status in ("completed", "failed", "killed", "waiting"):
+            self._snapshot_job(job["project_uid"], job["uid"])
         return state
 
     # ============================================================ interactive

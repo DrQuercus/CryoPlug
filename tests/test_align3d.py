@@ -250,3 +250,47 @@ def test_average_power_spectra_in_the_class_frame(manager):
     assert plain[:, c - 1:c + 2].sum() / plain.sum() < on_axis / 2
     assert _run(manager, puid, "average_power_spectra", {"classes": "4"}, {"particles": {"job": parts["uid"], "output": "particles"}},
                 ok=False)["status"] == "failed"
+
+
+def test_recentre_on_a_region(manager):
+    """A blob away from the centre moved to the centre of the box, the particle shifts changed the same way."""
+    p = manager.create_project("Recentre")
+    puid = p["uid"]
+    pdir = manager.project_dir(puid)
+    d, apix = 32, 2.0
+    zz, yy, xx = np.indices((d, d, d)) - d // 2
+    vol = (np.exp(-((xx - 6) ** 2 + (yy + 4) ** 2 + (zz - 3) ** 2) / 8.0) + 0.6 * np.exp(-(xx ** 2 + yy ** 2 + zz ** 2) / 18.0)).astype(np.float32)
+    mask = (((xx - 6) ** 2 + (yy + 4) ** 2 + (zz - 3) ** 2) < 16).astype(np.float32)
+    MapVolume(data=vol, voxel=np.full(3, apix)).write(pdir / "map.mrc")
+    MapVolume(data=mask, voxel=np.full(3, apix)).write(pdir / "mask.mrc")
+    rng = np.random.default_rng(2)
+    n = 8
+    rot, trans = ps.uniform_rotations(n), rng.normal(0, 0.02, (n, 2))
+    with mrcfile.new(str(pdir / "p.mrcs"), overwrite=True) as mrc:
+        mrc.set_data(np.zeros((n, d, d), np.float32))
+    _particles_star(pdir / "p.star", "p.mrcs", ps.matrix_to_relion(rot), trans * d * apix, apix, d)
+    imp = _run(manager, puid, "import_maps", {"map": str(pdir / "map.mrc"), "mask": str(pdir / "mask.mrc"), "compute_fsc": False})
+    parts = _run(manager, puid, "import_particles", {"path": str(pdir / "p.star")})
+    mask_out = next(k for k, o in _outs(imp).items() if o["type"] == "mask")
+    job = _run(manager, puid, "recentre_particles", {"centre": "mask"},
+               {"map": {"job": imp["uid"], "output": "map"}, "mask": {"job": imp["uid"], "output": mask_out},
+                "particles": {"job": parts["uid"], "output": "particles"}})
+    out = _outs(job)
+    moved_mask = MapVolume.read(pdir / out["mask"]["path"]).data
+    from cryoplug.jobs.align3d import centre_of_mass
+    assert np.abs(centre_of_mass(moved_mask) - d // 2).max() < 0.3  # the region now at the centre
+    moved = MapVolume.read(pdir / out["map"]["path"]).data
+    star = pdir / out["particles"]["path"]
+    euler = np.array([[float(v) for v in pt.star_column(star, c)] for c in ("_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi")]).T
+    origin = np.array([[float(v) for v in pt.star_column(star, c)] for c in ("_rlnOriginXAngst", "_rlnOriginYAngst")]).T
+    rot2, trans2 = ps.relion_to_matrix(euler), origin / apix / d
+    assert np.max(ps.rotation_angle(np.einsum("nji,njk->nik", rot2, rot))) < 0.01  # orientations unchanged
+    r = np.sqrt(xx ** 2 + yy ** 2 + zz ** 2)
+    for i in range(3):  # the same images from the moved map with the new shifts (inside the box)
+        a, b = _project(vol * (r < 12), rot[i], trans[i] * d), _project(moved * (r < 12), rot2[i], trans2[i] * d)
+        assert np.corrcoef(a.ravel(), b.ravel())[0, 1] > 0.9
+    point = _run(manager, puid, "recentre_particles", {"centre": "point", "point": "22, 12, 19"}, {"map": {"job": imp["uid"], "output": "map"}})
+    assert {h["label"]: h["value"] for h in point["highlights"]}["Shift"] == f"{np.sqrt(36 + 16 + 9) * apix:.1f} Å"
+    bad = manager.create_job(puid, "recentre_particles", {"centre": "mask"}, {"map": {"job": imp["uid"], "output": "map"}})
+    with pytest.raises(Exception, match="Connect the mask"):
+        manager.queue_job(puid, bad["uid"])

@@ -189,3 +189,93 @@ class Align3DMaps(JobType):
         if result["mirror"]:
             ctx.add_highlight("Mirror", "yes", "warn")
         ctx.save_report()
+
+
+def centre_of_mass(data: np.ndarray, threshold: float | None = None) -> np.ndarray:
+    """Centre of mass (x, y, z in voxels, from the corner) of the positive density above ``threshold``."""
+    w = np.asarray(data, dtype=np.float64)
+    w = np.where(w > (threshold if threshold is not None else 0.0), w, 0.0)
+    total = w.sum()
+    if total <= 0:
+        raise JobError("Nothing above the threshold to take the centre of")
+    zz, yy, xx = np.indices(w.shape)
+    return np.array([(w * xx).sum(), (w * yy).sum(), (w * zz).sum()]) / total
+
+
+@register
+class RecentreParticles(JobType):
+    name = "recentre_particles"
+    title = "Re-centre on a region"
+    category = "Utilities"
+    software = ["CryoPlug"]
+    description = ("Moves a region of a map to the centre of the box, with the shifts of its particles changed the same "
+                   "way, as CryoSPARC's Volume Alignment Tools: the centre of mass of a mask (a domain, a subunit), of "
+                   "the map, or a given point. Re-extracting the particles then centres them on that region, for a "
+                   "focused refinement or classification in a smaller box.")
+    inputs = [
+        Slot("map", ("map",), "Map", prefer=("map",)),
+        Slot("mask", ("mask",), "Mask of the region", required=False, help="Its centre of mass goes to the centre of the box."),
+        Slot("particles", ("particles",), "Particles of the map", required=False,
+             help="Those of the refinement of the map: their shifts are changed so that re-extraction centres the region."),
+    ]
+    params = [
+        Param("centre", "choice", "mask", choices=["mask", "map", "point"], label="New centre",
+              labels={"mask": "Centre of mass of the mask", "map": "Centre of mass of the map", "point": "A point (voxels)"}),
+        Param("point", "str", "", label="Point", placeholder="x, y, z in voxels of the map", show_if="centre=point",
+              help="E.g. read in the 3D viewer (voxel coordinates, from the corner of the box)."),
+        Param("threshold", "float", 0.0, label="Map threshold", show_if="centre=map",
+              help="Only the density above it counts for the centre of mass (0: positive density)."),
+    ]
+    outputs = [OutputDef("map", "map", "Re-centred map"), OutputDef("mask", "mask", "Re-centred mask"),
+               OutputDef("particles", "particles", "Particles with re-centred shifts")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        if params.get("centre") == "mask" and "mask" not in connected:
+            return ["Connect the mask of the region (or choose another centre)"]
+        if params.get("centre") == "point":
+            parts = str(params.get("point") or "").replace(",", " ").split()
+            if len(parts) != 3:
+                return ["Give the point as x, y, z (voxels)"]
+        return []
+
+    def run(self, ctx: JobContext) -> None:
+        p = ctx.params
+        map_in = ctx.require("map")
+        vol = MapVolume.read(map_in.path)
+        if len(set(vol.data.shape)) != 1:
+            raise JobError(f"The map is not in a cubic box {vol.shape_xyz}")
+        d, apix = vol.data.shape[0], vol.pixel_size
+        mask_in = ctx.input("mask")
+        mask = MapVolume.read(mask_in.path) if mask_in is not None else None
+        if mask is not None and mask.data.shape != vol.data.shape:
+            raise JobError("The mask and the map have different boxes: put the mask on the grid of the map (Map operations)")
+        if p["centre"] == "mask":
+            point = centre_of_mass(mask.data, 0.0)
+        elif p["centre"] == "map":
+            point = centre_of_mass(vol.data, float(p["threshold"]) or None)
+        else:
+            point = np.array([float(v) for v in str(p["point"]).replace(",", " ").split()])
+        shift_px = point - d // 2  # the region relative to the centre of the box (x, y, z, voxels)
+        frame = ps.frame_dict(np.eye(3), False, shift_px / d)
+        moved = ps.frame_volume(vol.data, frame)
+        ctx.add_output("map", "map", vol.like(moved).write(ctx.path("recentred_map.mrc")), "Re-centred map",
+                       meta={**ctx.inherited_meta("map"), "recentred_by": [round(float(v) * apix, 2) for v in shift_px]})
+        if mask is not None:
+            out = mask.like(np.clip(ps.frame_volume(mask.data, frame), 0, 1)).write(ctx.path("recentred_mask.mrc"))
+            ctx.add_output("mask", "mask", out, "Re-centred mask", meta=ctx.inherited_meta("mask"))
+        parts_in = ctx.input("particles")
+        rows = [["New centre", {"mask": "centre of mass of the mask", "map": "centre of mass of the map",
+                                "point": "given point"}[p["centre"]]],
+                ["Region at", f"({point[0]:.1f}, {point[1]:.1f}, {point[2]:.1f}) voxels"],
+                ["Shift", f"{np.linalg.norm(shift_px) * apix:.1f} Å ({shift_px[0] * apix:.1f}, {shift_px[1] * apix:.1f}, "
+                          f"{shift_px[2] * apix:.1f})"]]
+        if parts_in is not None:
+            from cryoplug.jobs.relion_common import particles_out_meta, relion_particles
+            parts = relion_particles(ctx, parts_in, need_poses=True)
+            star, n = realigned_poses(Path(parts["star"]), frame, d, apix, ctx.path("particles_recentred.star"))
+            ctx.add_output("particles", "particles", star, f"Particles re-centred on the region ({n:,})",
+                           meta=particles_out_meta(ctx, star, "recentred"))
+            rows.append(["Particles", f"{n:,}: re-extract them (Particle extraction, Particles to re-extract) to centre the region"])
+        ctx.add_table("Re-centring", ["", "Value"], rows)
+        ctx.add_highlight("Shift", f"{np.linalg.norm(shift_px) * apix:.1f} Å")

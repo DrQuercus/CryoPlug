@@ -7,6 +7,12 @@ detailed guidance; the server tells which programs are installed (`server_status
 
 ## Import
 
+### `import_templates` — Import 2D templates
+built-in. In: none. Out: classes: class_averages.
+
+2D images to pick particles by template matching (Auto-picking, Templates), as CryoSPARC's Import Templates: class averages from another program or project, projections, drawn shapes; a stack (.mrcs) or single images (.mrc).
+Usually followed by: `relion_autopick`.
+
 ### `import_model` — Import atomic model
 built-in. In: none. Out: model: model, sequence: sequence.
 
@@ -30,6 +36,12 @@ built-in. In: none. Out: movies: movies, micrographs: micrographs.
 
 Imports raw movies (or single-frame micrographs) with their optics group: pixel size, voltage, spherical aberration, amplitude contrast, MTF and gain reference. Writes the movies.star of relion_import; the movie folders are linked into the job folder, nothing is copied. The start of the RELION pipeline: motion correction, CTF estimation, picking...
 Usually followed by: `relion_motioncorr`, `relion_estimate_gain`.
+
+### `import_coordinates` — Import particle coordinates
+built-in. In: micrographs: micrographs. Out: coordinates: coordinates.
+
+Particle positions picked by another program, matched to the micrographs of the project by file name, as RELION's import of coordinates: RELION or crYOLO STAR files (one per micrograph, an autopick.star list or a particle file), EMAN or crYOLO .box files, Topaz picks (.txt) or CryoSPARC picks (.cs). They feed the extraction, the inspection of picks or Topaz training.
+Usually followed by: `relion_extract`, `relion_pick_inspect`, `relion_topaz_train`.
 
 ### `import_particles` — Import particles
 built-in. In: none. Out: particles: particles, latent: latent.
@@ -634,6 +646,12 @@ built-in. In: set_a: particles/micrographs, set_b: particles/micrographs. Out: b
 
 Compares two particle sets, as CryoSPARC's Particle Sets Tool: the particles in both, those of A only and those of B only. Particles are matched by image (the same extracted particle) or by position on the micrograph (particles picked or extracted twice). Two micrograph sets are compared by micrograph name, as CryoSPARC's Exposure Sets Tool. Join star files gives the union.
 Usually followed by: `relion_refine3d`, `relion_class2d`, `relion_join`.
+
+### `recentre_particles` — Re-centre on a region
+built-in. In: map: map, mask?: mask, particles?: particles. Out: map: map, mask: mask, particles: particles.
+
+Moves a region of a map to the centre of the box, with the shifts of its particles changed the same way, as CryoSPARC's Volume Alignment Tools: the centre of mass of a mask (a domain, a subunit), of the map, or a given point. Re-extracting the particles then centres them on that region, for a focused refinement or classification in a smaller box.
+Usually followed by: `relion_extract`, `relion_local_refine`, `relion_class3d`.
 
 ### `relion_rebalance` — Rebalance orientations
 built-in. In: particles: particles. Out: particles: particles, removed: particles.

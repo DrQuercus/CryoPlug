@@ -61,7 +61,7 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     def project_gate(user: dict[str, Any], request: Request) -> bool:
         """A project (and everything in it) exists only for its owner, its members and administrators."""
         match = PROJECT_PATH.match(request.url.path)
-        if not match or is_admin(user):
+        if not match or is_admin(user) or match.group(1) == "attach":  # attaching a folder: checked by its owner's folders
             return True
         project = manager.db.get_project(match.group(1))
         return project is not None and can_access(user, project)
@@ -349,8 +349,16 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     @app.delete("/api/projects/{puid}")
     def delete_project(puid: str, request: Request, delete_files: bool = False) -> dict[str, Any]:
         managed_project(request, puid)
+        if not delete_files:  # removed from CryoPlug, the folder kept ready to be attached again
+            return manager.detach_project(puid)
         manager.delete_project(puid, delete_files)
         return {"deleted": puid}
+
+    @app.post("/api/projects/attach")
+    def attach_project(request: Request, body: dict = Body(...)) -> dict[str, Any]:
+        """A CryoPlug project folder (detached elsewhere, moved, or after the loss of the database) added back."""
+        user = current_user(request)
+        return manager.attach_project(str(body.get("path") or ""), owner=author(user), roots=users.roots(user))
 
     @app.get("/api/people")
     def people(request: Request) -> list[dict[str, Any]]:

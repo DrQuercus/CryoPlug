@@ -228,6 +228,37 @@ HELP: dict[str, dict[str, Any]] = {
         "next": ["relion_local_refine", "map_fsc", "locscale"],
     },
     # ------------------------------------------------- RELION : des films à la carte
+    "import_coordinates": {
+        "purpose": "Importe les positions de particules choisies par un autre logiciel et les associe aux micrographies du "
+                   "projet par leur nom, comme l'import de coordonnées de RELION : fichiers STAR de RELION ou crYOLO (un par "
+                   "micrographie, une liste autopick.star ou un fichier de particules), fichiers .box d'EMAN ou crYOLO, "
+                   "picks de Topaz (.txt) ou de CryoSPARC (.cs).",
+        "when": [
+            "Le picking a été fait ailleurs (crYOLO, Topaz, CryoSPARC, un autre projet RELION).",
+            "Reprendre des picks validés pour une nouvelle extraction (autre boîte, autre taille de pixel).",
+        ],
+        "avoid": ["Des picks faits sur d'autres micrographies que celles branchées (noms différents) : rien ne correspondra."],
+        "inputs": "Les micrographies sur lesquelles les particules ont été choisies (avec CTF pour extraire ensuite).",
+        "tips": [
+            "Plusieurs fichiers ou jokers séparés par « ; », formats mélangés possibles (détectés par l'extension).",
+            "« Coordinate scale » = 4 pour des picks faits sur des micrographies réduites 4 fois.",
+            "Les .box donnent le coin de la boîte : le centre est calculé ; les .cs de CryoSPARC donnent des fractions de la micrographie.",
+            "Le journal liste les fichiers qui ne correspondent à aucune micrographie.",
+        ],
+        "next": ["relion_extract", "relion_pick_inspect", "relion_topaz_train"],
+    },
+    "import_templates": {
+        "purpose": "Importe des images 2D (une pile .mrcs ou des .mrc) comme modèles pour le picking par modèles, comme "
+                   "« Import Templates » de CryoSPARC : moyennes de classes d'un autre logiciel ou projet, projections.",
+        "when": ["Des moyennes 2D existent déjà (autre projet, autre logiciel) pour démarrer le picking par modèles."],
+        "avoid": ["Des modèles d'une autre taille de pixel sans la renseigner : RELION les met à l'échelle avec la taille donnée."],
+        "inputs": "Fichiers d'images (même taille, carrées).",
+        "tips": [
+            "RELION attend des particules blanches sur fond sombre (comme les moyennes de classes) : « Invert the contrast » sinon.",
+            "Puis Auto-picking (RELION), méthode Templates, entrée 2D templates.",
+        ],
+        "next": ["relion_autopick"],
+    },
     "relion_import": {
         "purpose": "Importe les films bruts (ou des micrographies déjà alignées) avec leur groupe optique : taille de pixel, "
                    "tension, aberration sphérique, contraste d'amplitude, gain et MTF. Écrit le movies.star de "
@@ -719,6 +750,22 @@ HELP: dict[str, dict[str, Any]] = {
             "Les sorties sont sur la grille de la référence (boîte et pixel), centres des boîtes alignés.",
         ],
         "next": ["relion_join", "relion_refine3d", "relion_reconstruct", "map_tools", "relion_local_refine"],
+    },
+    "recentre_particles": {
+        "purpose": "Amène une région d'une carte au centre de la boîte et change les décalages de ses particules de la même "
+                   "façon, comme les « Volume Alignment Tools » de CryoSPARC : centre de masse d'un masque (un domaine, une "
+                   "sous-unité), de la carte, ou un point donné. Ré-extraites, les particules sont centrées sur la région.",
+        "when": [
+            "Avant un raffinement ou une classification focalisés sur un domaine excentré, dans une boîte plus petite.",
+            "Une carte décentrée dans sa boîte (particules extraites sur un mauvais centre).",
+        ],
+        "avoid": ["Retirer le reste du complexe : c'est la soustraction de signal (RELION signal subtraction)."],
+        "inputs": "La carte, le masque de la région (pour son centre de masse) et les particules du raffinement de la carte.",
+        "tips": [
+            "Puis Particle extraction avec « Particles to re-extract » : la ré-extraction recentre sur les nouveaux décalages.",
+            "Un point lu dans le visualiseur 3D (coordonnées en voxels depuis le coin de la boîte) avec « A point ».",
+        ],
+        "next": ["relion_extract", "relion_local_refine", "relion_class3d"],
     },
     "check_particles": {
         "purpose": "Lit chaque image de particule et met de côté celles qui arrêteraient ou fausseraient un job, comme « Check "

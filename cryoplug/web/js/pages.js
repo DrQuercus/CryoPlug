@@ -17,9 +17,18 @@ export async function renderProjects(content) {
   try { projects = await api.projects(); } catch (e) { clear(content, h('div', { class: 'alert error' }, e.message)); return; }
   state.projects = projects;
   const remove = async (p) => {
-    if (!(await confirmDialog('Remove project', `Remove ${p.uid} "${p.title}" from CryoPlug?\nThe project directory is kept on disk:\n${p.dir}`, 'Remove', true))) return;
-    await guard(api.deleteProject(p.uid, false), 'Project removed');
+    if (!(await confirmDialog('Detach project', `Detach ${p.uid} "${p.title}" from this CryoPlug?\nThe folder is kept, with everything `
+      + `needed to attach it again (here or on another server): ${p.dir}`, 'Detach', true))) return;
+    await guard(api.deleteProject(p.uid, false), 'Project detached');
     renderProjects(content);
+  };
+  const attach = async () => {
+    const path = await browseFiles({ kind: 'dir', title: 'CryoPlug project folder to attach (CP-…)' });
+    if (!path) return;
+    let proj;
+    try { proj = await guard(api.attachProject(path)); } catch { return; }
+    toast(`Attached as ${proj.uid} “${proj.title}”${proj.skipped?.length ? ` (${proj.skipped.length} folders without a job record skipped)` : ''}`, 'ok', 7000);
+    navigate(`#/p/${proj.uid}`);
   };
   const cards = projects.map((p) => {
     const open = () => navigate(`#/p/${p.uid}`);
@@ -32,7 +41,7 @@ export async function renderProjects(content) {
         { label: 'Open', ic: 'next', action: open },
         accounts() && canManage(p) ? { label: 'Share…', ic: 'share', action: () => shareDialog(p, () => renderProjects(content)) } : null,
         { label: 'Copy folder path', ic: 'folder', action: () => copyText(p.dir) },
-        ...(canManage(p) ? [{ separator: true }, { label: 'Remove from CryoPlug…', ic: 'trash', danger: true, action: () => remove(p) }] : []),
+        ...(canManage(p) ? [{ separator: true }, { label: 'Detach (keep the folder)…', ic: 'trash', danger: true, action: () => remove(p) }] : []),
       ].filter(Boolean), e.type === 'contextmenu' ? { x: e.clientX, y: e.clientY } : null);
     };
     // With accounts: whose project it is (when not one's own) and with whom it is shared.
@@ -53,7 +62,9 @@ export async function renderProjects(content) {
       `${p.num_jobs} job${p.num_jobs === 1 ? '' : 's'}${p.disk_bytes ? ` · ${fmtSize(p.disk_bytes)}` : ''}`), h('span', {}, `updated ${ago(p.updated_at)}`)));
   });
   clear(content,
-    h('div', { class: 'toolbar' }, btn('New project', () => newProjectDialog(), { cls: 'primary', ic: 'plus' }), h('span', { class: 'grow' }),
+    h('div', { class: 'toolbar' }, btn('New project', () => newProjectDialog(), { cls: 'primary', ic: 'plus' }),
+      btn('Attach a project folder', () => attach(), { ic: 'folder',
+        title: 'A CryoPlug project folder detached from another CryoPlug, moved, or whose database was lost' }), h('span', { class: 'grow' }),
       h('span', { class: 'muted small', title: state.info.projects_root }, `Server ${state.info.hostname} · projects in ${shortPath(state.info.projects_root, 50)}`)),
     projects.length ? h('div', { class: 'cards projects' }, cards) : h('div', { class: 'empty' }, h('h3', {}, 'Welcome to CryoPlug'),
       h('p', {}, 'Create a project to post-process a CryoSPARC map: sharpening, model building, refinement, validation and deposition.'),

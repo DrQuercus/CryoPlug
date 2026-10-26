@@ -291,6 +291,19 @@ class Database:
                 raise
         return self.get_job(project_uid, uid)  # type: ignore[return-value]
 
+    def insert_job(self, project_uid: str, record: dict[str, Any]) -> None:
+        """A job restored with its own uid and number (a project folder attached)."""
+        data = {k: record[k] for k in JOB_COLUMNS if k in record and k != "project_uid"}
+        data["project_uid"] = project_uid
+        for key in JSON_FIELDS & set(data):
+            data[key] = json.dumps(data[key])
+        self._execute(f"INSERT INTO jobs ({', '.join(data)}) VALUES ({','.join('?' * len(data))})", data.values())
+
+    def insert_workspace(self, project_uid: str, ws: dict[str, Any]) -> None:
+        self._execute("INSERT INTO workspaces (project_uid, uid, num, title, description, created_at, created_by) VALUES (?,?,?,?,?,?,?)",
+                      (project_uid, ws["uid"], int(ws.get("num") or int(str(ws["uid"]).lstrip("W") or 0)), ws.get("title") or ws["uid"],
+                       ws.get("description") or "", ws.get("created_at") or time.time(), ws.get("created_by") or ""))
+
     def get_job(self, project_uid: str, uid: str) -> dict[str, Any] | None:
         row = self._one("SELECT * FROM jobs WHERE project_uid = ? AND uid = ?", (project_uid, uid))
         return self._job_from_row(row) if row else None

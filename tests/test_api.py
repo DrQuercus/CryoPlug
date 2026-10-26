@@ -139,3 +139,47 @@ def test_workspaces_tags_and_chain_clone(manager, synthetic):
         assert client.delete(f"{base}/workspaces/W1").status_code == 404
         # a new workspace never reuses a number still used by another
         assert client.post(f"{base}/workspaces", json={"title": "Again"}).json()["uid"] == "W3"
+
+
+def test_detach_and_attach_a_project_folder(manager, synthetic):
+    """A project detached keeps in its folder what it needs to be attached again (jobs, outputs, workspaces, tags); a job
+    folder written before the records were kept is read from what the worker left."""
+    app = create_app(manager.config, start_scheduler=False, manager=manager)
+    with TestClient(app, base_url="http://localhost:39500") as client:
+        p = client.post("/api/projects", json={"title": "Moving"}).json()
+        base = f"/api/projects/{p['uid']}"
+        imp = client.post(f"{base}/jobs", json={"type": "import_maps", "queue": True, "params": {
+            "half_map_a": str(synthetic["half_a"]), "half_map_b": str(synthetic["half_b"]), "map_sharp": str(synthetic["map"])}}).json()
+        run_until_done(manager, p["uid"], [imp["uid"]])
+        fsc = client.post(f"{base}/jobs", json={"type": "map_fsc", "queue": True, "inputs": {"half_maps": {"job": imp["uid"], "output": "half_maps"}}}).json()
+        run_until_done(manager, p["uid"], [fsc["uid"]])
+        ws = client.post(f"{base}/workspaces", json={"title": "Maps", "jobs": [imp["uid"], fsc["uid"]]}).json()
+        client.patch(f"{base}/jobs/{fsc['uid']}", json={"tags": ["best"], "notes": "the reference FSC"})
+        pending = client.post(f"{base}/jobs", json={"type": "map_fsc", "inputs": {"half_maps": {"job": imp["uid"], "output": "half_maps"}}}).json()
+        pdir = manager.project_dir(p["uid"])
+        assert (pdir / fsc["uid"] / "cryoplug_job.json").is_file()
+
+        detached = client.delete(base).json()
+        assert detached["detached"] == p["uid"] and pdir.is_dir()
+        assert all(x["uid"] != p["uid"] for x in client.get("/api/projects").json())
+        (pdir / imp["uid"] / "cryoplug_job.json").unlink()  # as if written by an older CryoPlug: job.json + state.json
+
+        bad = client.post("/api/projects/attach", json={"path": str(pdir / imp["uid"])})
+        assert bad.status_code == 400 and "not a CryoPlug project folder" in bad.json()["detail"]
+        back = client.post("/api/projects/attach", json={"path": str(pdir)}).json()
+        assert back["title"] == "Moving" and back["skipped"] == [] and back["dir"] == str(pdir.resolve())
+        again = client.post("/api/projects/attach", json={"path": str(pdir)})
+        assert again.status_code == 400 and "already the project" in again.json()["detail"]
+        nbase = f"/api/projects/{back['uid']}"
+        jobs = {j["uid"]: j for j in client.get(f"{nbase}/jobs").json()}
+        assert set(jobs) == {imp["uid"], fsc["uid"], pending["uid"]}
+        assert jobs[imp["uid"]]["status"] == "completed" and {o["name"] for o in jobs[imp["uid"]]["outputs"]} >= {"half_maps", "map_sharp"}
+        assert jobs[fsc["uid"]]["tags"] == ["best"] and jobs[fsc["uid"]]["notes"] == "the reference FSC"
+        assert jobs[fsc["uid"]]["workspaces"] == [ws["uid"]] and jobs[pending["uid"]]["status"] == "building"
+        assert [w["uid"] for w in client.get(f"{nbase}/workspaces").json()] == [ws["uid"]]
+        # the restored jobs are used as before; new jobs continue the numbering
+        nxt = client.post(f"{nbase}/jobs", json={"type": "map_fsc", "queue": True,
+                                                 "inputs": {"half_maps": {"job": imp["uid"], "output": "half_maps"}}}).json()
+        assert int(nxt["uid"][1:]) == int(pending["uid"][1:]) + 1
+        run_until_done(manager, back["uid"], [nxt["uid"]])
+        assert client.get(f"{nbase}/jobs/{nxt['uid']}").json()["status"] == "completed"

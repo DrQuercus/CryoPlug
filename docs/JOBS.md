@@ -19,6 +19,29 @@ Les mêmes fiches sont affichées dans l'interface (constructeur de job, détail
 
 ## Import
 
+### Import 2D templates
+
+`import_templates` — intégré (aucun logiciel externe)
+
+Importe des images 2D (une pile .mrcs ou des .mrc) comme modèles pour le picking par modèles, comme « Import Templates » de CryoSPARC : moyennes de classes d'un autre logiciel ou projet, projections.
+
+**Quand l'utiliser**
+
+- Des moyennes 2D existent déjà (autre projet, autre logiciel) pour démarrer le picking par modèles.
+
+**À éviter / pièges**
+
+- Des modèles d'une autre taille de pixel sans la renseigner : RELION les met à l'échelle avec la taille donnée.
+
+**Entrées conseillées** : Fichiers d'images (même taille, carrées).
+
+**Conseils**
+
+- RELION attend des particules blanches sur fond sombre (comme les moyennes de classes) : « Invert the contrast » sinon.
+- Puis Auto-picking (RELION), méthode Templates, entrée 2D templates.
+
+**Étapes suivantes** : Auto-picking (RELION)
+
 ### Import atomic model
 
 `import_model` — intégré (aucun logiciel externe)
@@ -122,6 +145,32 @@ Importe les films bruts (ou des micrographies déjà alignées) avec leur groupe
 - Le fichier MTF du détecteur (wiki RELION) sert au post-traitement.
 
 **Étapes suivantes** : Motion correction (RELION), Estimate gain reference (RELION)
+
+### Import particle coordinates
+
+`import_coordinates` — intégré (aucun logiciel externe)
+
+Importe les positions de particules choisies par un autre logiciel et les associe aux micrographies du projet par leur nom, comme l'import de coordonnées de RELION : fichiers STAR de RELION ou crYOLO (un par micrographie, une liste autopick.star ou un fichier de particules), fichiers .box d'EMAN ou crYOLO, picks de Topaz (.txt) ou de CryoSPARC (.cs).
+
+**Quand l'utiliser**
+
+- Le picking a été fait ailleurs (crYOLO, Topaz, CryoSPARC, un autre projet RELION).
+- Reprendre des picks validés pour une nouvelle extraction (autre boîte, autre taille de pixel).
+
+**À éviter / pièges**
+
+- Des picks faits sur d'autres micrographies que celles branchées (noms différents) : rien ne correspondra.
+
+**Entrées conseillées** : Les micrographies sur lesquelles les particules ont été choisies (avec CTF pour extraire ensuite).
+
+**Conseils**
+
+- Plusieurs fichiers ou jokers séparés par « ; », formats mélangés possibles (détectés par l'extension).
+- « Coordinate scale » = 4 pour des picks faits sur des micrographies réduites 4 fois.
+- Les .box donnent le coin de la boîte : le centre est calculé ; les .cs de CryoSPARC donnent des fractions de la micrographie.
+- Le journal liste les fichiers qui ne correspondent à aucune micrographie.
+
+**Étapes suivantes** : Particle extraction (RELION), Inspect picks / manual picking, Topaz training (RELION)
 
 ### Import particles
 
@@ -2642,6 +2691,30 @@ Compare deux jeux de particules (comme le « Particle Sets Tool » de CryoSPARC)
 - L'union des deux jeux se fait avec « Join star files ».
 
 **Étapes suivantes** : 3D auto-refine (RELION), 2D classification (RELION), Join star files (RELION)
+
+### Re-centre on a region
+
+`recentre_particles` — intégré (aucun logiciel externe)
+
+Amène une région d'une carte au centre de la boîte et change les décalages de ses particules de la même façon, comme les « Volume Alignment Tools » de CryoSPARC : centre de masse d'un masque (un domaine, une sous-unité), de la carte, ou un point donné. Ré-extraites, les particules sont centrées sur la région.
+
+**Quand l'utiliser**
+
+- Avant un raffinement ou une classification focalisés sur un domaine excentré, dans une boîte plus petite.
+- Une carte décentrée dans sa boîte (particules extraites sur un mauvais centre).
+
+**À éviter / pièges**
+
+- Retirer le reste du complexe : c'est la soustraction de signal (RELION signal subtraction).
+
+**Entrées conseillées** : La carte, le masque de la région (pour son centre de masse) et les particules du raffinement de la carte.
+
+**Conseils**
+
+- Puis Particle extraction avec « Particles to re-extract » : la ré-extraction recentre sur les nouveaux décalages.
+- Un point lu dans le visualiseur 3D (coordonnées en voxels depuis le coin de la boîte) avec « A point ».
+
+**Étapes suivantes** : Particle extraction (RELION), RELION local refinement, RELION 3D classification (focused)
 
 ### Rebalance orientations
 

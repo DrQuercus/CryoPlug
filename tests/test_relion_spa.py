@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -1322,3 +1323,61 @@ def test_clear_intermediate_results(manager, spa):
     # a job that ended before the sizes were kept is measured when its details are read
     manager.db.update_job(puid, ext["uid"], disk_bytes=None)
     assert manager.job_detail(puid, ext["uid"])["disk_bytes"] > 0 and manager.job(puid, ext["uid"])["disk_bytes"] > 0
+
+
+def test_import_coordinates_and_templates(manager, spa, tmp_path):
+    """Picks of other programs (STAR, BOX, Topaz, CryoSPARC) matched to the micrographs by name; 2D templates for
+    template picking."""
+    import mrcfile
+    puid, ctf = spa["puid"], spa["ctf"]
+    mics = _ref(ctf, "micrographs")
+    picks = tmp_path / "picks"
+    picks.mkdir()
+    (picks / "mic_001_autopick.star").write_text("\ndata_\n\nloop_\n_rlnCoordinateX #1\n_rlnCoordinateY #2\n"
+                                                 "_rlnAutopickFigureOfMerit #3\n100.0 120.0 0.9\n200.0 220.0 0.5\n")
+    (picks / "mic_002.box").write_text("90 110 20 20\n190 210 20 20\n290 310 20 20\n")
+    (picks / "topaz.txt").write_text("image_name\tx_coord\ty_coord\tscore\nmic_003\t50\t60\t1.5\nmic_003\t150\t160\t-0.5\n")
+    cs = np.zeros(2, dtype=[("uid", "<u8"), ("location/micrograph_path", "S64"), ("location/center_x_frac", "<f4"),
+                            ("location/center_y_frac", "<f4"), ("location/micrograph_shape", "<u4", (2,))])
+    cs["location/micrograph_path"] = b"J9/motioncorrected/mic_004_patch_aligned_doseweighted.mrc"
+    cs["location/center_x_frac"], cs["location/center_y_frac"] = [0.25, 0.5], [0.5, 0.75]
+    cs["location/micrograph_shape"] = [[400, 400], [400, 400]]
+    np.save(picks / "picked.npy", cs)
+    (picks / "picked.npy").rename(picks / "picked_particles.cs")
+    (picks / "other_movie.box").write_text("1 1 10 10\n")  # matches no micrograph
+    imp = _run(manager, puid, "import_coordinates", {"path": f"{picks}/*.star; {picks}/*.box; {picks}/topaz.txt; {picks}/*.cs",
+                                                     "scale": 1.0, "diameter": 60}, {"micrographs": mics})
+    out = _outs(imp)["coordinates"]
+    assert out["meta"]["n_particles"] == 2 + 3 + 2 + 2 and out["meta"]["n_micrographs"] == 4
+    pdir = manager.project_dir(puid)
+    listing = rl.read_star(pdir / out["path"])["coordinate_files"]
+    files = dict(zip([Path(m).name for m in listing.column("rlnMicrographName")], listing.column("rlnMicrographCoordinates")))
+    xy, fom = rl.read_coordinates(pdir / files["mic_002.mrc"])
+    assert xy.tolist() == [[100.0, 120.0], [200.0, 220.0], [300.0, 320.0]]  # box corners → centres
+    xy, _ = rl.read_coordinates(pdir / files["mic_004.mrc"])
+    assert xy.tolist() == [[100.0, 200.0], [200.0, 300.0]]  # CryoSPARC fractions × micrograph shape
+    xy, fom = rl.read_coordinates(pdir / files["mic_003.mrc"])
+    assert xy.tolist() == [[50.0, 60.0], [150.0, 160.0]] and fom.tolist() == [1.5, -0.5]
+    assert "1 coordinate set(s) match no micrograph: other_movie.box" in log_of(manager, puid, imp["uid"])
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1}, {"micrographs": mics, "coordinates": _ref(imp, "coordinates")})
+    assert _outs(ext)["particles"]["meta"]["n_particles"] > 0
+    scaled = _run(manager, puid, "import_coordinates", {"path": f"{picks}/mic_002.box", "scale": 0.5}, {"micrographs": mics})
+    listing = rl.read_star(pdir / _outs(scaled)["coordinates"]["path"])["coordinate_files"]
+    assert rl.read_coordinates(pdir / listing.column("rlnMicrographCoordinates")[0])[0].tolist()[0] == [50.0, 60.0]
+    bad = _run(manager, puid, "import_coordinates", {"path": f"{picks}/other_movie.box"}, {"micrographs": mics}, ok=False)
+    assert "matches a micrograph" in bad["error"]
+
+    # 2D templates: a stack and a single image, inverted, for template picking
+    with mrcfile.new(str(tmp_path / "refs.mrcs"), overwrite=True) as mrc:
+        mrc.set_data(np.random.default_rng(1).normal(0, 1, (2, 32, 32)).astype(np.float32))
+        mrc.voxel_size = 2.0
+    with mrcfile.new(str(tmp_path / "one.mrc"), overwrite=True) as mrc:
+        mrc.set_data(np.ones((32, 32), np.float32))
+    tpl = _run(manager, puid, "import_templates", {"path": f"{tmp_path}/refs.mrcs; {tmp_path}/one.mrc", "invert": True})
+    meta = _outs(tpl)["classes"]["meta"]
+    assert (meta["n_classes"], meta["box"], meta["pixel_size"]) == (3, 32, 2.0)
+    with mrcfile.open(str(pdir / _outs(tpl)["classes"]["path"])) as mrc:
+        assert float(mrc.data[2].mean()) == -1.0
+    pick = _run(manager, puid, "relion_autopick", {"method": "template", "mpi": 1, "gpus": 0},
+                {"micrographs": mics, "references": _ref(tpl, "classes")})
+    assert f"--ref {tpl['uid']}/templates.mrcs" in _command(manager, puid, pick)

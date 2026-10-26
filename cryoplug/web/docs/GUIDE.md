@@ -66,6 +66,16 @@ Statuts d'un job :
 Pour essayer sans données : `cryoplug demo-data ~/cryoplug_demo`, puis importez
 `~/cryoplug_demo/CS-demo/J42` (jeu synthétique).
 
+### Déplacer un projet (détacher, rattacher)
+
+Comme dans CryoSPARC, un projet se **détache** (menu **⋯** de sa carte → *Detach (keep the folder)*) : il quitte
+CryoPlug mais son dossier garde tout ce qu'il faut — chaque dossier de job contient sa fiche (`cryoplug_job.json` :
+paramètres, entrées, sorties, notes, étiquettes, workspaces) et le dossier du projet ses workspaces
+(`cryoplug_project.json`). **Attach a project folder** (page des projets) le rattache ensuite, ici ou sur un autre
+serveur après copie du dossier, avec ses jobs, ses résultats et ses workspaces ; les numéros de jobs sont gardés.
+Cela sert aussi après la perte de la base de données. En ligne de commande : `cryoplug project attach /chemin/CP-…`,
+`cryoplug project detach P3`, `cryoplug project list`.
+
 ### Importer depuis votre ordinateur
 
 Vos cartes sont sur votre portable et pas sur le serveur ? Sur le projet, cliquez **Upload** (ou glissez les
@@ -277,6 +287,11 @@ particules gardées.
 
 ### 2.3 Trier les micrographies et inspecter le picking
 
+- Des picks faits ailleurs (crYOLO, Topaz, CryoSPARC, un autre projet RELION) s'importent avec **Import particle
+  coordinates** : fichiers STAR, .box, .txt de Topaz ou .cs de CryoSPARC, associés aux micrographies par leur nom (avec
+  un facteur d'échelle pour des picks faits sur des micrographies réduites). Des moyennes 2D d'ailleurs deviennent des
+  modèles de picking avec **Import 2D templates**.
+
 - La correction de mouvement et l'estimation de la CTF montrent un **navigateur d'expositions** : chaque micrographie
   (filtrée passe-bas, réglable) avec son ajustement CTF, sa dérive image par image et ses mesures ; un histogramme par
   mesure (ajustement CTF, défocus, astigmatisme, figure de mérite, mouvements total/précoce/tardif, glace…), un nuage
@@ -341,6 +356,7 @@ particules gardées.
 | Réécrire un sous-ensemble dans ses propres piles | **Restack particles** (une pile par micrographie, recentrage arrondi) |
 | Micrographies communes à deux jeux, ou d'un jeu sans l'autre | **Particle sets** avec deux jeux de micrographies (par nom) |
 | Images corrompues, piles manquantes, NaN (un job qui s'arrête en lisant les particules) | **Check particles (corrupt images)** |
+| Centrer les particules sur un domaine (avant une boîte plus petite) | **Re-centre on a region** (centre de masse d'un masque), puis ré-extraction |
 | Lignes de couche d'un filament, pour indexer sa symétrie | **Average power spectra (2D classes)** (spectres des particules tournés dans le repère de la classe) |
 
 **Curate particles (statistics)** attend, comme le tri des micrographies, avec l'histogramme de chaque statistique des
