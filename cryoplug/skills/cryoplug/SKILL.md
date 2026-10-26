@@ -14,8 +14,8 @@ through tools, with the rights of your credential. The data are often unpublishe
 
 - **MCP tools** (preferred): `server_status`, `list_projects`, `get_project`, `create_project`, `list_job_types`,
   `describe_job_type`, `find_outputs`, `create_job`, `update_job`, `queue_job`, `get_job`, `get_job_log`,
-  `get_job_images`, `wait_for_jobs`, `clone_job`, `kill_job`, `control_job`, `clear_job`, `resume_job`,
-  `list_workflows`, `apply_workflow`, `browse_server_files`, `upload_file`, `list_job_files`, `read_project_file`,
+  `get_job_images`, `wait_for_jobs`, `clone_job`, `clone_jobs`, `kill_job`, `control_job`, `clear_job`, `resume_job`,
+  `create_workspace`, `list_workflows`, `apply_workflow`, `browse_server_files`, `upload_file`, `list_job_files`, `read_project_file`,
   `map_info`, `list_skills`, `read_skill`.
 - **Shell** (no MCP client): the same tools with `cryoplug ai call TOOL key=value ...`, values in JSON when they are
   not plain text, for example:
@@ -65,7 +65,11 @@ through tools, with the rights of your credential. The data are often unpublishe
   `update_job` + `queue_job`, or `clone_job` with new parameters (keeps the original).
 - Keep the original half maps, mask and primary map: validation and deposition need them. Never present a map
   produced by a neural network (DeepEMhancer, EMmerNet, EMReady, spIsoNet half maps) as the primary or validated map.
-- Give jobs meaningful titles and use `notes` to say why a job was run.
+- Give jobs meaningful titles and use `notes` to say why a job was run. In projects organised in workspaces
+  (`get_project` lists them), create jobs in the workspace of the work (`workspace`), and tag the jobs people should
+  find again (`update_job tags=["best map"]`).
+- To redo part of a pipeline with other settings, `clone_jobs` copies the chain (the copies are linked together);
+  change the copies with `update_job`, then queue them.
 - Interactive jobs (`isolde_session`, `coot_session`) and drawing a mask in the 3D viewer need a person: create
   them if useful, then hand over. Jobs cannot be deleted from the agent tools; leave clean-up to people.
 - With user accounts you see only your projects and folders; data to import must be in folders your account may

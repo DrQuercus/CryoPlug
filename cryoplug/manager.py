@@ -36,6 +36,20 @@ def slugify(text: str) -> str:
     return slug[:40] or "project"
 
 
+def clean_tags(values: Any) -> list[str]:
+    """Labels of a job: short, without repeats (letter case ignored), at most 20."""
+    if not values:
+        return []
+    if isinstance(values, str):
+        values = values.split(",")
+    tags: dict[str, str] = {}
+    for value in values:
+        tag = re.sub(r"\s+", " ", str(value)).strip()[:40]
+        if tag and tag.lower() not in tags:
+            tags[tag.lower()] = tag
+    return list(tags.values())[:20]
+
+
 def _rm_contents(directory: Path, keep: tuple[str, ...] = ()) -> None:
     for p in directory.iterdir():
         if p.name in keep:
@@ -261,6 +275,75 @@ class Manager:
         if delete_files:
             shutil.rmtree(proj["dir"], ignore_errors=True)
 
+    # ========================================================== workspaces
+    # As in CryoSPARC: named groups of the jobs of a project (one stage, one question); a job can be in several.
+    def workspaces(self, puid: str) -> list[dict[str, Any]]:
+        self.project(puid)
+        counts: dict[str, int] = {}
+        for job in self.db.list_jobs(puid):
+            for w in job["workspaces"]:
+                counts[w] = counts.get(w, 0) + 1
+        return [{**w, "num_jobs": counts.get(w["uid"], 0)} for w in self.db.list_workspaces(puid)]
+
+    def workspace(self, puid: str, wuid: str) -> dict[str, Any]:
+        ws = self.db.get_workspace(puid, wuid)
+        if not ws:
+            raise NotFound(f"Workspace {puid}/{wuid} not found")
+        return {**ws, "num_jobs": sum(wuid in j["workspaces"] for j in self.db.list_jobs(puid))}
+
+    def create_workspace(self, puid: str, title: str, description: str = "", created_by: str = "",
+                         jobs: list[str] | None = None) -> dict[str, Any]:
+        self.project(puid)
+        title = (title or "").strip()
+        if not title:
+            raise ManagerError("Workspace title is required")
+        ws = self.db.create_workspace(puid, title, (description or "").strip(), created_by)
+        if jobs:
+            self.workspace_jobs(puid, ws["uid"], add=jobs)
+        return self.workspace(puid, ws["uid"])
+
+    def update_workspace(self, puid: str, wuid: str, **fields: Any) -> dict[str, Any]:
+        self.workspace(puid, wuid)
+        changes: dict[str, Any] = {}
+        if fields.get("title") is not None:
+            changes["title"] = str(fields["title"]).strip()
+            if not changes["title"]:
+                raise ManagerError("Workspace title is required")
+        if fields.get("description") is not None:
+            changes["description"] = str(fields["description"]).strip()
+        self.db.update_workspace(puid, wuid, **changes)
+        return self.workspace(puid, wuid)
+
+    def delete_workspace(self, puid: str, wuid: str) -> None:
+        """The workspace goes; its jobs stay in the project."""
+        self.workspace(puid, wuid)
+        with self.lock:
+            self.db.delete_workspace(puid, wuid)
+
+    def workspace_jobs(self, puid: str, wuid: str, add: list[str] | None = None, remove: list[str] | None = None) -> dict[str, Any]:
+        """Jobs put in (``add``) or taken out of (``remove``) a workspace."""
+        self.workspace(puid, wuid)
+        with self.lock:
+            for juid in dict.fromkeys([*(add or []), *(remove or [])]):
+                job = self.job(puid, juid)
+                ws = [w for w in job["workspaces"] if w != wuid]
+                if juid in (add or []) and juid not in (remove or []):
+                    ws.append(wuid)
+                if ws != job["workspaces"]:
+                    self.db.update_job(puid, juid, workspaces=self._clean_workspaces(puid, ws))
+        return self.workspace(puid, wuid)
+
+    def _clean_workspaces(self, puid: str, values: list[str] | None) -> list[str]:
+        if not values:
+            return []
+        if isinstance(values, str):
+            values = [values]
+        known = {w["uid"]: w["num"] for w in self.db.list_workspaces(puid)}
+        unknown = [str(v) for v in values if v not in known]
+        if unknown:
+            raise ManagerError(f"No workspace {', '.join(unknown)} in {puid}")
+        return sorted(dict.fromkeys(values), key=lambda w: known[w])
+
     # ================================================================ jobs
     def job(self, puid: str, juid: str) -> dict[str, Any]:
         j = self.db.get_job(puid, juid)
@@ -334,9 +417,12 @@ class Manager:
     def create_job(self, puid: str, job_type: str, params: dict | None = None, inputs: dict | None = None,
                    title: str | None = None, lane: str | None = None, notes: str = "", created_by: str = "",
                    roots: list[Path] | None = None, inherited: dict[str, Any] | None = None,
-                   requested: dict[str, Any] | None = None) -> dict[str, Any]:
+                   requested: dict[str, Any] | None = None, workspaces: list[str] | None = None,
+                   tags: list[str] | None = None) -> dict[str, Any]:
         self.project(puid)
         roots = self.with_project(puid, roots)
+        workspaces = self._clean_workspaces(puid, workspaces)
+        tags = clean_tags(tags)
         try:
             jt = get_job_type(job_type)
         except KeyError as exc:
@@ -352,8 +438,9 @@ class Manager:
         chosen = self.clean_requested(jt, clean_params, lane, requested)
         job = self.db.create_job(puid, job_type, (title or "").strip() or jt.title, clean_params, clean_inputs,
                                  lane, self.job_resources(jt, clean_params, chosen), created_by)
-        if notes or chosen:
-            self.db.update_job(puid, job["uid"], **({"notes": notes} if notes else {}), **({"requested": chosen} if chosen else {}))
+        extra = {"notes": notes, "requested": chosen, "workspaces": workspaces, "tags": tags}
+        if any(extra.values()):
+            self.db.update_job(puid, job["uid"], **{k: v for k, v in extra.items() if v})
         jdir = self.job_dir(puid, job["uid"])
         jdir.mkdir(parents=True, exist_ok=True)
         return self.job(puid, job["uid"])
@@ -368,6 +455,10 @@ class Manager:
                 updates["notes"] = str(fields["notes"] or "")
             if "title" in fields and fields["title"] is not None:
                 updates["title"] = str(fields["title"]).strip() or jt.title
+            if fields.get("workspaces") is not None:
+                updates["workspaces"] = self._clean_workspaces(puid, fields["workspaces"])
+            if fields.get("tags") is not None:
+                updates["tags"] = clean_tags(fields["tags"])
             for key in ("params", "inputs", "lane", "requested"):
                 if key in fields and fields[key] is not None and job["status"] != "building":
                     raise ManagerError("Parameters and inputs can only be changed while the job is in building state (clear it first)")
@@ -534,14 +625,32 @@ class Manager:
             shutil.rmtree(self.job_dir(puid, juid), ignore_errors=True)
             self.db.delete_job(puid, juid)
 
-    def clone_job(self, puid: str, juid: str, created_by: str = "", roots: list[Path] | None = None) -> dict[str, Any]:
+    def clone_job(self, puid: str, juid: str, created_by: str = "", roots: list[Path] | None = None,
+                  workspaces: list[str] | None = None, remap: dict[str, str] | None = None) -> dict[str, Any]:
+        """A new job (building) with the same type, parameters and inputs; ``remap`` points inputs from given jobs to
+        others (their clones, when a chain is cloned); ``workspaces`` defaults to those of the job."""
         job = self.job(puid, juid)
-        valid_inputs = {s: r for s, r in job["inputs"].items() if self.db.get_job(puid, r["job"])}
+        remap = remap or {}
+        valid_inputs = {s: {**r, "job": remap.get(r["job"], r["job"])} for s, r in job["inputs"].items()
+                        if r["job"] in remap or self.db.get_job(puid, r["job"])}
         lane = job.get("lane") if job.get("lane") in self.lanes else None  # a deleted lane: the default one
         return self.create_job(puid, job["type"], job["params"], valid_inputs, job["title"], lane,
                                created_by=created_by, roots=roots, inherited=job["params"],
                                requested=self.clean_requested(get_job_type(job["type"]), job["params"], job.get("lane"),
-                                                              job.get("requested"), lenient=True))
+                                                              job.get("requested"), lenient=True),
+                               workspaces=job["workspaces"] if workspaces is None else workspaces, tags=job["tags"])
+
+    def clone_jobs(self, puid: str, juids: list[str], created_by: str = "", roots: list[Path] | None = None,
+                   workspaces: list[str] | None = None) -> list[dict[str, Any]]:
+        """Several jobs cloned together, as in CryoSPARC: the inputs between them link the clones (parents first)."""
+        jobs = sorted((self.job(puid, u) for u in dict.fromkeys(juids)), key=lambda j: j["num"])
+        remap: dict[str, str] = {}
+        clones = []
+        for job in jobs:
+            clone = self.clone_job(puid, job["uid"], created_by, roots, workspaces, remap)
+            remap[job["uid"]] = clone["uid"]
+            clones.append(clone)
+        return clones
 
     # ------------------------------------------------------------ details
     def job_detail(self, puid: str, juid: str) -> dict[str, Any]:
@@ -859,7 +968,8 @@ class Manager:
     # ============================================================ workflows
     def instantiate_workflow(self, puid: str, workflow_id: str, overrides: dict[str, dict] | None = None,
                              include: list[str] | None = None, queue: bool = False, lane: str | None = None,
-                             created_by: str = "", roots: list[Path] | None = None) -> dict[str, Any]:
+                             created_by: str = "", roots: list[Path] | None = None,
+                             workspaces: list[str] | None = None) -> dict[str, Any]:
         from cryoplug.workflows import get_workflow
         wf = get_workflow(workflow_id)
         overrides = overrides or {}
@@ -877,7 +987,7 @@ class Manager:
                         break
             params = {**(node.get("params") or {}), **(overrides.get(node["id"]) or {})}
             created[node["id"]] = self.create_job(puid, node["type"], params, inputs, node.get("title"), lane,
-                                                  created_by=created_by, roots=roots)
+                                                  created_by=created_by, roots=roots, workspaces=workspaces)
         queued, problems = [], {}
         if queue:
             for node in active:

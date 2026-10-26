@@ -84,3 +84,58 @@ def test_concurrent_create_and_schedule(manager):
         job = manager.job(p["uid"], u)
         assert job["status"] == "completed", (u, job["error"])
     time.sleep(0)
+
+
+def test_workspaces_tags_and_chain_clone(manager, synthetic):
+    """Workspaces group jobs (CryoSPARC), tags label them, and a selection clones as a linked chain."""
+    app = create_app(manager.config, start_scheduler=False, manager=manager)
+    with TestClient(app, base_url="http://localhost:39500") as client:
+        p = client.post("/api/projects", json={"title": "Workspaces"}).json()
+        base = f"/api/projects/{p['uid']}"
+        imp = client.post(f"{base}/jobs", json={"type": "import_maps", "params": {
+            "half_map_a": str(synthetic["half_a"]), "half_map_b": str(synthetic["half_b"]), "map_sharp": str(synthetic["map"])}}).json()
+        fsc = client.post(f"{base}/jobs", json={"type": "map_fsc", "inputs": {"half_maps": {"job": imp["uid"], "output": "half_maps"}}}).json()
+        other = client.post(f"{base}/jobs", json={"type": "custom_command", "params": {"command": "true"}}).json()
+
+        assert client.post(f"{base}/workspaces", json={"title": "  "}).status_code == 400
+        w1 = client.post(f"{base}/workspaces", json={"title": "Maps", "description": "the half maps", "jobs": [imp["uid"], fsc["uid"]]}).json()
+        assert (w1["uid"], w1["num_jobs"]) == ("W1", 2)
+        w2 = client.post(f"{base}/workspaces", json={"title": "Scratch"}).json()
+        assert w2["uid"] == "W2" and w2["num_jobs"] == 0
+        # a job created in a workspace; an unknown workspace is refused
+        made = client.post(f"{base}/jobs", json={"type": "custom_command", "params": {"command": "true"}, "workspaces": ["W2"]}).json()
+        assert made["workspaces"] == ["W2"]
+        bad = client.post(f"{base}/jobs", json={"type": "custom_command", "params": {"command": "true"}, "workspaces": ["W9"]})
+        assert bad.status_code == 400 and "No workspace W9" in bad.json()["detail"]
+        # membership: add, remove, a job in two workspaces (kept in workspace order)
+        r = client.post(f"{base}/workspaces/W2/jobs", json={"add": [fsc["uid"], other["uid"]], "remove": [made["uid"]]}).json()
+        assert r["num_jobs"] == 2
+        jobs = {j["uid"]: j for j in client.get(f"{base}/jobs").json()}
+        assert jobs[fsc["uid"]]["workspaces"] == ["W1", "W2"] and jobs[made["uid"]]["workspaces"] == []
+        # tags: trimmed, no repeats (letter case ignored), whatever the state of the job
+        t = client.patch(f"{base}/jobs/{fsc['uid']}", json={"tags": [" best ", "Best", "to  check", ""]}).json()
+        assert t["tags"] == ["best", "to check"]
+        listed = {w["uid"]: w for w in client.get(f"{base}/workspaces").json()}
+        assert listed["W1"]["num_jobs"] == 2 and listed["W2"]["num_jobs"] == 2 and listed["W1"]["description"] == "the half maps"
+        assert client.patch(f"{base}/workspaces/W2", json={"title": "Tests"}).json()["title"] == "Tests"
+
+        # clone the chain import → FSC: the copy of the FSC job reads the copy of the import
+        copies = client.post(f"{base}/clone", json={"jobs": [fsc["uid"], imp["uid"]], "workspaces": ["W2"]}).json()
+        assert [c["type"] for c in copies] == ["import_maps", "map_fsc"]
+        assert copies[1]["inputs"]["half_maps"] == {"job": copies[0]["uid"], "output": "half_maps"}
+        assert all(c["workspaces"] == ["W2"] and c["status"] == "building" for c in copies)
+        assert copies[1]["tags"] == ["best", "to check"]
+        # a single clone keeps the workspaces of the job, or goes where it is asked
+        single = client.post(f"{base}/jobs/{fsc['uid']}/clone").json()
+        assert single["workspaces"] == ["W1", "W2"] and single["inputs"]["half_maps"]["job"] == imp["uid"]
+        assert client.post(f"{base}/jobs/{fsc['uid']}/clone", json={"workspaces": ["W1"]}).json()["workspaces"] == ["W1"]
+
+        # deleting a workspace keeps its jobs
+        assert client.delete(f"{base}/workspaces/W1").status_code == 200
+        jobs = {j["uid"]: j for j in client.get(f"{base}/jobs").json()}
+        assert jobs[fsc["uid"]]["workspaces"] == ["W2"] and jobs[imp["uid"]]["workspaces"] == []
+        assert [w["uid"] for w in client.get(f"{base}/workspaces").json()] == ["W2"]
+        assert client.get(f"{base}/workspaces").status_code == 200
+        assert client.delete(f"{base}/workspaces/W1").status_code == 404
+        # a new workspace never reuses a number still used by another
+        assert client.post(f"{base}/workspaces", json={"title": "Again"}).json()["uid"] == "W3"

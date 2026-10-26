@@ -8,6 +8,7 @@ import { renderTree } from './tree.js';
 import {
   ACTIVE, ago, btn, clear, confirmDialog, fmtTime, guard, h, icon, liveAgo, liveDuration, modal, popupMenu, runAction, statusChip, toast,
 } from './ui.js';
+import { currentWorkspace, inWorkspace, tagChip, tagsDialog, workspaceButton, workspacesDialog } from './workspaces.js';
 
 const STATUSES = ['building', 'queued', 'launched', 'running', 'waiting', 'completed', 'failed', 'killed'];
 
@@ -49,7 +50,9 @@ function sortButton(content) {
 
 export function renderProject(content) {
   const p = state.project;
-  const search = h('label', { class: 'search-field', title: 'Filter by number, title, job type or notes (/)' }, icon('search'),
+  const ws = currentWorkspace();
+  const rerender = () => renderProject(content);
+  const search = h('label', { class: 'search-field', title: 'Filter by number, title, job type, tags or notes (/)' }, icon('search'),
     h('input', { type: 'search', placeholder: 'Filter jobs', value: state.filter.text, 'aria-label': 'Filter jobs',
       oninput: (e) => { state.filter.text = e.target.value; renderJobs(); } }));
   const statusSel = h('select', { 'aria-label': 'Status filter', onchange: (e) => { state.filter.status = e.target.value; renderJobs(); } },
@@ -68,33 +71,42 @@ export function renderProject(content) {
       } },
     icon(v === 'cards' ? 'grid' : 'tree'), h('span', { class: 'lbl' }, v === 'cards' ? 'Cards' : 'Tree'))));
   clear(document.getElementById('topbar-right'), h('div', { class: 'job-summary', id: 'job-summary' }), seg);
+  const tagFilter = state.filter.tag ? h('span', { class: 'tag-filter' }, tagChip(state.filter.tag, { removable: true, title: 'Show all the tags',
+    onClick: () => { state.filter.tag = ''; rerender(); } })) : null;
   clear(content,
     h('div', { class: 'toolbar' },
-      btn('New job', () => { openBuilder(); navigate(`#/p/${p.uid}/new`); }, { cls: 'primary', ic: 'plus', title: 'New job (N)' }),
+      workspaceButton(rerender),
+      btn('New job', () => { openBuilder(); navigate(`#/p/${p.uid}/new`); }, { cls: 'primary', ic: 'plus', title: `New job (N)${ws ? `, in ${ws.uid}` : ''}` }),
       h('button', { class: 'btn', type: 'button', title: 'Create a chain of linked jobs from a template', onclick: () => workflowDialog() },
         icon('flow'), h('span', { class: 'lbl' }, 'Workflows')),
       h('button', { class: 'btn', type: 'button', title: 'Upload maps, models, sequences or folders from this computer and import them '
         + '(or drop them on the page)', onclick: () => importFromComputer() }, icon('upload'), h('span', { class: 'lbl' }, 'Upload')),
-      h('span', { class: 'toolbar-gap' }), search, statusSel, catSel, state.view === 'cards' ? sortButton(content) : null),
-    p.description ? h('p', { class: 'project-desc' }, p.description) : null,
+      h('span', { class: 'toolbar-gap' }), tagFilter, search, statusSel, catSel, state.view === 'cards' ? sortButton(content) : null),
+    ws ? (ws.description ? h('p', { class: 'project-desc' }, h('b', {}, `${ws.uid} `), ws.description) : null)
+      : p.description ? h('p', { class: 'project-desc' }, p.description) : null,
     h('div', { id: 'jobs-area' }));
   renderJobs();
 }
 
+const workspaceJobs = () => state.jobs.filter(inWorkspace);
+const hasTag = (j, tag) => (j.tags || []).some((t) => t.toLowerCase() === tag.toLowerCase());
+
 function filtered() {
   const f = state.filter;
   const q = f.text.trim().toLowerCase();
-  return state.jobs.filter((j) => (!f.status || j.status === f.status)
+  return workspaceJobs().filter((j) => (!f.status || j.status === f.status)
     && (!f.category || state.types[j.type]?.category === f.category)
-    && (!q || `${j.uid} ${j.title} ${j.type} ${typeTitle(j.type)} ${j.notes || ''}`.toLowerCase().includes(q)));
+    && (!f.tag || hasTag(j, f.tag))
+    && (!q || `${j.uid} ${j.title} ${j.type} ${typeTitle(j.type)} ${(j.tags || []).join(' ')} ${j.notes || ''}`.toLowerCase().includes(q)));
 }
 
 // Job counts in the top bar: the total, then the states that need attention (click: show only those).
 function renderSummary() {
   const box = document.getElementById('job-summary');
   if (!box) return;
+  const jobs = workspaceJobs();
   const count = {};
-  for (const j of state.jobs) count[j.status] = (count[j.status] || 0) + 1;
+  for (const j of jobs) count[j.status] = (count[j.status] || 0) + 1;
   const items = ['running', 'queued', 'waiting', 'building', 'failed', 'killed'].filter((st) => count[st] || (st === 'running' && count.launched))
     .map((st) => {
       const n = (count[st] || 0) + (st === 'running' ? count.launched || 0 : 0);
@@ -103,7 +115,7 @@ function renderSummary() {
         title: on ? 'Show all the jobs' : `Show only the ${st} jobs`,
         onclick: () => { state.filter.status = on ? '' : st; renderProject(document.getElementById('content')); } }, `${n} ${st}`);
     });
-  clear(box, h('span', { class: 'muted small' }, `${state.jobs.length} job${state.jobs.length === 1 ? '' : 's'}`), items);
+  clear(box, h('span', { class: 'muted small' }, `${jobs.length} job${jobs.length === 1 ? '' : 's'}${state.workspace ? ` in ${state.workspace}` : ''}`), items);
 }
 
 export function renderJobs() {
@@ -118,6 +130,16 @@ export function renderJobs() {
         btn('Upload from this computer', () => importFromComputer(), { ic: 'upload' }),
         btn('Use a workflow', () => workflowDialog(), { ic: 'flow' })),
       h('p', { class: 'muted small' }, 'Or drop maps, models, sequences or a CryoSPARC job folder from your computer on this page.')));
+    return;
+  }
+  const ws = currentWorkspace();
+  if (ws && !workspaceJobs().length) {
+    clear(area, h('div', { class: 'empty' }, h('h3', {}, `${ws.uid} ${ws.title} has no jobs yet`),
+      h('p', {}, 'The jobs created while this workspace is open go into it. Jobs of the project are added from “All jobs”: '
+        + 'select them (Ctrl-click), then Workspaces in the bar that appears, or Workspaces… in the menu of a job.'),
+      h('div', { class: 'row', style: { justifyContent: 'center' } },
+        btn('New job', () => { openBuilder(); navigate(`#/p/${state.project.uid}/new`); }, { cls: 'primary', ic: 'plus' }),
+        btn('Use a workflow', () => workflowDialog(), { ic: 'flow' }))));
     return;
   }
   const jobs = filtered();
@@ -197,8 +219,28 @@ function selectionBar() {
     h('b', {}, `${jobs.length} selected`),
     h('span', { class: 'muted small selbar-uids' }, jobs.map((j) => j.uid).join(', ')),
     h('span', { class: 'grow' }),
-    act('queue', 'Queue', 'play'), act('kill', 'Stop', 'stop'), act('clear', 'Clear', 'undo'), act('delete', 'Delete', 'trash', 'danger'),
+    act('queue', 'Queue', 'play'), act('kill', 'Stop', 'stop'), act('clear', 'Clear', 'undo'),
+    btn(`Clone (${jobs.length})`, () => cloneSelected(jobs), { ic: 'copy',
+      title: 'Copies of these jobs in building state; the inputs between them link the copies (a chain cloned as a chain)' }),
+    btn('Workspaces…', () => workspacesDialog(jobs, renderJobs), { ic: 'workspace', title: 'Put these jobs in workspaces or take them out' }),
+    btn('Tags…', () => tagsDialog(jobs, renderJobs), { ic: 'tag', title: 'Add or remove tags' }),
+    act('delete', 'Delete', 'trash', 'danger'),
     btn('Deselect', () => clearSelection(), { ic: 'x', title: 'Esc' }));
+}
+
+async function cloneSelected(jobs) {
+  const puid = state.project.uid;
+  let clones;
+  try {
+    clones = await guard(api.cloneJobs(puid, { jobs: jobs.map((j) => j.uid) }));
+  } catch { return; }
+  const linked = clones.filter((c) => Object.values(c.inputs || {}).some((r) => clones.some((x) => x.uid === r.job))).length;
+  toast(`${clones.length} job${clones.length > 1 ? 's' : ''} cloned (${clones.map((c) => c.uid).join(', ')})`
+    + (linked ? `; ${linked} linked to the other copies` : ''), 'ok', 6000);
+  state.selection.clear();
+  clones.forEach((c) => state.selection.add(c.uid));
+  await refreshJobs();
+  renderJobs();
 }
 
 async function bulk(kind, jobs) {
@@ -341,9 +383,19 @@ function cardInside(job, rel, tree = false) {
       tree ? progress : null),
     h('div', { class: 'card-title', title: tree ? job.title : null }, job.title),
     tree ? msg || err || (job.status === 'completed' ? hl : null) || type || hl
-      : [type, hl, msg, progress, err, state.builder?.type && job.status === 'completed' && job.outputs.length ? outputChips(job) : null],
+      : [type, hl, msg, progress, err, cardTags(job), state.builder?.type && job.status === 'completed' && job.outputs.length ? outputChips(job) : null],
     cardFoot(job),
   ];
+}
+
+// Tags of a card (click: only the jobs with that tag); the workspaces of the job when all the jobs are shown.
+function cardTags(job) {
+  const tags = job.tags || [];
+  const ws = state.workspace ? [] : (job.workspaces || []);
+  if (!tags.length && !ws.length) return null;
+  return h('div', { class: 'card-tags' },
+    tags.map((t) => tagChip(t, { onClick: (tag) => { state.filter.tag = tag; renderProject(document.getElementById('content')); } })),
+    ws.map((w) => h('span', { class: 'ws-badge', title: state.workspaces.find((x) => x.uid === w)?.title || w }, w)));
 }
 
 function outputChips(job) {
@@ -367,8 +419,8 @@ function treeOptions(jobs) {
   if (treeScope && (treeScope.puid !== puid || !state.jobsByUid[treeScope.uid])) treeScope = null;
   return {
     puid,
-    jobs: state.jobs,
-    shown: f.text.trim() || f.status || f.category ? new Set(jobs.map((j) => j.uid)) : null,
+    jobs: workspaceJobs(),
+    shown: f.text.trim() || f.status || f.category || f.tag ? new Set(jobs.map((j) => j.uid)) : null,
     open: detailUid(),
     picked: state.selection,
     bar: selectionBar(),

@@ -60,6 +60,16 @@ CREATE TABLE IF NOT EXISTS jobs (
     PRIMARY KEY (project_uid, uid)
 );
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status);
+CREATE TABLE IF NOT EXISTS workspaces (
+    project_uid TEXT NOT NULL,
+    uid TEXT NOT NULL,
+    num INTEGER,
+    title TEXT,
+    description TEXT DEFAULT '',
+    created_at REAL,
+    created_by TEXT DEFAULT '',
+    PRIMARY KEY (project_uid, uid)
+);
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
@@ -94,9 +104,11 @@ MIGRATIONS = (
     ("jobs", "created_by", "TEXT DEFAULT ''"),
     ("jobs", "requested", "TEXT DEFAULT '{}'"),
     ("sessions", "label", "TEXT DEFAULT ''"),  # API tokens (scripts, AI agents) have one; browser sessions none
+    ("jobs", "workspaces", "TEXT DEFAULT '[]'"),
+    ("jobs", "tags", "TEXT DEFAULT '[]'"),
 )
 
-JSON_FIELDS = {"params", "inputs", "outputs", "resources", "highlights", "gpus", "requested"}
+JSON_FIELDS = {"params", "inputs", "outputs", "resources", "highlights", "gpus", "requested", "workspaces", "tags"}
 JSON_DEFAULTS: dict[str, Any] = {
     "params": {},
     "inputs": {},
@@ -105,11 +117,13 @@ JSON_DEFAULTS: dict[str, Any] = {
     "highlights": [],
     "gpus": [],
     "requested": {},
+    "workspaces": [],
+    "tags": [],
 }
 JOB_COLUMNS = (
     "project_uid", "uid", "num", "type", "title", "status", "params", "inputs", "outputs", "lane",
     "resources", "highlights", "notes", "progress", "message", "error", "pid", "cluster_job_id",
-    "gpus", "created_at", "queued_at", "started_at", "ended_at", "created_by", "requested",
+    "gpus", "created_at", "queued_at", "started_at", "ended_at", "created_by", "requested", "workspaces", "tags",
 )
 PROJECT_COLUMNS = ("uid", "num", "title", "description", "dir", "created_at", "updated_at", "archived", "job_counter",
                    "owner", "members")
@@ -217,7 +231,38 @@ class Database:
     def delete_project(self, uid: str) -> None:
         with self._lock:
             self._execute("DELETE FROM jobs WHERE project_uid = ?", (uid,))
+            self._execute("DELETE FROM workspaces WHERE project_uid = ?", (uid,))
             self._execute("DELETE FROM projects WHERE uid = ?", (uid,))
+
+    # --------------------------------------------------------------- workspaces
+    def create_workspace(self, project_uid: str, title: str, description: str = "", created_by: str = "") -> dict[str, Any]:
+        with self._lock:
+            num = int(self._one("SELECT COALESCE(MAX(num), 0) + 1 FROM workspaces WHERE project_uid = ?", (project_uid,))[0])
+            uid = f"W{num}"
+            self._execute("INSERT INTO workspaces (project_uid, uid, num, title, description, created_at, created_by) "
+                          "VALUES (?,?,?,?,?,?,?)", (project_uid, uid, num, title, description, time.time(), created_by))
+        return self.get_workspace(project_uid, uid)  # type: ignore[return-value]
+
+    def get_workspace(self, project_uid: str, uid: str) -> dict[str, Any] | None:
+        row = self._one("SELECT * FROM workspaces WHERE project_uid = ? AND uid = ?", (project_uid, uid))
+        return dict(row) if row else None
+
+    def list_workspaces(self, project_uid: str) -> list[dict[str, Any]]:
+        return [dict(r) for r in self._all("SELECT * FROM workspaces WHERE project_uid = ? ORDER BY num", (project_uid,))]
+
+    def update_workspace(self, project_uid: str, uid: str, **fields: Any) -> None:
+        data = {k: v for k, v in fields.items() if k in ("title", "description")}
+        if data:
+            self._execute(f"UPDATE workspaces SET {', '.join(f'{k} = ?' for k in data)} WHERE project_uid = ? AND uid = ?",
+                          (*data.values(), project_uid, uid))
+
+    def delete_workspace(self, project_uid: str, uid: str) -> None:
+        """The workspace goes; its jobs stay in the project (and in their other workspaces)."""
+        with self._lock:
+            for job in self.list_jobs(project_uid):
+                if uid in job["workspaces"]:
+                    self.update_job(project_uid, job["uid"], workspaces=[w for w in job["workspaces"] if w != uid])
+            self._execute("DELETE FROM workspaces WHERE project_uid = ? AND uid = ?", (project_uid, uid))
 
     # --------------------------------------------------------------------- jobs
     def create_job(self, project_uid: str, job_type: str, title: str, params: dict, inputs: dict,

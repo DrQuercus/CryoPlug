@@ -178,7 +178,7 @@ class Args:
             raise ToolError(f"'{name}' must be an object of name: value pairs")
         return value
 
-    def list(self, name: str) -> list[str]:
+    def list(self, name: str, sep: str = r"[,\s]+") -> list[str]:
         value = self._get(name)
         if value in (None, "", []):
             return []
@@ -190,7 +190,7 @@ class Args:
                 except ValueError:
                     value = text.strip("[]").split(",")
             else:
-                value = re.split(r"[,\s]+", text)
+                value = re.split(sep, text)
         if not isinstance(value, (list, tuple)):
             value = [value]
         return [str(v).strip().strip("'\"") for v in value if str(v).strip().strip("'\"")]
@@ -426,6 +426,10 @@ def job_line(job: dict[str, Any], types: dict[str, dict[str, Any]]) -> str:
         text += f" “{short(job['title'], 60)}”"
     if job.get("inputs"):
         text += " (" + ", ".join(f"{slot}←{ref['job']}.{ref['output']}" for slot, ref in job["inputs"].items()) + ")"
+    if job.get("tags"):
+        text += " [" + ", ".join(job["tags"]) + "]"
+    if job.get("workspaces"):
+        text += " {" + ",".join(job["workspaces"]) + "}"
     status = job["status"]
     if status == "completed" and job.get("outputs"):
         text += " → " + ", ".join(o["name"] for o in job["outputs"])
@@ -708,11 +712,21 @@ A project and its jobs, one line each: id, status, type, inputs (slot←job.outp
 (part of the job type name).""",
       {"project": PROJECT, "status": _string("Only jobs with these statuses (comma-separated)."),
        "type": _string("Only job types containing this text."),
+       "workspace": _string("Only the jobs of this workspace (W2)."), "tag": _string("Only the jobs with this tag."),
        "limit": _integer("At most this many jobs, the most recent (default 60).")},
       ("project",))
 def get_project(s: Session, a: Args) -> str:
     p = s.project(a.str("project"))
     jobs = sorted(s.jobs(p["uid"]), key=lambda j: j.get("num") or 0)
+    workspaces = s.get(f"/api/projects/{p['uid']}/workspaces")
+    ws = a.str("workspace").upper()
+    if ws:
+        if not any(w["uid"] == ws for w in workspaces):
+            raise ToolError(f"No workspace {ws} in {p['uid']}" + (f" (there are {', '.join(w['uid'] for w in workspaces)})" if workspaces else ""))
+        jobs = [j for j in jobs if ws in (j.get("workspaces") or [])]
+    tag = a.str("tag").lower()
+    if tag:
+        jobs = [j for j in jobs if tag in {x.lower() for x in j.get("tags") or []}]
     types = s.jobtypes()
     counts = Counter(j["status"] for j in jobs)
     lines = [f"{p['uid']} “{p['title']}” — {p['dir']}"]
@@ -723,6 +737,9 @@ def get_project(s: Session, a: Args) -> str:
         lines.append(", ".join(who))
     if p.get("description"):
         lines.append(short(p["description"], 400))
+    if workspaces:
+        lines.append("Workspaces: " + "; ".join(f"{w['uid']} “{short(w['title'], 50)}” ({w['num_jobs']} jobs)" for w in workspaces)
+                     + (f" — showing {ws}" if ws else ""))
     lines.append(f"{len(jobs)} job{'s' if len(jobs) != 1 else ''}" + (": " + ", ".join(f"{n} {st}" for st, n in counts.most_common()) if jobs else ""))
     wanted = {x.lower() for x in a.list("status")}
     kind = a.str("type").lower()
@@ -1003,6 +1020,8 @@ Check the job type first with describe_job_type. Answers the job id and what sti
        "queue": _boolean("Queue it right away (default false)."),
        "lane": _string("Optional lane (default: the default lane)."),
        "notes": _string("Optional notes kept with the job (e.g. why it was run)."),
+       "workspace": _string("Optional workspace (W2) to put the job in."),
+       "tags": _strings("Optional tags (e.g. \"best\", \"dataset 2\")."),
        "resources": _object("Optional compute choices: gpu_ids (list), num_cpus, partition, time, mem (SLURM).")},
       ("project", "type"), read_only=False, idempotent=False)
 def create_job(s: Session, a: Args) -> str:
@@ -1014,6 +1033,10 @@ def create_job(s: Session, a: Args) -> str:
             "title": a.str("title") or None, "lane": a.str("lane") or None, "notes": a.str("notes")}
     if a.dict("resources"):
         body["resources"] = a.dict("resources")
+    if a.str("workspace"):
+        body["workspaces"] = [a.str("workspace").upper()]
+    if a.list("tags", sep=","):
+        body["tags"] = a.list("tags", sep=",")
     job = s.post(f"/api/projects/{p['uid']}/jobs", body)
     lines = [f"Created {p['uid']}/{job['uid']}."]
     queued_error = ""
@@ -1044,10 +1067,13 @@ def _queue_state(s: Session, puid: str, job: dict[str, Any], queue_error: str = 
 
 @tool("update_job", "Change a job before it runs", """
 Change the parameters, inputs, title, notes, lane or compute choices of a job still in building state (clear_job
-first for a failed job). Only the parameters and inputs given change; an input set to null is disconnected.""",
+first for a failed job). Only the parameters and inputs given change; an input set to null is disconnected.
+Title, notes, tags and workspaces can change whatever the state of the job.""",
       {"project": PROJECT, "job": JOB, "params": _object("Parameter name → new value."),
        "inputs": _object("Input slot → \"J3.output\", \"J3\" or null."), "title": _string("New title."),
        "notes": _string("New notes."), "lane": _string("New lane."),
+       "tags": _strings("The tags of the job (replace the current ones; [] removes them)."),
+       "workspaces": _strings("The workspaces the job is in (W1, W2; replace the current ones)."),
        "resources": _object("Compute choices: gpu_ids, num_cpus, partition, time, mem.")},
       ("project", "job"), read_only=False, idempotent=True)
 def update_job(s: Session, a: Args) -> str:
@@ -1066,8 +1092,11 @@ def update_job(s: Session, a: Args) -> str:
             body[key] = a.str(key)
     if a.has("resources"):
         body["resources"] = a.dict("resources")
+    for key in ("tags", "workspaces"):
+        if a.has(key):
+            body[key] = [x.upper() for x in a.list(key)] if key == "workspaces" else a.list(key, sep=",")
     if not body:
-        raise ToolError("Nothing to change: give params, inputs, title, notes, lane or resources")
+        raise ToolError("Nothing to change: give params, inputs, title, notes, lane, tags, workspaces or resources")
     s.patch(f"/api/projects/{p['uid']}/jobs/{job['uid']}", body)
     detail = s.job(p["uid"], job["uid"])
     return "\n".join(["Updated."] + _job_summary(s, p["uid"], detail, notes) + _queue_state(s, p["uid"], detail))
@@ -1325,6 +1354,42 @@ def clone_job(s: Session, a: Args) -> str:
     detail = s.job(p["uid"], copy["uid"])
     return "\n".join([f"Copied {job['uid']} as {copy['uid']}."] + _job_summary(s, p["uid"], detail, notes)
                      + _queue_state(s, p["uid"], detail, error))
+
+
+@tool("clone_jobs", "Copy a chain of jobs", """
+Copy several jobs together, as CryoSPARC's Clone of a selection: each copy is in building state, and the inputs between
+the jobs copied link the copies (a chain copied as a chain; inputs from other jobs are kept). To re-run part of a pipeline
+with other settings: then update_job the copies and queue_job them (parents first).""",
+      {"project": PROJECT, "jobs": _strings("Job ids (J3, J4, J7)."), "workspace": _string("Optional workspace for the copies.")},
+      ("project", "jobs"), read_only=False, idempotent=False)
+def clone_jobs(s: Session, a: Args) -> str:
+    p = s.project(a.str("project"))
+    uids = [job_uid(u) for u in a.list("jobs")]
+    if not uids:
+        raise ToolError("Give the jobs to copy")
+    body: dict[str, Any] = {"jobs": uids}
+    if a.str("workspace"):
+        body["workspaces"] = [a.str("workspace").upper()]
+    copies = s.post(f"/api/projects/{p['uid']}/clone", body)
+    types = s.jobtypes()
+    order = sorted(uids, key=lambda u: int(u[1:]) if u[1:].isdigit() else 0)
+    return "\n".join([f"Copied {', '.join(order)} as {', '.join(c['uid'] for c in copies)} (building):"]
+                     + [job_line(c, types) for c in copies]
+                     + ["update_job changes them; queue_job runs them (each waits for its inputs)."])
+
+
+@tool("create_workspace", "Create a workspace", """
+A workspace of a project, as in CryoSPARC: a named group of its jobs (one dataset, one stage, one question); a job can be
+in several. Give the jobs to put in it now; create_job (workspace) and update_job (workspaces) add others.""",
+      {"project": PROJECT, "title": _string("Title, e.g. \"2D cleaning\"."), "description": _string("Optional description."),
+       "jobs": _strings("Optional jobs to put in it (J3, J4).")},
+      ("project", "title"), read_only=False, idempotent=False)
+def create_workspace(s: Session, a: Args) -> str:
+    p = s.project(a.str("project"))
+    ws = s.post(f"/api/projects/{p['uid']}/workspaces", {"title": a.str("title"), "description": a.str("description"),
+                                                        "jobs": [job_uid(u) for u in a.list("jobs")]})
+    return (f"Created workspace {ws['uid']} “{ws['title']}” in {p['uid']} with {ws['num_jobs']} job{'s' if ws['num_jobs'] != 1 else ''}. "
+            "get_project with workspace shows its jobs.")
 
 
 # ================================================================== workflows

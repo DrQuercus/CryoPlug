@@ -127,6 +127,8 @@ const ICONS = {
   sort: 'M7 4v16M3.5 16.5L7 20l3.5-3.5M13 6h8M13 11h6M13 16h4',
   film: 'M4 4h16v16H4zM8 4v16M16 4v16M4 8h4M4 12h4M4 16h4M16 8h4M16 12h4M16 16h4',
   picks: 'M7.5 10a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM16.5 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM10 19.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 3h3M3 3v3M21 21h-3M21 21v-3',
+  tag: 'M3 12V4h8l10 10-8 8zM7.5 7.5h.01',
+  workspace: 'M3 7h7l2 2h9v10H3zM3 7V5h6l2 2',
   blank: 'M0 0', // draws nothing: keeps menu labels aligned
 };
 
@@ -189,7 +191,8 @@ export function modal({ title, body, footer = [], wide = false, onClose = null }
   root.appendChild(backdrop);
   document.addEventListener('keydown', onKey);
   const first = backdrop.querySelector('input, select, textarea, button.primary');
-  if (first) setTimeout(() => first.focus(), 30);
+  // never taken from a field focused meanwhile (what is typed there would land in the first field)
+  if (first) setTimeout(() => { if (!backdrop.contains(document.activeElement)) first.focus(); }, 30);
   return { close, el: backdrop };
 }
 

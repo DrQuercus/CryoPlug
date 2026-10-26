@@ -89,10 +89,25 @@ voir en 3D, cloner, réinitialiser, copier le chemin du dossier, supprimer. Le r
 compte les jobs par statut ; un clic sur un statut (par exemple *failed*) n'affiche que ces jobs.
 
 Comme dans CryoSPARC : **Ctrl/⌘ + clic** ajoute un job à la sélection, **Maj + clic** une plage,
-**Ctrl/⌘ + A** tous les jobs affichés ; la barre qui apparaît met en file, arrête, réinitialise ou supprime
-les jobs sélectionnés. Quand un job est ouvert, ses entrées sont entourées en violet et les jobs qui
-l'utilisent en vert. Touches : **N** nouveau job, **/** filtrer, **G** cartes ⇄ arbre, **Échap** fermer,
-**?** liste des raccourcis.
+**Ctrl/⌘ + A** tous les jobs affichés ; la barre qui apparaît met en file, arrête, réinitialise, **clone**,
+range dans des workspaces, étiquette ou supprime les jobs sélectionnés. Cloner plusieurs jobs clone une chaîne :
+les entrées qui relient les jobs sélectionnés relient leurs copies (pour refaire une partie du pipeline avec
+d'autres réglages), les autres entrées restent branchées sur les mêmes jobs. Quand un job est ouvert, ses entrées
+sont entourées en violet et les jobs qui l'utilisent en vert. Touches : **N** nouveau job, **/** filtrer,
+**G** cartes ⇄ arbre, **Échap** fermer, **?** liste des raccourcis.
+
+### Workspaces et étiquettes
+
+Comme dans CryoSPARC, un projet se range en **workspaces** : des groupes nommés de jobs (un jeu de données,
+une étape, une question), W1, W2… Le menu tout à gauche de la barre d'outils passe de **All jobs** à un
+workspace, en crée (*New workspace…*), le renomme, le décrit ou le supprime (ses jobs restent dans le projet).
+Un workspace ouvert ne montre que ses jobs (cartes, arbre et compteurs), son nom s'ajoute au fil d'Ariane, et
+les jobs créés, clonés ou issus d'un workflow y entrent. Un job peut être dans plusieurs workspaces : menu
+**⋯ → Workspaces…** d'un job, ou bouton *Workspaces…* de la barre de sélection.
+
+Les **étiquettes** (*Tags…*, dans les mêmes menus) marquent les jobs (« meilleure carte », « à vérifier »,
+« dataset 2 ») ; elles s'affichent sur les cartes, un clic sur l'une n'affiche que les jobs qui la portent, et
+le filtre texte les cherche aussi. Le détail d'un job montre ses étiquettes et ses workspaces sous les notes.
 
 ### Vue en arbre (Tree)
 

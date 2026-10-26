@@ -266,6 +266,19 @@ def test_agent_tools_end_to_end(app_client, manager, synthetic):
     project = call(s, "get_project", project="P1", status="completed")
     assert "J1   completed import_maps" in project.text and "J2   completed map_fsc" in project.text
 
+    # workspaces, tags and a chain copied as a chain
+    ws = call(s, "create_workspace", project="P1", title="Maps", jobs=["J1", "J2"])
+    assert "Created workspace W1 “Maps” in P1 with 2 jobs" in ws.text, ws.text
+    tagged = call(s, "update_job", project="P1", job="J2", tags="best, dataset 2")
+    assert not tagged.error, tagged.text
+    chain = call(s, "clone_jobs", project="P1", jobs=["J2", "J1"], workspace="W1")
+    assert "Copied J1, J2 as" in chain.text and "half_maps←J" in chain.text, chain.text
+    in_ws = call(s, "get_project", project="P1", workspace="w1")
+    assert "Workspaces: W1 “Maps” (4 jobs) — showing W1" in in_ws.text and "[best, dataset 2]" in in_ws.text, in_ws.text
+    assert "J3 " not in in_ws.text  # not in the workspace
+    assert "best" in call(s, "get_project", project="P1", tag="BEST").text
+    assert call(s, "get_project", project="P1", workspace="W7").error
+
     browse = call(s, "browse_server_files", path=str(synthetic["cryosparc_job"]), pattern="*half*")
     assert "half_A.mrc" in browse.text and "volume_map_sharp" not in browse.text
     assert "cryoplug-model-building" in call(s, "list_skills").text

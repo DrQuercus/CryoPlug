@@ -5,6 +5,7 @@ import { closeDetail, detailIsLive, detailMode, detailUid, openDetail, refreshDe
 import { installFileDrop } from './importer.js';
 import { renderHelp, renderProjects, renderTools } from './pages.js';
 import { clearSelection, renderJobs, renderProject, selectAllShown } from './project.js';
+import { currentWorkspace, leaveWorkspaces, loadWorkspaces } from './workspaces.js';
 import { renderResources, stopResources } from './resources.js';
 import { renderPasswordChange, renderSettings } from './settings.js';
 import { treeKey } from './tree.js';
@@ -56,6 +57,7 @@ for (const type of ['dragend', 'drop']) {
   }, true);
 }
 document.addEventListener('cryoplug-builder-type', () => renderJobs()); // output chips, cards dragged to the builder
+document.addEventListener('cryoplug-workspace', () => { if (state.route.page === 'project') setCrumbs(state.route); });
 
 // ------------------------------------------------------------------ scroll after a reload
 // The pages scroll inside .content, whose position browsers do not restore on a reload (F5): it is kept for the tab
@@ -112,6 +114,8 @@ function setCrumbs(route) {
   const items = [h('a', { href: '#/projects' }, 'Projects')];
   if (route.page === 'project' && state.project) {
     items.push(h('span', { class: 'sep' }, '›'), h('a', { href: `#/p/${state.project.uid}` }, h('b', {}, state.project.uid), ` ${state.project.title}`));
+    const ws = currentWorkspace();
+    if (ws) items.push(h('span', { class: 'sep' }, '›'), h('a', { href: `#/p/${state.project.uid}`, title: 'Workspace' }, h('b', {}, ws.uid), ` ${ws.title}`));
     if (route.panel === 'edit') items.push(h('span', { class: 'sep' }, '›'), h('span', {}, `Edit ${route.juid}`));
     else if (route.juid) items.push(h('span', { class: 'sep' }, '›'), h('span', {}, route.juid));
     if (route.panel === 'new') items.push(h('span', { class: 'sep' }, '›'), h('span', {}, 'New job'));
@@ -134,6 +138,7 @@ async function route() {
   if (r.page !== 'project') {
     state.project = null;
     state.jobs = [];
+    leaveWorkspaces();
     jobsSignature = '';
     closeDetail();
     closeBuilder();
@@ -162,8 +167,9 @@ async function route() {
     }
     state.jobs = [];
     state.selection.clear();
+    state.workspace = '';
     jobsSignature = '';
-    await refreshJobs();
+    await Promise.all([refreshJobs(), loadWorkspaces()]);
     renderProject(content);
   }
   setCrumbs(r);

@@ -9,10 +9,12 @@ export const state = {
   project: null, // current project record
   jobs: [], // jobs of the current project
   jobsByUid: {},
+  workspaces: [], // workspaces of the current project (see workspaces.js)
+  workspace: '', // the one open ('' = all the jobs)
   route: { page: 'projects' },
   view: localStorage.getItem('cryoplug.view') || 'cards',
   cardSort: localStorage.getItem('cryoplug.cardSort') || 'newest', // order of the job cards (see project.js)
-  filter: { text: '', status: '', category: '' },
+  filter: { text: '', status: '', category: '', tag: '' },
   builder: null, // { type, editing, inputs, params, title, lane, requested, gpuMode }
   selection: new Set(), // job uids picked with Ctrl/Shift-click for bulk actions
   selectionAnchor: null,

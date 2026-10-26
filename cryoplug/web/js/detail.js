@@ -13,6 +13,7 @@ import { liveDashboard } from './live.js';
 import { pickInspector } from './picker.js';
 import { barChart, heatmap, lineChart } from './plots.js';
 import { builderHref, jobHref, navigate, refreshJobs, restricted, state, typeTitle } from './state.js';
+import { tagChip, tagsDialog, workspacesDialog } from './workspaces.js';
 import {
   ACTIVE, ago, btn, clear, confirmDialog, copyText, fmtSize, fmtTime, guard, h, icon, jobDuration, LIVE, liveAgo, liveDuration, popupMenu,
   statusChip, statusMark, toast,
@@ -255,6 +256,8 @@ export function jobMenuItems(job, anchor, { withOpen = false } = {}) {
   }
   items.push({ separator: true });
   items.push({ key: 'clone', label: 'Clone', ic: 'copy', action: () => jobOps.clone(job) });
+  items.push({ key: 'workspaces', label: 'Workspaces…', ic: 'workspace', action: () => workspacesDialog([job], () => {}) });
+  items.push({ key: 'tags', label: 'Tags…', ic: 'tag', action: () => tagsDialog([job], () => {}) });
   if (['failed', 'killed'].includes(job.status) && state.types[job.type]?.continuable) {
     items.push({ key: 'resume', label: 'Resume from the last iteration', ic: 'play', action: () => jobOps.resume(job) });
   }
@@ -502,7 +505,15 @@ function renderOverview(body) {
     try { await guard(api.updateJob(puid, job.uid, { notes: e.target.value }), 'Notes saved'); } catch { /* shown */ }
   } });
   notes.value = job.notes || '';
-  body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'Notes'), notes));
+  const workspaces = (job.workspaces || []).map((w) => state.workspaces.find((x) => x.uid === w) || { uid: w, title: '' });
+  const editBtn = (label, action) => h('button', { class: 'icon-btn', type: 'button', title: label, 'aria-label': label, onclick: action }, icon('edit'));
+  body.appendChild(h('div', { class: 'section' }, h('h4', {}, 'Notes'), notes,
+    h('div', { class: 'box kv job-org' },
+      h('span', {}, 'Tags'), h('span', { class: 'org-row' }, (job.tags || []).length ? job.tags.map((tg) => tagChip(tg)) : h('span', { class: 'muted' }, '—'),
+        editBtn('Edit the tags', () => tagsDialog([job], () => {}))),
+      h('span', {}, 'Workspaces'), h('span', { class: 'org-row' },
+        workspaces.length ? workspaces.map((w) => h('span', { class: 'ws-badge', title: w.title }, w.uid, w.title ? ` ${w.title}` : '')) : h('span', { class: 'muted' }, '—'),
+        editBtn('Put in workspaces', () => workspacesDialog([job], () => {}))))));
 
   // each key and value in its own element: adjacent text nodes would merge into a single grid cell
   const details = [['Job type', job.type], ['Created', fmtTime(job.created_at)], ['Started', fmtTime(job.started_at) || '—'],

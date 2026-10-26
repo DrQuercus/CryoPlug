@@ -32,6 +32,13 @@ async function request(method, url, body, isForm = false) {
 }
 
 const enc = encodeURIComponent;
+
+// The workspace open on the project page ('' = all the jobs): the jobs created, cloned or made from a workflow go
+// into it, as in CryoSPARC.
+let workspace = '';
+export function setWorkspace(uid) { workspace = uid || ''; }
+const inWorkspace = (body = {}) => (workspace && !body.workspaces ? { ...body, workspaces: [workspace] } : body);
+
 const viewOptions = (encoding, lowpass) => `${encoding ? `&enc=${encoding}` : ''}${lowpass ? `&lowpass=${lowpass}` : ''}`;
 
 export const api = {
@@ -80,14 +87,20 @@ export const api = {
   deleteProject: (p, files) => request('DELETE', `/api/projects/${p}?delete_files=${!!files}`),
 
   jobs: (p) => request('GET', `/api/projects/${p}/jobs`),
-  createJob: (p, body) => request('POST', `/api/projects/${p}/jobs`, body),
+  createJob: (p, body) => request('POST', `/api/projects/${p}/jobs`, inWorkspace(body)),
   job: (p, j) => request('GET', `/api/projects/${p}/jobs/${j}`),
   updateJob: (p, j, body) => request('PATCH', `/api/projects/${p}/jobs/${j}`, body),
   queueJob: (p, j, lane) => request('POST', `/api/projects/${p}/jobs/${j}/queue`, lane ? { lane } : {}),
   killJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/kill`),
   clearJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/clear`),
   resumeJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/continue`, {}),
-  cloneJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/clone`),
+  cloneJob: (p, j, body = {}) => request('POST', `/api/projects/${p}/jobs/${j}/clone`, inWorkspace(body)),
+  cloneJobs: (p, body) => request('POST', `/api/projects/${p}/clone`, inWorkspace(body)),
+  workspaces: (p) => request('GET', `/api/projects/${p}/workspaces`),
+  createWorkspace: (p, body) => request('POST', `/api/projects/${p}/workspaces`, body),
+  updateWorkspace: (p, w, body) => request('PATCH', `/api/projects/${p}/workspaces/${w}`, body),
+  deleteWorkspace: (p, w) => request('DELETE', `/api/projects/${p}/workspaces/${w}`),
+  workspaceJobs: (p, w, body) => request('POST', `/api/projects/${p}/workspaces/${w}/jobs`, body),
   deleteJob: (p, j, force) => request('DELETE', `/api/projects/${p}/jobs/${j}?force=${!!force}`),
   log: (p, j, offset) => request('GET', `/api/projects/${p}/jobs/${j}/log?offset=${offset || 0}`),
   files: (p, j, sub) => request('GET', `/api/projects/${p}/jobs/${j}/files?sub=${enc(sub || '')}`),
@@ -98,7 +111,7 @@ export const api = {
     fd.append('file', file);
     return request('POST', `/api/projects/${p}/jobs/${j}/interactive/upload`, fd, true);
   },
-  instantiate: (p, wid, body) => request('POST', `/api/projects/${p}/workflows/${wid}`, body),
+  instantiate: (p, wid, body) => request('POST', `/api/projects/${p}/workflows/${wid}`, inWorkspace(body)),
 
   fileUrl: (p, path, download = false) => `/api/projects/${p}/file?path=${enc(path)}${download ? '&download=true' : ''}`,
   micrographUrl: (p, path, size = 1024, lowpass = 20, apix = 0) => `/api/projects/${p}/micrograph?path=${enc(path)}&size=${size}&lowpass=${lowpass}&apix=${apix}`,

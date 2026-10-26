@@ -366,7 +366,7 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     def create_job(puid: str, request: Request, body: dict = Body(...)) -> dict[str, Any]:
         job = manager.create_job(puid, body.get("type", ""), body.get("params"), body.get("inputs"), body.get("title"),
                                  body.get("lane"), body.get("notes", ""), created_by=author(current_user(request)), roots=roots(request),
-                                 requested=body.get("resources"))
+                                 requested=body.get("resources"), workspaces=body.get("workspaces"), tags=body.get("tags"))
         if body.get("queue"):
             try:
                 job = manager.queue_job(puid, job["uid"], body.get("lane"), roots=roots(request))
@@ -380,7 +380,7 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
 
     @app.patch("/api/projects/{puid}/jobs/{juid}")
     def update_job(puid: str, juid: str, request: Request, body: dict = Body(...)) -> dict[str, Any]:
-        fields = {k: body.get(k) for k in ("params", "inputs", "title", "notes", "lane") if k in body}
+        fields = {k: body.get(k) for k in ("params", "inputs", "title", "notes", "lane", "workspaces", "tags") if k in body}
         if "resources" in body:
             fields["requested"] = body.get("resources") or {}
         return manager.update_job(puid, juid, roots=roots(request), **fields)
@@ -409,8 +409,39 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
         return manager.continue_job(puid, juid, (body or {}).get("lane"), roots=roots(request))
 
     @app.post("/api/projects/{puid}/jobs/{juid}/clone")
-    def clone_job(puid: str, juid: str, request: Request) -> dict[str, Any]:
-        return manager.clone_job(puid, juid, created_by=author(current_user(request)), roots=roots(request))
+    def clone_job(puid: str, juid: str, request: Request, body: dict = Body(default={})) -> dict[str, Any]:
+        return manager.clone_job(puid, juid, created_by=author(current_user(request)), roots=roots(request),
+                                 workspaces=(body or {}).get("workspaces"))
+
+    @app.post("/api/projects/{puid}/clone")
+    def clone_jobs(puid: str, request: Request, body: dict = Body(...)) -> list[dict[str, Any]]:
+        """Several jobs cloned together ({"jobs": [...]}): the inputs between them link the clones."""
+        return manager.clone_jobs(puid, list(body.get("jobs") or []), created_by=author(current_user(request)),
+                                  roots=roots(request), workspaces=body.get("workspaces"))
+
+    # ---------------------------------------------------------- workspaces
+    @app.get("/api/projects/{puid}/workspaces")
+    def list_workspaces(puid: str) -> list[dict[str, Any]]:
+        return manager.workspaces(puid)
+
+    @app.post("/api/projects/{puid}/workspaces")
+    def create_workspace(puid: str, request: Request, body: dict = Body(...)) -> dict[str, Any]:
+        return manager.create_workspace(puid, body.get("title", ""), body.get("description", ""),
+                                        created_by=author(current_user(request)), jobs=body.get("jobs"))
+
+    @app.patch("/api/projects/{puid}/workspaces/{wuid}")
+    def update_workspace(puid: str, wuid: str, body: dict = Body(...)) -> dict[str, Any]:
+        return manager.update_workspace(puid, wuid, title=body.get("title"), description=body.get("description"))
+
+    @app.delete("/api/projects/{puid}/workspaces/{wuid}")
+    def delete_workspace(puid: str, wuid: str) -> dict[str, Any]:
+        manager.delete_workspace(puid, wuid)
+        return {"deleted": wuid}
+
+    @app.post("/api/projects/{puid}/workspaces/{wuid}/jobs")
+    def workspace_jobs(puid: str, wuid: str, body: dict = Body(...)) -> dict[str, Any]:
+        """Jobs put in ({"add": [...]}) or taken out of ({"remove": [...]}) the workspace."""
+        return manager.workspace_jobs(puid, wuid, add=body.get("add"), remove=body.get("remove"))
 
     @app.delete("/api/projects/{puid}/jobs/{juid}")
     def delete_job(puid: str, juid: str, force: bool = False) -> dict[str, Any]:
@@ -689,7 +720,8 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     def instantiate(puid: str, wid: str, request: Request, body: dict = Body(default={})) -> dict[str, Any]:
         try:
             return manager.instantiate_workflow(puid, wid, body.get("overrides"), body.get("include"), bool(body.get("queue")),
-                                                body.get("lane"), created_by=author(current_user(request)), roots=roots(request))
+                                                body.get("lane"), created_by=author(current_user(request)), roots=roots(request),
+                                                workspaces=body.get("workspaces"))
         except KeyError as exc:
             raise HTTPException(404, str(exc)) from None
 

@@ -312,8 +312,14 @@ section 6). La commande affiche les jobs d'import à créer.
 - En haut à droite, le **résumé** compte les jobs par statut (en cours, en file, en attente, échoués) :
   un clic sur un statut n'affiche que ces jobs, un second clic revient à tous.
 - **Ctrl/⌘ + clic** ajoute un job à la sélection, **Maj + clic** une plage, **Ctrl/⌘ + A** tous les jobs
-  affichés ; la barre de sélection propose **Queue**, **Stop**, **Clear** et **Delete** (avec le nombre de
-  jobs concernés par chaque action et une confirmation).
+  affichés ; la barre de sélection propose **Queue**, **Stop**, **Clear**, **Clone**, **Workspaces…**,
+  **Tags…** et **Delete** (avec le nombre de jobs concernés par chaque action et une confirmation). Cloner une
+  sélection clone une chaîne : les copies sont reliées entre elles comme les originaux.
+- **Workspaces** (comme dans CryoSPARC) : le menu à gauche de la barre d'outils passe de *All jobs* à un groupe
+  nommé de jobs (W1, W2…), en crée, le renomme ou le supprime ; un workspace ouvert ne montre que ses jobs
+  (cartes, arbre, compteurs) et reçoit les jobs créés. Un job peut être dans plusieurs workspaces.
+- **Étiquettes** : *Tags…* marque les jobs (« meilleure carte », « dataset 2 ») ; un clic sur une étiquette d'une
+  carte filtre les jobs qui la portent.
 - **N** nouveau job, **/** filtrer, **G** cartes ⇄ arbre, **Échap** vide la sélection ou ferme le détail,
   **?** liste des raccourcis.
 - Le bouton de **tri** (à droite des filtres) change l'ordre des cartes : les plus récents ou les plus anciens
@@ -921,6 +927,7 @@ Un jeton se révoque dans *Settings › AI agents* ou avec `cryoplug user token 
 | `kill_job`, `clear_job` | arrêter un job ; remettre en préparation un job en échec |
 | `control_job` | piloter un job « live » : arrêt après le cycle en cours (avec ses sorties), pause, reprise, nouvelles limites d'acceptation |
 | `resume_job` | relancer un raffinement ou une classification 3D RELION en échec depuis sa dernière itération (Continue de RELION) |
+| `clone_jobs`, `create_workspace` | copier une chaîne de jobs (les copies reliées entre elles) ; ranger des jobs dans un workspace (`get_project workspace=W1`, étiquettes avec `update_job tags=`) |
 | `list_workflows`, `apply_workflow` | les chaînes complètes prêtes à l'emploi |
 | `browse_server_files`, `list_job_files`, `read_project_file`, `map_info` | trouver les données, lire les fichiers texte, en-tête d'une carte |
 | `upload_file` | envoyer un fichier ou un dossier de l'ordinateur de l'assistant dans le projet (reprise, pas de doublon) ; répond le job d'import à créer |
