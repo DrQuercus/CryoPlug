@@ -90,7 +90,8 @@ compte les jobs par statut ; un clic sur un statut (par exemple *failed*) n'affi
 
 Comme dans CryoSPARC : **Ctrl/⌘ + clic** ajoute un job à la sélection, **Maj + clic** une plage,
 **Ctrl/⌘ + A** tous les jobs affichés ; la barre qui apparaît met en file, arrête, réinitialise, **clone**,
-range dans des workspaces, étiquette ou supprime les jobs sélectionnés. Cloner plusieurs jobs clone une chaîne :
+range dans des workspaces, étiquette ou supprime les jobs sélectionnés ; **Compare** superpose les FSC des jobs
+sélectionnés, met leurs résultats clés côte à côte et ouvre leurs cartes ensemble dans le visualiseur 3D. Cloner plusieurs jobs clone une chaîne :
 les entrées qui relient les jobs sélectionnés relient leurs copies (pour refaire une partie du pipeline avec
 d'autres réglages), les autres entrées restent branchées sur les mêmes jobs. Quand un job est ouvert, ses entrées
 sont entourées en violet et les jobs qui l'utilisent en vert. Touches : **N** nouveau job, **/** filtrer,

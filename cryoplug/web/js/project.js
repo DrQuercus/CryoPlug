@@ -9,6 +9,7 @@ import {
   ACTIVE, ago, btn, clear, confirmDialog, fmtSize, fmtTime, guard, h, icon, liveAgo, liveDuration, modal, popupMenu, runAction, statusChip,
   toast,
 } from './ui.js';
+import { compareJobs } from './compare.js';
 import { currentWorkspace, inWorkspace, tagChip, tagsDialog, workspaceButton, workspacesDialog } from './workspaces.js';
 
 const STATUSES = ['building', 'queued', 'launched', 'running', 'waiting', 'completed', 'failed', 'killed'];
@@ -224,6 +225,8 @@ function selectionBar() {
     h('span', { class: 'muted small selbar-uids' }, jobs.map((j) => j.uid).join(', ')),
     h('span', { class: 'grow' }),
     act('queue', 'Queue', 'play'), act('kill', 'Stop', 'stop'), act('clear', 'Clear', 'undo'),
+    jobs.length > 1 ? btn('Compare', () => compareJobs(jobs), { ic: 'graph',
+      title: 'Their FSC curves overlaid, their key results side by side, their maps together in 3D' }) : null,
     btn(`Clone (${jobs.length})`, () => cloneSelected(jobs), { ic: 'copy',
       title: 'Copies of these jobs in building state; the inputs between them link the copies (a chain cloned as a chain)' }),
     btn('Workspaces…', () => workspacesDialog(jobs, renderJobs), { ic: 'workspace', title: 'Put these jobs in workspaces or take them out' }),

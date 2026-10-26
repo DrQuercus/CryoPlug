@@ -314,7 +314,8 @@ section 6). La commande affiche les jobs d'import à créer.
 - **Ctrl/⌘ + clic** ajoute un job à la sélection, **Maj + clic** une plage, **Ctrl/⌘ + A** tous les jobs
   affichés ; la barre de sélection propose **Queue**, **Stop**, **Clear**, **Clone**, **Workspaces…**,
   **Tags…** et **Delete** (avec le nombre de jobs concernés par chaque action et une confirmation). Cloner une
-  sélection clone une chaîne : les copies sont reliées entre elles comme les originaux.
+  sélection clone une chaîne : les copies sont reliées entre elles comme les originaux. **Compare** superpose les
+  courbes FSC des jobs sélectionnés, aligne leurs résultats clés dans un tableau et ouvre leurs cartes ensemble en 3D.
 - **Workspaces** (comme dans CryoSPARC) : le menu à gauche de la barre d'outils passe de *All jobs* à un groupe
   nommé de jobs (W1, W2…), en crée, le renomme ou le supprime ; un workspace ouvert ne montre que ses jobs
   (cartes, arbre, compteurs) et reçoit les jobs créés. Un job peut être dans plusieurs workspaces.

@@ -1161,3 +1161,6 @@ button.tag-chip:hover { border-color: var(--tc); color: var(--ink-1); }
 .card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
 .job-org { margin-top: 8px; align-items: center; }
 .org-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.compare h4 { margin: 4px 0 8px; }
+.compare h4:not(:first-child) { margin-top: 18px; }
+.compare svg { max-width: 100%; height: auto; }
