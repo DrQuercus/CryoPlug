@@ -24,7 +24,7 @@ function fmtVal(m, v, unit = true) {
 }
 
 // `finish(payload)`: Done of a waiting curation; `curate(limits)`: a curation job of these micrographs from these limits.
-export function exposureCurator(sec, { puid, job, finish = null, widen = null, curate = null }) {
+export function exposureCurator(sec, { puid, job, finish = null, widen = null, curate = null, applyLive = null }) {
   const root = h('div', { class: 'xc', tabindex: 0, role: 'application', 'aria-label': sec.title });
   const editable = !!(sec.editable && sec.waiting && job.status === 'waiting' && finish);
   root.append(h('div', { class: 'muted small' }, 'Loading the micrographs…'));
@@ -493,6 +493,8 @@ export function exposureCurator(sec, { puid, job, finish = null, widen = null, c
       title: 'Keep the accepted micrographs' }) : null;
     const curateBtn = !editable && !decided && curate ? btn('Curate…', () => curate(Object.fromEntries(limits)), { cls: 'primary', ic: 'next',
       title: 'A curation job of these micrographs, starting from the limits set here' }) : null;
+    const liveBtn = applyLive ? btn('Apply to the session', () => applyLive(Object.fromEntries(limits)), { cls: 'primary', ic: 'check',
+      title: 'The live job sorts the micrographs with these limits from its next cycle' }) : null;
     const resetAll = draggable ? btn('No limits', () => { limits.clear(); changed(); }, { cls: 'small', title: 'Remove every limit' }) : null;
 
     root.addEventListener('keydown', (ev) => {
@@ -515,7 +517,7 @@ export function exposureCurator(sec, { puid, job, finish = null, widen = null, c
         driftBox, values)),
       actions);
     root.replaceChildren(
-      h('div', { class: 'xc-head' }, h('h4', {}, sec.title), summary, h('span', { class: 'grow' }), saveState, curateBtn, doneBtn),
+      h('div', { class: 'xc-head' }, h('h4', {}, sec.title), summary, h('span', { class: 'grow' }), saveState, curateBtn, liveBtn, doneBtn),
       hint,
       h('div', { class: 'xc-body' }, viewer, side),
       h('div', { class: 'xc-bottom' }, table, scatterBox));

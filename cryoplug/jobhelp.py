@@ -312,6 +312,10 @@ HELP: dict[str, dict[str, Any]] = {
             "pour une 2D rapide.",
             "Kill arrête tout sans sorties ; « Stop after this cycle » traite les derniers films puis donne les sorties.",
             "« Stop after no new movie for » arrête le job seul à la fin de la session.",
+            "Limites d'acceptation en direct : tirez-les sur les histogrammes des expositions puis « Apply to the "
+            "session » ; tout est retrié au cycle suivant. « Pause » fait attendre les films, « Resume » reprend.",
+            "« Streaming 2D classification » : classes 2D des particules déjà extraites, relancées quand assez de "
+            "nouvelles particules arrivent ; à l'arrêt, la galerie permet « Select these classes ».",
             "Depuis le job terminé, « Curate… » dans les expositions crée un tri interactif de toutes les micrographies.",
         ],
         "next": ["relion_curate", "relion_class2d", "relion_pick_inspect", "relion_extract"],

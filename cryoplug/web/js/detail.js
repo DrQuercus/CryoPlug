@@ -558,8 +558,9 @@ function reportSection(sec, puid, job) {
         ? (threshold) => newPickInspection(job, threshold) : null,
     })));
   } else if (sec.kind === 'live') {
+    const said = { stop: 'The live job stops after this cycle', pause: 'Live session paused', resume: 'Live session resumed' };
     wrap.append(h('div', { class: 'box' }, liveDashboard(sec, {
-      job, stop: () => act(api.control(puid, job.uid, 'stop'), 'The live job stops after this cycle'),
+      job, control: (action) => act(api.control(puid, job.uid, action), said[action] || action),
     })));
   } else if (sec.kind === 'exposures') {
     const mics = (job.outputs || []).find((o) => o.type === 'micrographs' && o.name === (sec.source_output || 'micrographs'))
@@ -569,6 +570,8 @@ function reportSection(sec, puid, job) {
       finish: (payload) => act(api.finish(puid, job.uid, JSON.stringify(payload)), 'Curation saved'),
       widen: () => widenFor(job),
       curate: (sec.curate || sec.live) && job.status === 'completed' && mics ? (limits) => newCuration(job, mics, limits) : null,
+      applyLive: sec.live && ['launched', 'running'].includes(job.status)
+        ? (limits) => act(api.control(puid, job.uid, 'thresholds', limits), 'New acceptance limits: applied at the next cycle') : null,
     })));
   } else if (sec.kind === 'image') {
     wrap.append(h('h4', {}, sec.title), h('a', { href: api.fileUrl(puid, sec.path), target: '_blank', rel: 'noopener' },

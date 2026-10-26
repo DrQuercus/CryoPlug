@@ -595,7 +595,9 @@ def _wait_for(manager, puid, juid, cond, timeout=180):
 
 def test_live_preprocessing(manager, movies, tmp_path):
     """Live processing: the movies arriving in a folder are imported, motion-corrected, CTF-estimated, sorted, picked
-    and extracted at every cycle, only the new ones (--only_do_unfinished); Stop ends the job with its outputs."""
+    and extracted at every cycle, only the new ones (--only_do_unfinished); the acceptance limits change from the panel,
+    the session pauses and resumes, a streaming 2D classification follows the particles; Stop ends the job with its
+    outputs."""
     import shutil
     folder = tmp_path / "session" / "Movies"
     folder.mkdir(parents=True)
@@ -605,23 +607,43 @@ def test_live_preprocessing(manager, movies, tmp_path):
             tmp = folder / f".part_{name}"
             shutil.copy(movies["folder"] / name, tmp)
             tmp.replace(folder / name)  # complete at once, as a movie written by the microscope software
+
+    def counts():
+        return _live(manager, puid, uid).get("counts") or {}
     puid = manager.create_project("Live")["uid"]
     job = manager.create_job(puid, "relion_live", {
         "movies": str(folder / "*.mrc"), "pixel_size": 1.0, "dose_per_frame": 1.5, "gain": str(movies["gain"]),
         "patches_x": 1, "patches_y": 1, "threads": 2, "mpi": 1, "interval": 2, "settle": 0, "max_ctf_resolution": 8.0,
-        "picking": "log", "diameter_min": 50, "diameter_max": 70, "extract": True, "box": 64, "rescale": 32}, {})
+        "picking": "log", "diameter_min": 50, "diameter_max": 70, "extract": True, "box": 64, "rescale": 32,
+        "class2d": True, "class2d_min": 10, "class2d_every": 100000, "class2d_classes": 2, "class2d_batches": 10}, {})
     manager.queue_job(puid, job["uid"])
     uid = job["uid"]
     live = _wait_for(manager, puid, uid, lambda j: _live(manager, puid, uid).get("status") == "waiting for movies")
     assert live["status"] == "running"
     arrive("mic_001.mrc", "mic_002.mrc")
-    _wait_for(manager, puid, uid, lambda j: (_live(manager, puid, uid).get("counts") or {}).get("particles", 0) > 0)
-    counts = _live(manager, puid, uid)["counts"]
-    assert counts["movies"] == 2 and counts["ctf"] == 2 and counts["accepted"] == 2
+    _wait_for(manager, puid, uid, lambda j: counts().get("particles", 0) > 0)
+    assert counts()["movies"] == 2 and counts()["ctf"] == 2 and counts()["accepted"] == 2
+    assert _live(manager, puid, uid)["limits"] == ["CTF fit resolution ≤ 8 Å"]
+    # acceptance limits changed from the panel: sorted again at the next cycle
+    manager.control_job(puid, uid, "thresholds", {"ctf_res": [None, 4.0], "nonsense": [1, 2]})
+    _wait_for(manager, puid, uid, lambda j: counts().get("accepted") == 0)
+    assert counts()["particles"] == 0 and _live(manager, puid, uid)["limits"] == ["CTF fit resolution ≤ 4 Å"]
+    manager.control_job(puid, uid, "thresholds", {"ctf_res": [None, 8.0]})
+    _wait_for(manager, puid, uid, lambda j: counts().get("accepted") == 2 and counts().get("particles", 0) > 0)
+    with pytest.raises(Exception, match="limits"):
+        manager.control_job(puid, uid, "thresholds", "8")
+    # paused: the movies wait
+    manager.control_job(puid, uid, "pause")
+    _wait_for(manager, puid, uid, lambda j: _live(manager, puid, uid).get("status") == "paused")
     arrive("mic_003.mrc", "mic_004.mrc")
-    _wait_for(manager, puid, uid, lambda j: (_live(manager, puid, uid).get("counts") or {}).get("ctf") == 4)
+    time.sleep(4)
+    assert counts()["movies"] == 2
+    manager.control_job(puid, uid, "resume")
+    _wait_for(manager, puid, uid, lambda j: counts().get("ctf") == 4)
+    # the streaming 2D classification ran on the particles of the first cycle
+    _wait_for(manager, puid, uid, lambda j: ((_live(manager, puid, uid).get("class2d") or {}).get("done_particles") or 0) > 0)
     with pytest.raises(Exception, match="does not take"):
-        manager.control_job(puid, uid, "pause")
+        manager.control_job(puid, uid, "rewind")
     asked = manager.control_job(puid, uid, "stop")
     assert asked["message"].startswith("Stopping")
     done = _wait_for(manager, puid, uid, lambda j: j["status"] == "completed")
@@ -630,16 +652,23 @@ def test_live_preprocessing(manager, movies, tmp_path):
     assert o["rejected"]["meta"]["n_micrographs"] == 1  # the worst CTF fit (12 Å)
     assert o["movies"]["meta"]["n_movies"] == 4 and o["coordinates"]["meta"]["n_particles"] > 0
     assert o["particles"]["meta"]["n_particles"] > 0 and o["particles"]["meta"]["box"] == 32
+    assert o["classes"]["type"] == "class_averages" and o["classified_particles"]["meta"]["n_particles"] > 0
     final = _live(manager, puid, uid)
     assert final["status"] == "stopped" and final["counts"]["movies"] == 4 and final["cycles"] >= 3
     log = log_of(manager, puid, uid)
     for prog in ("relion_run_motioncorr", "relion_run_ctffind", "relion_autopick", "relion_preprocess"):
         assert any(prog in line and "--only_do_unfinished" in line for line in log.splitlines()), prog
+    assert "New acceptance limits: CTF fit resolution ≤ 4 Å" in log and "Resumed" in log
     report = {s.get("key"): s for s in json.loads((manager.project_dir(puid) / uid / "report.json").read_text())["sections"]}
     assert report["CTF:exposures"]["kind"] == "exposures" and report["CTF:exposures"]["thresholds"] == {"ctf_res": [None, 8.0]}
     assert "Picking:picks" in report and "live_counts" in report
+    gallery = report["class2d:classes"]
+    assert gallery["kind"] == "classes2d" and gallery["actions"] and not gallery["running"] and len(gallery["classes"]) == 2
     with pytest.raises(Exception, match="not running"):
         manager.control_job(puid, uid, "stop")
+    # the classes of the streaming 2D classification go to a selection job
+    sel = _run(manager, puid, "relion_select2d", {"mode": "list", "classes": "1"}, {"classes": _ref(done, "classes")})
+    assert _outs(sel)["particles"]["meta"]["n_particles"] > 0
 
 
 def test_relion_movies_to_map_workflow(manager, movies):

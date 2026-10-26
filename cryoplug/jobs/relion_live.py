@@ -9,16 +9,20 @@ ends the job with its outputs (micrographs, picks, particles) for the next jobs.
 from __future__ import annotations
 
 import json
+import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from cryoplug import relion as rl
 from cryoplug.jobs import register
 from cryoplug.jobs.base import JobContext, JobError, JobType, OutputDef, Param, StepContext
+from cryoplug.jobs.relion_classify import RelionClass2D
 from cryoplug.jobs.relion_common import RelionJob, mpi, threads
 from cryoplug.jobs.relion_picking import RelionAutopick, RelionExtract
-from cryoplug.jobs.relion_preprocess import GAIN_FLIPS, GAIN_ROTATIONS, RelionCtffind, RelionCurate, RelionImport, RelionMotionCorr
+from cryoplug.jobs.relion_preprocess import (
+    CURATION, GAIN_FLIPS, GAIN_ROTATIONS, METRIC, RelionCtffind, RelionCurate, RelionImport, RelionMotionCorr, range_text,
+)
 
 UNFINISHED = "--only_do_unfinished"
 COPIED = {  # report sections of the steps shown on the live job
@@ -37,19 +41,97 @@ def defaults(jt: type[JobType], **over: Any) -> dict[str, Any]:
     return params
 
 
+def clean_limits(value: Any) -> dict[str, list[float | None]]:
+    """Acceptance limits sent from the panel: {metric: [lower, upper]} for known metrics, empty bounds dropped."""
+    out: dict[str, list[float | None]] = {}
+    for key, bounds in (value or {}).items() if isinstance(value, dict) else ():
+        if key not in METRIC or not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+            continue
+        lo, hi = (None if b is None else float(b) for b in bounds)
+        if lo is not None or hi is not None:
+            out[key] = [lo, hi]
+    return out
+
+
+class Streaming2D:
+    """2D classification of the particles extracted so far, run beside the live cycles (as CryoSPARC Live's
+    streaming 2D classification): each run in its own folder, on a copy of the particle file of that moment."""
+
+    def __init__(self, ctx: JobContext):
+        self.ctx = ctx
+        self.thread: threading.Thread | None = None
+        self.step: StepContext | None = None  # the run in progress or the last one started
+        self.done: StepContext | None = None  # the last run finished
+        self.runs = 0
+        self.particles = 0  # particles of the last run started
+        self.done_particles = 0
+        self.published = 0  # run published as the outputs of the live job
+        self.error = ""
+
+    def busy(self) -> bool:
+        return bool(self.thread and self.thread.is_alive())
+
+    def start(self, parts: dict[str, Any], n: int) -> None:
+        p = self.ctx.params
+        self.runs += 1
+        folder = f"class2d/run{self.runs:03d}"
+        out_dir = self.ctx.path(folder)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        snapshot = out_dir / "particles_snapshot.star"  # the extraction rewrites its file at the next cycle
+        shutil.copy(parts["path"], snapshot)
+        meta = {**parts["meta"], "relion": {**(parts["meta"].get("relion") or {}), "star": self.ctx.rel(snapshot)}}
+        ref = {**parts, "path": str(snapshot), "files": [str(snapshot)], "meta": meta}
+        step = StepContext(self.ctx, folder, defaults(
+            RelionClass2D, classes=p["class2d_classes"], vdam_batches=p["class2d_batches"],
+            particle_diameter=p["class2d_diameter"], threads=p["threads"], gpus=min(1, int(p["gpus"])), mpi=1),
+            {"particles": ref}, "Streaming 2D", forward=False)
+        self.step, self.particles = step, n
+        self.ctx.log(f"Streaming 2D classification {self.runs}: {n:,} particles, {p['class2d_classes']} classes")
+        self.thread = threading.Thread(target=self._run, args=(step, n), name="streaming-2d", daemon=True)
+        self.thread.start()
+
+    def _run(self, step: StepContext, n: int) -> None:
+        try:
+            RelionClass2D().run(step)
+            self.done, self.done_particles, self.error = step, n, ""
+        except Exception as exc:  # a failed run, or the program stopped with the session
+            self.error = (str(exc).splitlines() or [type(exc).__name__])[0][:300]
+            step.log(f"Streaming 2D classification stopped: {self.error}")
+
+    def stop(self) -> None:
+        if self.busy() and self.step is not None and self.step._current_proc is not None:
+            self.ctx.log("Stopping the streaming 2D classification in progress (the last finished one is kept)")
+            self.step._terminate(self.step._current_proc)
+        if self.thread:
+            self.thread.join(timeout=60)
+
+    def gallery(self) -> dict[str, Any] | None:
+        """The class gallery of the run in progress (as written so far) or of the last finished run."""
+        step = self.step if self.busy() else self.done
+        if step is None:
+            return None
+        try:
+            sections = json.loads(step.report_path.read_text()).get("sections", [])
+        except (OSError, ValueError):
+            return None
+        return next((s for s in sections if s.get("kind") == "classes2d"), None)
+
+
 @register
 class RelionLive(RelionJob):
     name = "relion_live"
     title = "Live preprocessing (RELION)"
     category = "Preprocessing"
-    controls = ("stop",)
+    controls = ("stop", "pause", "resume", "thresholds")
     gpu_param = "gpus"
     cpu_param = "threads"
     description = ("Processes the movies while they are being collected, as CryoSPARC Live: at every cycle the new "
                    "movies of the folder are imported, motion-corrected, CTF-estimated, sorted on thresholds and, if "
                    "asked, picked and extracted (RELION's jobs with --only_do_unfinished). The panel follows the "
-                   "session: counts, rate, CTF fit, defocus, motion and ice, the exposures and the picks. 'Stop after "
-                   "this cycle' ends the job with its micrographs, picks and particles for the next jobs.")
+                   "session: counts, rate, CTF fit, defocus, motion and ice, the exposures and the picks; the "
+                   "acceptance limits can be changed there, the session paused and resumed, and a streaming 2D "
+                   "classification follows the particles. 'Stop after this cycle' ends the job with its micrographs, "
+                   "picks, particles and 2D classes for the next jobs.")
     inputs = []
     params = [
         Param("movies", "path", "", label="Movies", required=True, placeholder="/data/session/Movies/*.tiff",
@@ -90,6 +172,16 @@ class RelionLive(RelionJob):
         Param("box", "int", 0, label="Box size", unit="px", min=0, max=2048, help="≈ 2 × the particle diameter, even."),
         Param("rescale", "int", 0, label="Re-scaled box", unit="px", min=0, max=2048,
               help="Down-scaled particles for 2D (e.g. 64-128 px). 0 = not re-scaled."),
+        Param("class2d", "bool", False, label="Streaming 2D classification",
+              help="2D classes of the particles so far, run again as particles accumulate (needs the extraction)."),
+        Param("class2d_classes", "int", 50, label="2D classes", min=2, max=300, show_if="class2d"),
+        Param("class2d_min", "int", 2000, label="First 2D classification from", unit="particles", min=10,
+              show_if="class2d"),
+        Param("class2d_every", "int", 10000, label="Classify again after", unit="new particles", min=10,
+              show_if="class2d"),
+        Param("class2d_batches", "int", 100, label="VDAM mini-batches", min=10, max=1000, show_if="class2d"),
+        Param("class2d_diameter", "float", 0.0, label="2D mask diameter", unit="Å", min=0, show_if="class2d",
+              help="0 = 90 % of the box."),
         Param("interval", "int", 60, label="Look for new movies every", unit="s", min=2, max=3600),
         Param("settle", "int", 30, label="A movie is complete after", unit="s", min=0, max=3600,
               help="A file that changed less than this long ago is still being written: left for the next cycle."),
@@ -106,6 +198,8 @@ class RelionLive(RelionJob):
         OutputDef("movies", "movies", "Movies"),
         OutputDef("coordinates", "coordinates", "Picks"),
         OutputDef("particles", "particles", "Particles"),
+        OutputDef("classes", "class_averages", "2D classes (streaming)"),
+        OutputDef("classified_particles", "particles", "Particles of the 2D classes"),
     ]
 
     @classmethod
@@ -127,45 +221,110 @@ class RelionLive(RelionJob):
                 problems.append("Extraction needs picking")
             if not int(params.get("box") or 0) > 0 or int(params.get("box") or 0) % 2:
                 problems.append("Extraction: give an even box size")
+        if params.get("class2d") and not params.get("extract"):
+            problems.append("The streaming 2D classification needs the extraction")
         return problems
 
     # ---------------------------------------------------------------- loop
     def run(self, ctx: JobContext) -> None:
         p = ctx.params
         state: dict[str, Any] = {"started": time.time(), "last_new": time.time(), "cycles": 0, "processed": 0, "movies": 0,
-                                 "history": [], "failures": 0, "status": "watching", "last_error": ""}
+                                 "history": [], "failures": 0, "status": "watching", "last_error": "",
+                                 "limits": self.limits(ctx), "limits_at": 0.0}
+        s2d = Streaming2D(ctx)
         stopping = False
-        while True:
-            final = stopping or ctx.control_requested("stop")
-            state["status"] = "processing"
-            self.dashboard(ctx, state)
-            new = self.cycle(ctx, state)
-            if new:
-                state["last_new"] = time.time()
-            if final:
-                break
-            idle = time.time() - state["last_new"]
-            if p["stop_after"] > 0 and state["movies"] and idle > p["stop_after"] * 60:
-                ctx.log(f"No new movie for {idle / 60:.0f} min: stopping")
-                break
-            state["status"] = "watching" if state["movies"] else "waiting for movies"
-            state["next"] = time.time() + p["interval"]
-            self.dashboard(ctx, state)
-            ctx.progress(0.5, f"{state['movies']:,} movies; next look in {p['interval']} s", log=False)
-            end = time.time() + p["interval"]
-            while time.time() < end:
-                if ctx.control_requested("stop"):
-                    ctx.log("Stop asked: a last cycle for the movies arrived meanwhile")
-                    stopping = True
-                    break
-                ctx.write_state(heartbeat=time.time())
-                time.sleep(min(1.0, max(0.05, end - time.time())))
+        try:
+            while True:
+                final = stopping or ctx.control_requested("stop")
+                self.take_limits(ctx, state)
+                if self.paused(ctx) and not final:
+                    state["status"] = "paused"
+                else:
+                    state["status"] = "processing"
+                    self.dashboard(ctx, state, s2d)
+                    new = self.cycle(ctx, state)
+                    if new:
+                        state["last_new"] = time.time()
+                    self.stream_2d(ctx, state, s2d)
+                    if final:
+                        break
+                    idle = time.time() - state["last_new"]
+                    if p["stop_after"] > 0 and state["movies"] and idle > p["stop_after"] * 60:
+                        ctx.log(f"No new movie for {idle / 60:.0f} min: stopping")
+                        break
+                    state["status"] = "watching" if state["movies"] else "waiting for movies"
+                state["next"] = time.time() + p["interval"]
+                self.dashboard(ctx, state, s2d)
+                ctx.progress(0.5, f"{state['movies']:,} movies; " + ("paused" if state["status"] == "paused"
+                                                                      else f"next look in {p['interval']} s"), log=False)
+                end = time.time() + p["interval"]
+                while time.time() < end:
+                    if ctx.control_requested("stop"):
+                        ctx.log("Stop asked: a last cycle for the movies arrived meanwhile")
+                        stopping = True
+                        break
+                    if state["status"] == "paused" and not self.paused(ctx):
+                        ctx.log("Resumed")
+                        break
+                    if self.new_limits(ctx, state):
+                        break
+                    if s2d.done is not None and s2d.published != s2d.runs and not s2d.busy():
+                        break  # a streaming 2D classification finished: show it
+                    ctx.write_state(heartbeat=time.time())
+                    time.sleep(min(1.0, max(0.05, end - time.time())))
+        finally:
+            s2d.stop()
+        self.publish_2d(ctx, s2d)
         state["status"] = "stopped"
         state.pop("next", None)
-        self.dashboard(ctx, state)
+        self.dashboard(ctx, state, s2d)
         if not any(o["name"] == "movies" for o in ctx.outputs):
             raise JobError(f"No movie arrived in {p['movies']}")
         ctx.add_highlight("Movies", f"{state['movies']:,}")
+
+    @staticmethod
+    def paused(ctx: JobContext) -> bool:
+        pause, resume = ctx.control_entry("pause"), ctx.control_entry("resume")
+        return pause is not None and (resume is None or float(pause.get("at") or 0) > float(resume.get("at") or 0))
+
+    @staticmethod
+    def new_limits(ctx: JobContext, state: dict[str, Any]) -> bool:
+        entry = ctx.control_entry("thresholds")
+        return entry is not None and float(entry.get("at") or 0) > state["limits_at"]
+
+    def take_limits(self, ctx: JobContext, state: dict[str, Any]) -> None:
+        """Acceptance limits changed from the panel: the micrographs are sorted again at the next cycle."""
+        if not self.new_limits(ctx, state):
+            return
+        entry = ctx.control_entry("thresholds") or {}
+        state["limits"], state["limits_at"] = clean_limits(entry.get("value")), float(entry.get("at") or 0)
+        state["pending"] = True
+        shown = "; ".join(range_text(k, *b) for k, b in state["limits"].items()) or "none"
+        ctx.log(f"New acceptance limits: {shown}")
+
+    def stream_2d(self, ctx: JobContext, state: dict[str, Any], s2d: Streaming2D) -> None:
+        """Starts a streaming 2D classification when enough new particles came since the last one."""
+        p = ctx.params
+        self.publish_2d(ctx, s2d)
+        if not p["class2d"] or s2d.busy():
+            return
+        parts = next((o for o in ctx.outputs if o["name"] == "particles"), None)
+        n = int(state.get("particles") or 0)
+        if parts is None or n < p["class2d_min"] or (s2d.runs and n < s2d.particles + p["class2d_every"]):
+            return
+        pdir = ctx.project_dir
+        s2d.start({"type": "particles", "label": parts.get("label", ""), "source": f"{ctx.uid}.particles",
+                   "path": str(pdir / parts["path"]), "files": [str(pdir / f) for f in parts.get("files", [parts["path"]])],
+                   "meta": parts.get("meta", {}), "siblings": {}}, n)
+
+    def publish_2d(self, ctx: JobContext, s2d: Streaming2D) -> None:
+        """The last finished streaming 2D classification as outputs of the live job (to select its good classes)."""
+        if s2d.done is None or s2d.published == s2d.runs or s2d.busy():
+            return
+        if s2d.done is s2d.step:
+            self.publish(ctx, s2d.done, "classes", "classes", f"2D classes ({s2d.done_particles:,} particles)")
+            self.publish(ctx, s2d.done, "particles", "classified_particles", f"Particles of the 2D classes ({s2d.done_particles:,})")
+        s2d.published = s2d.runs
 
     def cycle(self, ctx: JobContext, state: dict[str, Any]) -> int:
         """Imports the movies that arrived and runs the steps on them; returns the number of new movies."""
@@ -190,7 +349,7 @@ class RelionLive(RelionJob):
         state["pending"] = True  # cleared once the steps went through (a failed cycle is tried again)
         ctx.log(f"Cycle {state['cycles']}: {new:,} new movie(s), {n:,} in all")
         try:
-            counts = self.steps(ctx, imp, movies)
+            counts = self.steps(ctx, imp, movies, state)
         except JobError as exc:
             state["failures"] += 1
             state["last_error"] = str(exc).splitlines()[0][:300]
@@ -205,7 +364,7 @@ class RelionLive(RelionJob):
                                  **{k: counts.get(k, 0) for k in ("ctf", "accepted", "particles")}})
         return max(new, 0)
 
-    def steps(self, ctx: JobContext, imp: StepContext, movies: dict[str, Any]) -> dict[str, int]:
+    def steps(self, ctx: JobContext, imp: StepContext, movies: dict[str, Any], state: dict[str, Any]) -> dict[str, int]:
         p = ctx.params
         counts: dict[str, int] = {}
         mc = StepContext(ctx, "motion", defaults(
@@ -222,19 +381,23 @@ class RelionLive(RelionJob):
         RelionCtffind().run(ctf)
         with_ctf = ctf.output_ref("micrographs")
         counts["ctf"] = int(with_ctf["meta"].get("n_micrographs") or 0)
-        limits = {k: p[k] for k in ("max_ctf_resolution", "max_motion", "max_astigmatism", "min_defocus", "max_defocus")}
-        accepted, rejected, cur = with_ctf, None, None
-        if any(float(v or 0) > 0 for v in limits.values()):
-            cur = StepContext(ctx, "curate", defaults(RelionCurate, mode="thresholds", **limits), {"micrographs": with_ctf},
-                              "Curation")
-            try:
-                RelionCurate().prepare(cur)
-                accepted, rejected = cur.output_ref("micrographs"), cur.output_ref("rejected")
-            except JobError as exc:
-                if "No micrograph kept" not in str(exc) and "No micrograph meets" not in str(exc):
-                    raise
-                ctx.warn(f"Curation: {exc}")
-                accepted, rejected = None, with_ctf
+        accepted, cur = with_ctf, None
+        if state["limits"]:  # those of the parameters, or the last ones sent from the panel
+            cur = StepContext(ctx, "curate", defaults(RelionCurate, mode="thresholds"), {"micrographs": with_ctf}, "Curation")
+            jt = RelionCurate()
+            inp, star, _, table, values, _ = jt.load(cur)
+            usable = {k: b for k, b in state["limits"].items() if k in values}
+            if usable:
+                try:
+                    jt.apply(cur, inp, star, table, values, usable, {}, how="live")
+                    accepted = cur.output_ref("micrographs")
+                except JobError as exc:
+                    if "No micrograph kept" not in str(exc):
+                        raise
+                    ctx.warn(f"Curation: {exc}")
+                    accepted = None
+            else:
+                cur = None
         counts["accepted"] = int(accepted["meta"].get("n_micrographs") or 0) if accepted else 0
         counts["rejected"] = counts["ctf"] - counts["accepted"]
         pick = ext = None
@@ -255,43 +418,61 @@ class RelionLive(RelionJob):
                 RelionExtract().run(ext)
                 parts = ext.output_ref("particles")
                 counts["particles"] = int(parts["meta"].get("n_particles") or 0) if parts else 0
+        if p["picking"] != "none" and not accepted:  # no micrograph within the limits: no picks either
+            counts["picked"] = 0
+            if p["extract"]:
+                counts["particles"] = 0
         # the steps' plots, exposures and picks on the live job, the outputs so far
         for step in (mc, ctf, cur, pick, ext):
             if step is not None:
-                self.copy_sections(ctx, step)
+                self.copy_sections(ctx, step, state)
         self.publish(ctx, imp, "movies", "movies")
         self.publish(ctx, ctf, "micrographs", "all_micrographs", "All micrographs with CTF")
         if accepted:
             self.publish(ctx, cur or ctf, "micrographs", "micrographs", "Accepted micrographs")
-        if rejected and cur is not None and cur.output_ref("rejected"):
+        else:  # nothing within the limits now: no accepted micrographs left from before
+            self.drop(ctx, "micrographs")
+        if cur is not None and cur.output_ref("rejected"):
             self.publish(ctx, cur, "rejected", "rejected", "Rejected micrographs")
+        elif not accepted:
+            self.publish(ctx, ctf, "micrographs", "rejected", "Rejected micrographs")
+        else:
+            self.drop(ctx, "rejected")
         if pick is not None:
             self.publish(ctx, pick, "coordinates", "coordinates")
+        elif p["picking"] != "none":
+            self.drop(ctx, "coordinates")
         if ext is not None:
             self.publish(ctx, ext, "particles", "particles")
+        elif p["extract"]:
+            self.drop(ctx, "particles")
         return counts
 
     @staticmethod
-    def copy_sections(ctx: JobContext, step: StepContext) -> None:
+    def copy_sections(ctx: JobContext, step: StepContext, state: dict[str, Any]) -> None:
         for sec in step.report.get("sections", []):
             if sec.get("kind") not in COPIED.get(step.label, ()):
                 continue
             data = {k: v for k, v in sec.items() if k not in ("kind", "title", "key")}
             if sec["kind"] == "exposures":
-                data.update(curate=False, source_output="all_micrographs", live=True,
-                            thresholds={k: v for k, v in RelionLive.limits(ctx).items()})
+                data.update(curate=False, source_output="all_micrographs", live=True, thresholds=state["limits"])
             ctx._section(sec["kind"], f"{sec['title']}" if sec["kind"] != "exposures" else "Exposures",
                          key=f"{step.label}:{sec.get('key') or sec['title']}", **data)
 
     @staticmethod
     def limits(ctx: JobContext) -> dict[str, list[float | None]]:
-        from cryoplug.jobs.relion_preprocess import CURATION
         out: dict[str, list[float | None]] = {}
         for param, (key, side) in CURATION.items():
             v = float(ctx.params.get(param) or 0)
             if v > 0:
                 out.setdefault(key, [None, None])[side] = v
         return out
+
+    @staticmethod
+    def drop(ctx: JobContext, name: str) -> None:
+        if any(o["name"] == name for o in ctx.outputs):
+            ctx.outputs = [o for o in ctx.outputs if o["name"] != name]
+            ctx.write_state()
 
     @staticmethod
     def publish(ctx: JobContext, step: StepContext, name: str, as_name: str, label: str | None = None) -> None:
@@ -303,7 +484,7 @@ class RelionLive(RelionJob):
                        meta=out.get("meta", {}), thumbnail=thumb)
 
     @staticmethod
-    def dashboard(ctx: JobContext, state: dict[str, Any]) -> None:
+    def dashboard(ctx: JobContext, state: dict[str, Any], s2d: Streaming2D | None = None) -> None:
         hist = state["history"]
         now = time.time() - state["started"]
         recent = [h for h in hist if h["t"] >= now - 3600]
@@ -312,11 +493,23 @@ class RelionLive(RelionJob):
             rate = (recent[-1]["movies"] - recent[0]["movies"]) * 3600 / (recent[-1]["t"] - recent[0]["t"])
         counts = {k: state.get(k) for k in ("movies", "corrected", "ctf", "accepted", "rejected", "picked", "particles")
                   if state.get(k) is not None}
+        stream = None
+        if s2d is not None and s2d.runs:
+            stream = {"runs": s2d.runs, "running": s2d.busy(), "particles": s2d.particles,
+                      "done_particles": s2d.done_particles, "error": s2d.error}
         ctx._section("live", "Live session", key="live", status=state["status"], counts=counts, cycles=state["cycles"],
                      processed=state["processed"],
                      started=state["started"], updated=time.time(), last_new=state["last_new"], next=state.get("next"),
                      rate=round(rate, 1) if rate else None, error=state.get("last_error", ""),
-                     interval=int(ctx.params["interval"]))
+                     interval=int(ctx.params["interval"]), class2d=stream,
+                     limits=[range_text(k, *b) for k, b in state["limits"].items()])
+        gallery = s2d.gallery() if s2d is not None else None
+        if gallery is not None:
+            busy = s2d.busy()
+            n = s2d.particles if busy else s2d.done_particles
+            data = {k: v for k, v in gallery.items() if k not in ("kind", "title", "key", "actions", "running")}
+            ctx._section("classes2d", f"2D classes (streaming, {n:,} particles)", key="class2d:classes", running=busy,
+                         actions=not busy and state["status"] == "stopped", **data)
         if len(hist) >= 2:
             x = [round(h["t"] / 60, 2) for h in hist]
             series = [{"name": "Movies", "x": x, "y": [h["movies"] for h in hist]},

@@ -70,9 +70,9 @@ Denoises the micrographs with Topaz's pretrained network (topaz denoise), as Cry
 Usually followed by: `relion_pick_inspect`, `relion_autopick`.
 
 ### `relion_live` — Live preprocessing (RELION)
-RELION · GPU optional. In: none. Out: micrographs: micrographs, all_micrographs: micrographs, rejected: micrographs, movies: movies, coordinates: coordinates, particles: particles.
+RELION · GPU optional. In: none. Out: micrographs: micrographs, all_micrographs: micrographs, rejected: micrographs, movies: movies, coordinates: coordinates, particles: particles, classes: class_averages, classified_particles: particles.
 
-Processes the movies while they are being collected, as CryoSPARC Live: at every cycle the new movies of the folder are imported, motion-corrected, CTF-estimated, sorted on thresholds and, if asked, picked and extracted (RELION's jobs with --only_do_unfinished). The panel follows the session: counts, rate, CTF fit, defocus, motion and ice, the exposures and the picks. 'Stop after this cycle' ends the job with its micrographs, picks and particles for the next jobs.
+Processes the movies while they are being collected, as CryoSPARC Live: at every cycle the new movies of the folder are imported, motion-corrected, CTF-estimated, sorted on thresholds and, if asked, picked and extracted (RELION's jobs with --only_do_unfinished). The panel follows the session: counts, rate, CTF fit, defocus, motion and ice, the exposures and the picks; the acceptance limits can be changed there, the session paused and resumed, and a streaming 2D classification follows the particles. 'Stop after this cycle' ends the job with its micrographs, picks, particles and 2D classes for the next jobs.
 Usually followed by: `relion_curate`, `relion_class2d`, `relion_pick_inspect`, `relion_extract`.
 
 ### `relion_motioncorr` — Motion correction (RELION)

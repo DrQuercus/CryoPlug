@@ -39,8 +39,10 @@ threshold, particles removed or added by hand, or manual picking) is for people 
 
 During a collection, `relion_live` runs steps 1–6 cycle after cycle on the movies that arrive (`movies` wildcard,
 `pixel_size`, `dose_per_frame`, `gain`, acceptance thresholds, optional `picking` and `extract`); it runs until
-`stop_after` minutes without a new movie, or until a person clicks "Stop after this cycle" (the API
-`POST /api/projects/{p}/jobs/{j}/control {"action": "stop"}`); its outputs exist once it stops.
+`stop_after` minutes without a new movie, or until "Stop after this cycle" (`control_job` with `action=stop`); its
+outputs exist once it stops. `control_job` also pauses and resumes it and changes the acceptance limits during the
+session (`action=thresholds`, `limits={"ctf_res": [null, 6]}`); `class2d=true` runs a streaming 2D classification
+whose classes (`classes` output) go to `relion_select2d`.
 
 ## Settings that matter
 

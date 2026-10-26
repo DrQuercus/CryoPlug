@@ -395,8 +395,9 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
 
     @app.post("/api/projects/{puid}/jobs/{juid}/control")
     def control_job(puid: str, juid: str, body: dict = Body(...)) -> dict[str, Any]:
-        """A request to a running job that takes it, e.g. {"action": "stop"} (finish after the current cycle)."""
-        return manager.control_job(puid, juid, str(body.get("action") or ""))
+        """A request to a running job that takes it, e.g. {"action": "stop"} (finish after the current cycle),
+        {"action": "pause"}, {"action": "thresholds", "value": {"ctf_res": [null, 6]}}."""
+        return manager.control_job(puid, juid, str(body.get("action") or ""), body.get("value"))
 
     @app.post("/api/projects/{puid}/jobs/{juid}/clear")
     def clear_job(puid: str, juid: str) -> dict[str, Any]:

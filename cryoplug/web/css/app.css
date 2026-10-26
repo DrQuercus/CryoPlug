@@ -470,6 +470,7 @@ button.cls-tile:focus-visible { outline: 2px solid var(--focus); outline-offset:
   background: var(--surface-1); }
 .live-tile b { font-size: 20px; font-variant-numeric: tabular-nums; }
 .live-tile b .muted { font-size: 12px; font-weight: 500; margin-left: 4px; }
+.warn-text { color: var(--st-warn); }
 /* exposure curation and browser */
 .xc { outline: none; display: flex; flex-direction: column; gap: 10px; }
 .xc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

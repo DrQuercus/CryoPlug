@@ -279,8 +279,11 @@ attendent, puis repartent seuls.
   triés sur les seuils donnés et, au choix, pickés (LoG ou Topaz) et extraits — seuls les nouveaux films sont traités
   (`--only_do_unfinished`, comme un job RELION continué). Le panneau montre la session en direct : films, micrographies
   acceptées et rejetées, particules, cadence par heure, histogrammes de CTF et de mouvement, navigateur d'expositions et
-  picks. **Stop after this cycle** traite les derniers films arrivés puis termine le job avec ses sorties
-  (micrographies acceptées, toutes les micrographies, rejetées, picks, particules) pour la suite.
+  picks. Les limites d'acceptation se changent pendant la session (tirées sur les histogrammes des expositions, puis
+  **Apply to the session**), **Pause** fait attendre les films et **Resume** reprend ; la case *Streaming 2D
+  classification* classe en 2D les particules extraites et recommence quand assez de nouvelles particules arrivent.
+  **Stop after this cycle** traite les derniers films arrivés puis termine le job avec ses sorties (micrographies
+  acceptées, toutes les micrographies, rejetées, picks, particules, classes 2D) pour la suite.
 
 ### 2.4 Sélectionner les classes 2D comme dans CryoSPARC
 

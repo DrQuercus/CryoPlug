@@ -642,15 +642,22 @@ class JobContext:
     def split_extra(self, name: str = "extra_args") -> list[str]:
         return shlex.split(str(self.params.get(name) or ""))
 
-    def control_requested(self, action: str) -> bool:
-        """Whether the user asked the running job for ``action`` (see JobType.controls), e.g. to stop after a cycle."""
+    def control_entry(self, action: str) -> dict[str, Any] | None:
+        """The last request ``action`` made to the running job (see JobType.controls): {"at": time, "value": ...}."""
         path = self.path("control.json")
         if not path.exists():
-            return False
+            return None
         try:
-            return bool(json.loads(path.read_text()).get(action))
+            entry = json.loads(path.read_text()).get(action)
         except (OSError, ValueError):
-            return False
+            return None
+        if entry is None or entry is False:
+            return None
+        return entry if isinstance(entry, dict) else {"at": float(entry) if isinstance(entry, (int, float)) else 0.0, "value": None}
+
+    def control_requested(self, action: str) -> bool:
+        """Whether the user asked the running job for ``action`` (see JobType.controls), e.g. to stop after a cycle."""
+        return self.control_entry(action) is not None
 
     # ---------------------------------------------------------------- GPUs
     def physical_gpus(self, override: str = "") -> list[str]:
@@ -961,19 +968,22 @@ class StepContext(JobContext):
     own parameters, inputs, report and outputs, writing into the job's log; its messages show on the job's card."""
 
     def __init__(self, parent: JobContext, folder: str, params: dict[str, Any],
-                 inputs: dict[str, dict[str, Any] | None], label: str = ""):
+                 inputs: dict[str, dict[str, Any] | None], label: str = "", forward: bool = True):
         job_dir = parent.path(folder)
         job_dir.mkdir(parents=True, exist_ok=True)
         super().__init__({**parent.spec, "params": params, "inputs": inputs, "project_dir": str(parent.project_dir)}, job_dir)
         self.parent = parent
         self.label = label or folder
+        self.forward = forward  # messages shown on the job's card (not for a step running beside the others)
         self.log_path = parent.log_path
         self.report = {"sections": []}  # each run of the step starts afresh
         self.outputs, self.highlights = [], []
 
     def progress(self, fraction: float, message: str | None = None, log: bool = True) -> None:
-        if message is not None:
+        if message is not None and self.forward:
             self.parent.progress(float(self.parent.state.get("progress") or 0.0), f"{self.label}: {message}", log=log)
+        elif message is not None and log:
+            self.log(f"{self.label}: {message}")
         self.write_state(progress=max(0.0, min(1.0, float(fraction))), heartbeat=time.time())
         self.parent.write_state(heartbeat=time.time())
 

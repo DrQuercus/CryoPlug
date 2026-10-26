@@ -1229,18 +1229,27 @@ def kill_job(s: Session, a: Args) -> str:
     return f"{p['uid']}/{job['uid']}: {job['status']} → {after['status']}" + (f" ({after['message']})" if after.get("message") else "")
 
 
-@tool("stop_after_cycle", "Stop a live job, keeping its outputs", """
-Ask a job that works in cycles (live preprocessing, relion_live) to process the movies arrived meanwhile and stop,
-with its outputs (micrographs, picks, particles) for the next jobs; kill_job would discard them. Ask the person first
-unless they asked for it: the collection may still be running.""",
-      {"project": PROJECT, "job": JOB}, ("project", "job"), read_only=False, destructive=False, idempotent=True)
-def stop_after_cycle(s: Session, a: Args) -> str:
+@tool("control_job", "Steer a running live job", """
+Send a request to a running job that works in cycles (live preprocessing, relion_live): "stop" processes the movies
+arrived meanwhile and ends the job with its outputs (micrographs, picks, particles, 2D classes; kill_job would discard
+them), "pause" lets the movies wait, "resume" goes on, "thresholds" changes the acceptance limits from the next cycle
+(limits: {"ctf_res": [null, 6], "motion": [null, 40], "defocus": [5000, 30000]}; metrics ctf_res, defocus, astigmatism,
+ctf_fom, motion, motion_early, motion_late, ice, ice_fraction, ice_thickness, phase_shift). Ask the person first unless
+they asked for it: the collection may still be running.""",
+      {"project": PROJECT, "job": JOB, "action": _string("stop, pause, resume or thresholds.", enum=["stop", "pause", "resume", "thresholds"]),
+       "limits": _object("thresholds: the new limits {metric: [lower, upper]} (null: no bound).")},
+      ("project", "job", "action"), read_only=False, destructive=False, idempotent=True)
+def control_job(s: Session, a: Args) -> str:
     p, job = project_and_job(s, a)
+    action = a.str("action")
     if job["status"] not in ("launched", "running"):
         return f"{job['uid']} is {job['status']}: not running."
-    after = s.post(f"/api/projects/{p['uid']}/jobs/{job['uid']}/control", {"action": "stop"})
-    return (f"{p['uid']}/{job['uid']}: {after.get('message') or 'stop asked'}. It finishes its cycle first: wait_for_jobs "
-            "follows it to the end.")
+    limits = a.dict("limits") if action == "thresholds" else None
+    if action == "thresholds" and not limits:
+        raise ToolError("thresholds: give the limits, e.g. {\"ctf_res\": [null, 6]}")
+    after = s.post(f"/api/projects/{p['uid']}/jobs/{job['uid']}/control", {"action": action, "value": limits})
+    tail = " It finishes its cycle first: wait_for_jobs follows it to the end." if action == "stop" else ""
+    return f"{p['uid']}/{job['uid']}: {after.get('message') or action}.{tail}"
 
 
 @tool("clear_job", "Reset a failed job", """
