@@ -445,6 +445,12 @@ built-in. In: map: map, model?: model. Out: mask: mask.
 Mask drawn by hand on a map in the 3D viewer, as in Chimera: spheres, boxes and cylinders placed with the mouse, connected regions of density picked at the contour level, zones around chains, the density simulated from chains of a model (molmap), the density above a level or an existing mask, added, erased or intersected; then dilated and given a soft edge. Computed here on the full grid of the map, with its centre of mass and the box to re-centre particles on it (signal subtraction).
 Usually followed by: `relion_subtract`, `relion_local_refine`, `relion_class3d`, `map_fsc`, `locscale`.
 
+### `segment_map` — Segment map into regions
+built-in. In: map: map, mask?: mask. Out: region_1: mask, region_2: mask.
+
+Splits a map into regions (domains, subunits) as ChimeraX's Segger: watershed of the smoothed density above a threshold, regions grouped by the depth of the valleys between them until the number asked remains; a soft mask per region, the largest first: the bodies of a multi-body refinement, the mask of a focused refinement or classification, or of a signal subtraction.
+Usually followed by: `relion_multibody`, `relion_local_refine`, `relion_subtract`, `relion_class3d`.
+
 ### `relion_symmetry_search` — Symmetry search (RELION)
 RELION. In: map: map. Out: map: map.
 

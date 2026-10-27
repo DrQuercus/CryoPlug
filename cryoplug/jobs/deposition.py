@@ -221,6 +221,7 @@ METHOD_TEMPLATES = {
     "boltz_predict": "A starting model of the complex was predicted with Boltz-2.",
     "spisonet": "Preferred-orientation anisotropy was corrected with spIsoNet.",
     "directional_fsc": "Directional resolution was assessed by conical (3D) FSC.",
+    "segment_map": "The map was segmented into regions by watershed, as in Segger, to make the masks of its domains.",
     "phenix_elbow": "Ligand restraints were generated with phenix.elbow.",
     "phenix_douse": "Ordered water molecules were placed with phenix.douse.",
     "colabfold_predict": "Starting models were predicted with AlphaFold2 as implemented in ColabFold.",
@@ -243,6 +244,7 @@ EXTRA_CITATIONS = {
     "modelangelo_hmm_search": "HMMER: Eddy S.R. (2011) PLoS Comput. Biol. 7, e1002195.",
     "phenix_elbow": "eLBOW: Moriarty N.W., Grosse-Kunstleve R.W., Adams P.D. (2009) Acta Cryst. D65, 1074-1080.",
     "directional_fsc": "3D FSC: Tan Y.Z. et al. (2017) Nat. Methods 14, 793-796.",
+    "segment_map": "Segger: Pintilie G.D. et al. (2010) J. Struct. Biol. 170, 427-438.",
 }
 
 

@@ -174,3 +174,73 @@ def test_mask_job_checks_its_inputs(manager, synthetic):
     assert "Connect a model" in text and "Cannot read" in text
     job = manager.create_job(p["uid"], "create_mask", {"source": "model_map"}, {"map": {"job": imp["uid"], "output": "map_sharp"}})
     assert "Connect a model" in " ".join(manager.queue_problems(manager.job(p["uid"], job["uid"])))
+
+
+def _three_lobes(n=64, apix=2.0, noise=0.03, seed=0):
+    """Two lobes joined by a thin bridge and a third lobe touching them: a map of three domains (x, y, z in voxels)."""
+    from scipy import ndimage
+    z, y, x = np.indices((n, n, n)) - n // 2
+
+    def blob(c, s):
+        return np.exp(-((x - c[0]) ** 2 + (y - c[1]) ** 2 + (z - c[2]) ** 2) / (2 * s * s))
+    centres = [(-12, 0, 0), (12, 0, 0), (0, 16, 4)]
+    data = sum(blob(c, 6) for c in centres) + 0.3 * blob((0, 0, 0), 3)
+    data = data + np.random.default_rng(seed).normal(0, noise, data.shape)
+    return ndimage.gaussian_filter(data, 0.8).astype(np.float32), centres
+
+
+def test_segmentation_finds_the_domains():
+    from cryoplug import segment as sg
+    data, centres = _three_lobes()
+    inside = data > 0.25
+    labels, raw = sg.segment(data, inside, 3, min_voxels=50)
+    assert raw >= 3 and labels.max() == 3 and np.all(labels[~inside] == 0) and np.all(labels[inside] > 0)
+    n = data.shape[0]
+    found = []
+    for r in range(1, 4):
+        zz, yy, xx = np.nonzero(labels == r)
+        found.append((xx.mean() - n // 2, yy.mean() - n // 2, zz.mean() - n // 2))
+    for c in centres:  # each lobe is one region
+        assert min(np.linalg.norm(np.subtract(f, c)) for f in found) < 3.0
+    sizes = np.bincount(labels.ravel())[1:]
+    assert list(sizes) == sorted(sizes, reverse=True)  # region 1 the largest
+    two, _ = sg.segment(data, inside, 2, min_voxels=50)  # the bridged lobes go together, the third lobe apart
+    zz, yy, xx = np.nonzero(two == 2)
+    assert abs(yy.mean() - n // 2 - 16) < 3 and abs(xx.mean() - n // 2) < 3
+    big = np.pad(data, ((0, 110), (0, 110), (0, 110)))  # beyond MAX_SIDE: segmented on a binned copy
+    labels_big, _ = sg.segment(big, big > 0.25, 3, min_voxels=50)
+    assert labels_big.shape == big.shape and labels_big.max() == 3 and np.all(labels_big[big > 0.25] > 0)
+
+
+def test_segment_map_job(manager, tmp_path):
+    data, centres = _three_lobes()
+    MapVolume(data=data, voxel=np.full(3, 2.0)).write(tmp_path / "lobes.mrc")
+    p = manager.create_project("Segmentation")
+    puid = p["uid"]
+    imp = manager.create_job(puid, "import_maps", {"map": str(tmp_path / "lobes.mrc"), "compute_fsc": False})
+    manager.queue_job(puid, imp["uid"])
+    run_until_done(manager, puid, [imp["uid"]])
+    job = manager.create_job(puid, "segment_map", {"regions": 3, "threshold": 0.25, "lowpass": 6, "dilate": 2, "soft": 4},
+                             {"map": {"job": imp["uid"], "output": "map"}})
+    manager.queue_job(puid, job["uid"])
+    run_until_done(manager, puid, [job["uid"]])
+    done = manager.job(puid, job["uid"])
+    assert done["status"] == "completed", log_of(manager, puid, job["uid"])
+    outs = {o["name"]: o for o in done["outputs"]}
+    assert set(outs) == {"region_1", "region_2", "region_3"} and all(o["type"] == "mask" for o in outs.values())
+    masks = [MapVolume.read(manager.project_dir(puid) / outs[f"region_{r}"]["path"]).data for r in (1, 2, 3)]
+    n = data.shape[0]
+    for m in masks:
+        assert m.min() >= 0 and m.max() == 1 and np.any((m > 0.05) & (m < 0.95))  # soft edges
+    for c in centres:  # each lobe centre inside exactly one region mask
+        v = [float(m[c[2] + n // 2, c[1] + n // 2, c[0] + n // 2]) for m in masks]
+        assert sorted(v) == [0.0, 0.0, 1.0], (c, v)
+    assert outs["region_1"]["meta"]["mass_kda"] >= outs["region_3"]["meta"]["mass_kda"]
+    report = manager.job_detail(puid, done["uid"])["report"]
+    table = next(s for s in report["sections"] if s["kind"] == "table" and s["title"] == "Regions")
+    assert [r[1] for r in table["rows"]] == ["blue", "orange", "green"]
+    assert (manager.project_dir(puid) / done["uid"] / "regions.png").exists()
+    # the masks go to a multi-body refinement as its bodies
+    mb = manager.create_job(puid, "relion_multibody", {}, {"body_1": {"job": done["uid"], "output": "region_1"},
+                                                          "body_2": {"job": done["uid"], "output": "region_2"}})
+    assert mb["inputs"]["body_1"]["output"] == "region_1"

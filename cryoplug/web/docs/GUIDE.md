@@ -646,6 +646,15 @@ Corrigez avec **Map operations → Flip handedness** sur la carte utilisée pour
 - Le rapport donne le chemin du fichier pour l'importer dans CryoSPARC (*Import 3D Volumes*, type *mask*) : même
   boîte et même taille de pixel que la carte d'origine.
 
+**Découper la carte en régions** (comme Segger dans ChimeraX) : **Segment map into regions** (`segment_map`, intégré)
+lisse la carte (12 Å par défaut), fait monter chaque voxel au-dessus du seuil vers son maximum local (bassins
+versants), puis réunit les régions en commençant par celles que sépare la vallée la moins profonde, jusqu'au nombre
+demandé. Chaque région donne un masque à bord doux (*region_1* la plus grande, *region_2*…) : les **corps** d'un
+raffinement multi-corps (*Body 1*, *Body 2*… dans l'ordre), le masque d'un raffinement local, d'une classification
+focalisée ou d'une soustraction. Le rapport montre les régions en couleur vues selon z, y et x, avec leur volume, leur
+masse équivalente et leur centre. Trop peu de régions : baissez le lissage ou le seuil ; trop de petits morceaux :
+augmentez *Smallest region*.
+
 **Dessiner un masque à la main** (comme dans Chimera) : ouvrez la carte dans le visualiseur 3D et cliquez **Mask**.
 
 | Outil | Ce qu'il fait |

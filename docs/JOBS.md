@@ -1884,6 +1884,33 @@ Masque dessiné à la main sur une carte dans le visualiseur 3D, comme dans Chim
 
 **Étapes suivantes** : RELION signal subtraction, RELION local refinement, RELION 3D classification (focused), Half-map FSC, LocScale 2
 
+### Segment map into regions
+
+`segment_map` — intégré (aucun logiciel externe)
+
+Découpe une carte en régions (domaines, sous-unités), comme Segger dans ChimeraX : bassins versants de la densité lissée au-dessus d'un seuil, puis régions réunies en commençant par celles que sépare la vallée la moins profonde, jusqu'au nombre demandé. Un masque à bord doux par région, la plus grande d'abord : les corps d'un raffinement multi-corps, le masque d'un raffinement local, d'une classification focalisée ou d'une soustraction.
+
+**Quand l'utiliser**
+
+- Préparer les masques des corps d'un « 3D multi-body refinement » ou d'un raffinement local.
+- Repérer les domaines d'une carte consensus avant de choisir où focaliser.
+
+**À éviter / pièges**
+
+- Une carte très bruitée ou à basse résolution : les vallées entre domaines disparaissent (lissez davantage).
+- Des corps trop petits pour le multi-corps (moins de ~100-150 kDa) : RELION ne les aligne pas bien.
+
+**Entrées conseillées** : Une carte consensus (post-traitée de préférence) ; en option un masque qui limite la région découpée.
+
+**Conseils**
+
+- Seuil automatique : celui qui contient la masse attendue si elle est donnée, sinon la méthode d'Otsu.
+- Lissage 10-15 Å pour des domaines ; plus fin, les domaines se découpent en petits morceaux.
+- Les masques se recouvrent sur leur bord doux, comme RELION le conseille pour le multi-corps.
+- Les couleurs du rapport (bleu, orange, vert…) suivent l'ordre des régions et le nom des sorties.
+
+**Étapes suivantes** : 3D multi-body refinement (RELION), RELION local refinement, RELION signal subtraction, RELION 3D classification (focused)
+
 ### Symmetry search (RELION)
 
 `relion_symmetry_search` — logiciel : `relion`

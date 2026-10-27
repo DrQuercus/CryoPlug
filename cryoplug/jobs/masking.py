@@ -374,3 +374,112 @@ class DrawMask(JobType):
         ctx.add_output("mask", "mask", out, f"Drawn mask ({mk.format_mass(stats['mass_kda'])})", meta=meta)
         ctx.add_highlight("Mask", mk.format_mass(stats["mass_kda"]))
         ctx.add_highlight("Edge", f"{p['dilate']:g} + {p['soft']:g} Å")
+
+
+# distinct colours for the regions (blue, orange, green, red, purple, brown, pink, olive, cyan, grey)
+REGION_COLOURS = [(42, 120, 214), (235, 104, 52), (27, 175, 122), (208, 59, 59), (128, 90, 213), (140, 86, 75),
+                  (227, 119, 194), (188, 189, 34), (23, 190, 207), (127, 127, 127)]
+COLOUR_NAMES = ["blue", "orange", "green", "red", "purple", "brown", "pink", "olive", "cyan", "grey"]
+
+
+@register
+class SegmentMap(JobType):
+    name = "segment_map"
+    title = "Segment map into regions"
+    category = "Map processing"
+    software = ["CryoPlug"]
+    cpus = 2
+    description = ("Splits a map into regions (domains, subunits) as ChimeraX's Segger: watershed of the smoothed density "
+                   "above a threshold, regions grouped by the depth of the valleys between them until the number asked "
+                   "remains; a soft mask per region, the largest first: the bodies of a multi-body refinement, the mask "
+                   "of a focused refinement or classification, or of a signal subtraction.")
+    inputs = [Slot("map", ("map",), "Map", help="A consensus map (post-processed or sharpened: domains stand out)."),
+              Slot("mask", ("mask",), "Restrict to a mask", required=False,
+                   help="Only the density inside this mask is segmented (one part of a large complex).")]
+    params = [
+        Param("regions", "int", 2, label="Regions", min=1, max=30,
+              help="How many regions to keep (largest first): 2-4 rigid bodies for a multi-body refinement."),
+        Param("threshold", "float", 0.0, label="Threshold",
+              help="Density of the smoothed map above which voxels are segmented. 0 = automatic: enclosing the "
+                   "expected mass if given, otherwise Otsu's level."),
+        Param("mass_kda", "float", 0.0, label="Expected mass", unit="kDa", min=0,
+              help="For the automatic threshold (the mass of the complex, or of the part inside the mask)."),
+        Param("lowpass", "float", 12.0, label="Smoothing (low-pass)", unit="Å", min=0,
+              help="10-15 Å separates domains; finer smoothing splits them into many small regions."),
+        Param("min_region_kda", "float", 10.0, label="Smallest region", unit="kDa", min=0, advanced=True,
+              help="Watershed regions smaller than this are grouped first, and blobs smaller than this are dropped."),
+        Param("dilate", "float", 3.0, label="Dilation", unit="Å", min=0, help="Each region grown by this much."),
+        Param("soft", "float", 6.0, label="Soft edge", unit="Å", min=0,
+              help="Raised-cosine edge: masks of neighbouring regions overlap there (RELION's multi-body advice)."),
+    ]
+    outputs = [OutputDef("region_1", "mask", "Region 1"), OutputDef("region_2", "mask", "Region 2")]
+
+    def run(self, ctx: JobContext) -> None:
+        from cryoplug import masks as mk
+        from cryoplug import segment as sg
+        from cryoplug.imaging import write_png
+        from cryoplug.micrographs import tile_sheet
+        p = ctx.params
+        vol = MapVolume.read(ctx.require("map").path)
+        voxel = np.asarray(vol.voxel, dtype=np.float64)
+        ctx.progress(0.1, f"Smoothing to {p['lowpass']:g} Å")
+        smooth = mk.smooth_map(vol, float(p["lowpass"]))
+        region = None
+        restrict = ctx.input("mask")
+        if restrict is not None:
+            m = MapVolume.read(restrict.path)
+            if m.data.shape != smooth.shape:
+                raise JobError(f"The mask has a {m.shape_xyz} box, the map {vol.shape_xyz}: they must match")
+            region = m.data >= 0.5
+        values = mk.sample_values(smooth, region)
+        if p["threshold"] > 0:
+            threshold, how = float(p["threshold"]), "set by hand"
+        elif p["mass_kda"] > 0:
+            n_total = int(np.count_nonzero(region)) if region is not None else smooth.size
+            threshold = mk.level_for_mass(values, n_total, p["mass_kda"] * 1000.0, float(np.prod(voxel)))
+            how = f"encloses {mk.format_mass(p['mass_kda'])}"
+        else:
+            threshold, how = mk.otsu_threshold(values), "Otsu's method (give the expected mass for a better level)"
+        inside = smooth >= threshold
+        if region is not None:
+            inside &= region
+        inside, removed = mk.remove_islands(inside, voxel, float(p["min_region_kda"]))
+        if not inside.any():
+            raise JobError("Nothing is left above the threshold: lower it, or give the expected mass")
+        min_voxels = int(p["min_region_kda"] * 1000.0 * mk.A3_PER_DA / float(np.prod(voxel)))
+        ctx.progress(0.3, "Watershed and grouping of the regions")
+        labels, raw = sg.segment(smooth, inside, int(p["regions"]), min_voxels)
+        n = int(labels.max())
+        ctx.log(f"{raw} watershed regions above {threshold:.4g} ({how}), grouped into {n}")
+        if n < int(p["regions"]):
+            ctx.warn(f"Only {n} region(s): the density splits no further at this threshold and smoothing (lower the "
+                     "smoothing or the threshold)")
+        rows = []
+        for r in range(1, n + 1):
+            ctx.progress(0.4 + 0.5 * (r - 1) / n, f"Mask of region {r}")
+            core = labels == r
+            mask = mk.soft_edge(core, voxel, float(p["dilate"]), float(p["soft"]))
+            out = vol.like(mask).write(ctx.path(f"region_{r}.mrc"))
+            stats = mk.statistics(core.astype(np.float32), voxel)
+            cz, cy, cx = mk.centroid(core)
+            centre = [round(float(c * v + o), 1) for c, v, o in zip((cx, cy, cz), voxel, vol.origin)]
+            colour = COLOUR_NAMES[(r - 1) % len(COLOUR_NAMES)]
+            rows.append([r, colour, f"{stats['volume_nm3']:,.0f}", mk.format_mass(stats["mass_kda"]),
+                         " ".join(f"{c:g}" for c in centre)])
+            ctx.add_output(f"region_{r}", "mask", out, f"Region {r} ({colour}, {mk.format_mass(stats['mass_kda'])})",
+                           meta={**ctx.inherited_meta("map"), "region": r, "colour": colour,
+                                 "mass_kda": round(stats["mass_kda"], 1), "threshold": round(float(threshold), 6),
+                                 "dilation": p["dilate"], "soft_edge": p["soft"]})
+        ctx.add_table("Regions", ["Region", "Colour", "Volume (nm³)", "Protein-equivalent mass", "Centre (x y z, Å)"], rows)
+        tiles = sg.colour_projections(smooth, labels, REGION_COLOURS, size=260)
+        tiles = [np.pad(t, ((0, 260 - t.shape[0]), (0, 260 - t.shape[1]), (0, 0))) for t in tiles]
+        png = write_png(ctx.path("regions.png"), tile_sheet(tiles, per_row=3, gap=6))
+        ctx.add_image("Regions seen along z, y and x (the densest voxel of each ray, coloured by its region)", png)
+        ctx.add_text("Using the regions",
+                     "Multi-body refinement: connect the masks as Body 1, Body 2… (the largest first, as RELION advises). "
+                     "Focused refinement, classification or signal subtraction: the mask of the region kept. The 3D "
+                     "viewer shows the masks over the map.")
+        ctx.add_highlight("Regions", str(n))
+        ctx.add_highlight("Threshold", f"{threshold:.4g}")
+        if removed:
+            ctx.log(f"{removed} small blob(s) below {p['min_region_kda']:g} kDa left out")

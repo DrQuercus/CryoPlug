@@ -1011,7 +1011,7 @@ directement le chemin aux jobs d'import, s'il est dans les dossiers du compte (`
 
 | Skill | Contenu |
 |---|---|
-| `cryoplug` | méthode de travail et règles, concepts, quelle carte pour quoi, syntaxe des jobs, workflows ; index des 130 types de jobs (généré) |
+| `cryoplug` | méthode de travail et règles, concepts, quelle carte pour quoi, syntaxe des jobs, workflows ; index des 131 types de jobs (généré) |
 | `cryoplug-map-quality` | FSC, anisotropie, résolution locale, main ; LocScale, spIsoNet, modification de densité, cartes « réseau » |
 | `cryoplug-masks-and-fitting` | masques (densité, atomes, molmap, densité proche du modèle), placement de corps rigide, cartes composites |
 | `cryoplug-model-building` | stratégie selon la résolution, de novo, chaînes inconnues, modèles prédits, ligands |
@@ -1040,7 +1040,7 @@ révision 2026-07-28 reviennent automatiquement à 2025-11-25.
 
 La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes) est dans
 [docs/JOBS.md](docs/JOBS.md), générée depuis `cryoplug/jobhelp.py` par `cryoplug docs-jobs`.
-`cryoplug jobtypes` liste les 130 types de jobs :
+`cryoplug jobtypes` liste les 131 types de jobs :
 
 | Catégorie | Jobs |
 |---|---|
@@ -1050,7 +1050,7 @@ La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes
 | Classification | 2D classification (VDAM / EM) · Select 2D classes (galerie cliquable, seuils, liste, class ranker ou carte de référence) · Amyloid initial model (RELION) · 3D classification · Heterogeneous refinement · Select 3D classes · Average power spectra (2D classes) |
 | Reconstruction | 3D initial model · 3D auto-refine · RELION local refinement · RELION signal subtraction · RELION 3D classification (focused) · RELION post-processing · RELION reconstruction |
 | Tomography | Import tilt series (RELION) · Motion correction et CTF estimation (tilt series) · Exclude tilt images · Align tilt series (IMOD, AreTomo2) · Reconstruct tomograms (RELION) · Denoise tomograms (cryoCARE) · Pick particles in tomograms · Template matching (pytom-match-pick) · Import tomogram coordinates · Extract subtomograms (RELION) · Reconstruct particle (RELION) · 3D initial model, 3D classification et 3D auto-refine (subtomograms) · CTF refinement (tomography) · Frame alignment / polishing (tomography) |
-| Map processing | Half-map FSC · Directional resolution (3D FSC, cFAR, SCF) · Local resolution (Phenix) · Create mask · Mask creation (RELION) · Helical symmetry (RELION) · Align to symmetry axes (RELION) · Symmetry search (RELION) · Align 3D maps (et poses des particules) · Mask drawn in the 3D viewer · Composite map (focused maps) · Map operations (dont rééchantillonnage) · LocScale 2 · EMmerNet · DeepEMhancer · EMReady2 · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Map sharpening (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
+| Map processing | Half-map FSC · Directional resolution (3D FSC, cFAR, SCF) · Local resolution (Phenix) · Create mask · Segment map into regions · Mask creation (RELION) · Helical symmetry (RELION) · Align to symmetry axes (RELION) · Symmetry search (RELION) · Align 3D maps (et poses des particules) · Mask drawn in the 3D viewer · Composite map (focused maps) · Map operations (dont rééchantillonnage) · LocScale 2 · EMmerNet · DeepEMhancer · EMReady2 · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Map sharpening (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
 | Heterogeneity | 3D multi-body refinement (RELION) · DynaMight · cryoDRGN input check (backprojection) · cryoDRGN training · cryoDRGN-AI ab initio reconstruction · cryoDRGN continue training · cryoDRGN convergence check · cryoDRGN analysis · cryoDRGN landscape analysis · cryoDRGN trajectory · cryoDRGN volumes at particles · Select particles (latent space) · Volume series analysis · Extract volume from series |
 | Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · CryoAtom2 enhanced (meilleur de plusieurs essais) · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Fit in map (rigid body) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
 | Interactive | ISOLDE session · Coot session |

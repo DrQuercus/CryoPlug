@@ -1,6 +1,6 @@
 ---
 name: cryoplug-masks-and-fitting
-description: Make masks and place models or maps in CryoPlug - soft masks from map density, from model atoms, from the simulated density of a model (molmap) or from the density near a model (create_mask), hand-drawn masks (draw_mask), rigid-body fitting of models, maps and masks into a map (fit_in_map with the ChimeraX fitmap algorithm, chimerax_fitmap, phenix_dock_in_map), and composite maps from focused refinements. Use for masks for FSC, LocScale, spIsoNet, local refinement or signal subtraction, docking predicted models, or superposing maps.
+description: Make masks and place models or maps in CryoPlug - soft masks from map density, from model atoms, from the simulated density of a model (molmap) or from the density near a model (create_mask), hand-drawn masks (draw_mask), domain masks by segmentation (segment_map), rigid-body fitting of models, maps and masks into a map (fit_in_map with the ChimeraX fitmap algorithm, chimerax_fitmap, phenix_dock_in_map), and composite maps from focused refinements. Use for masks for FSC, LocScale, spIsoNet, local refinement or signal subtraction, docking predicted models, or superposing maps.
 ---
 
 # Masks, rigid-body fitting and composite maps in CryoPlug
@@ -26,6 +26,11 @@ written on the grid of the map (same box, pixel size and origin), with a soft ed
 - `combine` with the input `mask`: `union`, `subtract` (whole complex minus the region to keep, for signal
   subtraction) or `intersect`; `invert` flips it.
 - `model_map` also writes the simulated map (output `model_map`), useful to compare with the experimental map.
+
+Masks of domains without a model: `segment_map` (built-in, Segger-like watershed of the smoothed map, grouped to
+`regions` regions, largest first; `lowpass` 10-15 Å, `threshold` or `mass_kda`, `dilate` and `soft` in Å) writes one
+soft mask per region (`region_1`, `region_2`…): the bodies of `relion_multibody` in that order, or the mask of a
+local refinement or subtraction. Check the coloured projections of its report before using them.
 
 Hand-drawn masks: `draw_mask` is filled in by a person in the 3D viewer (*Mask*: spheres, boxes, cylinders,
 density regions, zones around chains, molmap of chains, erase/keep), then saved as a job. Create it only to hand
