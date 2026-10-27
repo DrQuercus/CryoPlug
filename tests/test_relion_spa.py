@@ -1596,3 +1596,15 @@ def test_micrograph_junk_job(manager, spa):
                                                            "coordinates": _ref(pick, "coordinates")})
     with pytest.raises(Exception, match="not both"):
         manager.queue_job(puid, both["uid"])
+
+
+def test_movies_to_map_workflow_with_the_junk_detector(manager):
+    """The optional junk detector of the movies-to-map workflow: off by default; on, the extraction takes its picks."""
+    p = manager.create_project("Workflow with junk detection")
+    plain = manager.instantiate_workflow(p["uid"], "relion_spa", queue=False)
+    assert "micrograph_junk" not in [j["type"] for j in plain["jobs"]]
+    res = manager.instantiate_workflow(p["uid"], "relion_spa", include=["junk"], queue=False)
+    by_type = {j["type"]: j for j in res["jobs"]}
+    junk, extract = by_type["micrograph_junk"], by_type["relion_extract"]
+    assert extract["inputs"]["coordinates"] == {"job": junk["uid"], "output": "coordinates"}
+    assert junk["inputs"]["coordinates"]["job"] == by_type["relion_autopick"]["uid"]
