@@ -662,6 +662,9 @@ class MicrographJunk(JobType):
         valid = [f for f in fractions if f == f]
         if not valid:
             raise JobError("No micrograph could be read")
+        if ptab is not None and not any(m in results for m in rows_of):
+            ctx.warn("None of the particles' micrographs (rlnMicrographName) is among the micrographs given: no particle "
+                     "was checked (connect the micrographs the particles were extracted from)")
         thr = float(p["max_junk"]) / 100.0
         clean = [i for i, f in enumerate(fractions) if f == f and f <= thr]
         rows = [[names[i], f"{100 * fractions[i]:.1f}" if fractions[i] == fractions[i] else "–",

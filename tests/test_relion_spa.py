@@ -1586,3 +1586,13 @@ def test_micrograph_junk_job(manager, spa):
     clean = rl.micrograph_table(rl.read_star(pdir / outs["micrographs"]["path"])).column("rlnMicrographName")
     assert names[1] not in clean and len(clean) == len(names) - 1
     assert (pdir / job["uid"] / "junk.png").exists()
+    # extracted particles cleaned the same way
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1}, {**mics, "coordinates": _ref(pick, "coordinates")})
+    n_ext = _outs(ext)["particles"]["meta"]["n_particles"]
+    pj = _run(manager, puid, "micrograph_junk", {"particle_diameter": 60}, {**mics, "particles": _ref(ext, "particles")})
+    po = _outs(pj)
+    assert po["particles"]["meta"]["n_particles"] + po.get("rejected_particles", {"meta": {"n_particles": 0}})["meta"]["n_particles"] == n_ext
+    both = manager.create_job(puid, "micrograph_junk", {}, {**mics, "particles": _ref(ext, "particles"),
+                                                           "coordinates": _ref(pick, "coordinates")})
+    with pytest.raises(Exception, match="not both"):
+        manager.queue_job(puid, both["uid"])
