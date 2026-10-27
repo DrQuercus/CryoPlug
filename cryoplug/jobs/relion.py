@@ -450,9 +450,11 @@ class RelionLocalRefine(RelionJob):
             ["Offsets", f"± {p['offset_range']:g} px, step {p['offset_step']:g} px"],
             ["Symmetry", sym], ["Mask", mask_in.source if mask_in else "sphere"], ["Mask diameter", f"{diameter:g} Å"],
             ["Blush", "yes" if p["blush"] else "no"]])
-        progress = Progress(ctx)
+        from cryoplug.jobs.iterations import IterationDashboard  # it builds on this module
+        progress = IterationDashboard(ctx, "refine", mask=mask)
         ctx.progress(0.05, "relion_refine")
         run_relion(ctx, args, on_line=progress)
+        progress.finish()
         out = outputs_of_refine(ctx)
         finish_refinement(ctx, out, parts, sym, mask, mask_data, progress, kind="refine3d")
 
@@ -481,7 +483,7 @@ def finish_refinement(ctx: JobContext, out: dict[str, Path], parts: dict[str, An
     if progress.history:
         ctx.add_plot("Resolution during the refinement", [{"name": "Resolution", "x": [h[0] for h in progress.history],
                                                            "y": [h[1] for h in progress.history]}],
-                     x_label="Iteration", y_label="Resolution (Å)")
+                     x_label="Iteration", y_label="Resolution (Å)", key="resolution_history")
     pp = None
     if mask is not None and p.get("postprocess", True):
         ctx.progress(0.92, "relion_postprocess")
@@ -754,9 +756,11 @@ class RelionClass3D(RelionJob):
         if p["gpus"] > 0:
             args += ["--gpu", ""]
         args += ctx.split_extra()
-        progress = Progress(ctx, total=iters)
+        from cryoplug.jobs.iterations import IterationDashboard  # it builds on this module
+        progress = IterationDashboard(ctx, "classes", total=iters)
         ctx.progress(0.05, "relion_refine (classification)")
         run_relion(ctx, args, on_line=progress)
+        progress.finish()
         self.finish(ctx, parts, sym, k)
 
     def finish_partial(self, ctx: JobContext) -> str:

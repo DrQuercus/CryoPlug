@@ -107,6 +107,32 @@ d'autres réglages), les autres entrées restent branchées sur les mêmes jobs.
 sont entourées en violet et les jobs qui l'utilisent en vert. Touches : **N** nouveau job, **/** filtrer,
 **G** cartes ⇄ arbre, **Échap** fermer, **?** liste des raccourcis.
 
+### Suivre un job pendant qu'il tourne (tableau de bord)
+
+Comme dans CryoSPARC, le panneau d'un job se remplit pendant le calcul, sans recharger la page :
+
+- **Résultats clés en tuiles** en haut (itération en cours, résolution, nombre de particules…), mis à jour au fil
+  du calcul, puis les **avertissements** du job dans un encadré orange repliable (le nombre est dans le titre).
+- **Un curseur par graphique** pour revenir sur les itérations (ou les essais) précédentes : *Iteration 8 ·
+  8/12*. Les curseurs d'un même job bougent ensemble (FSC, coupes et classes de la même itération) ; pendant le
+  calcul, le panneau suit la dernière itération, sauf si vous en avez choisi une autre (bouton **Latest** pour y
+  revenir).
+- **View 3D** sous une image ouvre dans le visualiseur 3D les cartes ou le modèle de cette étape, alors que le job
+  continue (les demi-cartes de l'itération 8, le modèle d'un essai de CryoAtom2).
+
+Ce qui s'affiche pendant le calcul :
+
+| Job | En direct |
+|---|---|
+| Raffinement 3D et raffinement local (RELION) | à chaque itération : FSC des deux demi-cartes, coupes centrales XY/XZ/YZ de la carte avec le contour du masque, résolution et déplacement des poses au fil des itérations, demi-cartes à ouvrir en 3D |
+| Classification 3D, raffinement hétérogène, modèle initial | projections de chaque classe à chaque itération, part et résolution de chaque classe au fil des itérations, cartes des classes en 3D |
+| Classification 2D | la galerie des classes de la dernière itération, et les plus grandes classes de chaque itération (curseur) |
+| CryoAtom2 enhanced | le modèle de chaque essai (curseur, View 3D dans sa carte), le tableau des essais et le **meilleur modèle à ce stade** avec ses scores (résidus ajustés, Q-score, CC) dans les tuiles |
+| Entraînements cryoDRGN, prétraitement live | courbes d'entraînement, tableau de bord de la session |
+
+Les images des itérations restent dans le rapport une fois le job terminé ; *Clear intermediate iterations*
+supprime les cartes des itérations (leur bouton View 3D disparaît) mais garde les images.
+
 ### Workspaces et étiquettes
 
 Comme dans CryoSPARC, un projet se range en **workspaces** : des groupes nommés de jobs (un jeu de données,

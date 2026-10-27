@@ -399,13 +399,14 @@ class CryoAtomEnhanced(JobType):
             return None
         found_prot = _sequences_from([out / "cryoatom_prot.fasta"])
         found_na = [(n, s.upper().replace("T", "U")) for n, s in _sequences_from([out / "cryoatom_na.fasta"])]
-        cand = {"label": label, "map": mp["label"], "map_short": mp["short"], "map_note": mp["note"], "setting": setting,
-                "run": run, "round": rnd,
+        cand = {"label": label, "map": mp["label"], "map_short": mp["short"], "map_note": mp["note"], "map_path": mp["path"],
+                "setting": setting, "run": run, "round": rnd,
                 "model": model, "raw": first_existing([out / "cryoatom_raw.cif"]), "score": score,
                 "found_prot": found_prot, "found_na": found_na}
         ctx.log(f"Run {label}: {self._summary(cand)}")
         if ref is None:
             self.candidates.append(cand)
+            self._live(cand, st)
         return cand
 
     def _readable(self, mp: dict[str, Any]) -> str:
@@ -452,7 +453,10 @@ class CryoAtomEnhanced(JobType):
         verdict = "kept" if score["score"] > best["score"]["score"] else "not kept (the score does not improve)"
         ctx.log(f"Combination: {sum(a['length'] for a in added)} residues in {len(added)} piece(s) from "
                 f"{len({a['source'] for a in added})} other run(s) — {self._summary(cand)} — {verdict}")
-        return cand if score["score"] > best["score"]["score"] else None
+        if score["score"] > best["score"]["score"]:
+            self._live(cand)
+            return cand
+        return None
 
     def _new_sequences(self, cands: list[dict[str, Any]]) -> dict[str, list[tuple[str, str]]]:
         known = {s.upper() for recs in self.records.values() for _, s in recs}
@@ -601,6 +605,71 @@ class CryoAtomEnhanced(JobType):
         ctx.add_highlight("Hand", "checked", "good")
         return f"looks right (mirrored map: score {theirs:.0f} against {mine:.0f})"
 
+    # --------------------------------------------------------------- live dashboard
+    def _live(self, cand: dict[str, Any], st: Any = None) -> None:
+        """The dashboard while the runs go on, as CryoSPARC's: the model of every run as a frame of a slider (View 3D
+        opens it in the map it was built into), the runs so far, and the best model so far with its scores."""
+        ctx = self.ctx
+        try:
+            from cryoplug.imaging import trace_image, write_png
+            from cryoplug.modelio import ca_traces
+            live = ctx.path("live")
+            live.mkdir(exist_ok=True)
+            st = st if st is not None else self.read_structure(cand["model"])
+            n = len(self.candidates)
+            png = write_png(live / f"run_{n:03d}.png", trace_image(ca_traces(st), 240))
+            s = cand["score"]
+            caption = (f"{cand['label']}: {PRESETS[cand['setting']][0].lower()} settings on the {cand['map_note']} — "
+                       f"{s['fitted']} fitted residues ({s['fitted_fraction']:.0%}), Q {s['q_mean']:.3f}, CC {s['cc_mask']:.3f}")
+            view = [{"kind": "map", "path": cand["map_path"], "label": cand["map_note"]},
+                    {"kind": "model", "path": cand["model"], "label": cand["label"]}]
+            best = self._best(self.candidates)
+            if best is cand:
+                ctx.add_image_frame("Best model so far", png, cand["label"], key="best_preview", caption=caption, view=view,
+                                    keep=False, note="Cα trace of the best model built so far, seen down z: View 3D opens it "
+                                                     "in its map while the job goes on.")
+            ctx.add_image_frame("Models of the runs", png, f"Run {n}", key="runs_models", group="runs", caption=caption,
+                                view=view, note="Cα trace of the model of each run, seen down z (the latest while the job runs).")
+            self._runs_table("Runs so far", self._run_rows(best))
+            self._runs_plot()
+            self._highlights(best, f"{self.done} of {self.planned}")
+        except Exception as exc:  # the dashboard never stops the job
+            ctx.log(f"(live view of run {cand.get('label')} not drawn: {exc})")
+
+    def _highlights(self, best: dict[str, Any], runs: str) -> None:
+        ctx, s = self.ctx, best["score"]
+        ctx.add_highlight("Fitted", f"{s['fitted']} ({s['fitted_fraction']:.0%})",
+                          "good" if s["fitted_fraction"] >= 0.7 else "warn" if s["fitted_fraction"] >= 0.5 else "bad")
+        ctx.add_highlight("Q-score", f"{s['q_mean']:.3f}")
+        ctx.add_highlight("CC (mask)", f"{s['cc_mask']:.3f}", "good" if s["cc_mask"] >= 0.7 else "warn" if s["cc_mask"] >= 0.5 else "bad")
+        ctx.add_highlight("Runs", runs)
+        ctx.add_highlight("Best run", f"{PRESETS[best['setting']][0]} · {best['map_short']}")
+
+    def _run_rows(self, best: dict[str, Any] | None) -> list[list[Any]]:
+        rows = []
+        for c in self.candidates:
+            sc = c["score"]
+            rows.append([c["label"], c["map_short"], PRESETS[c["setting"]][0], f"{sc['fitted']} ({sc['fitted_fraction']:.0%})",
+                         f"{sc['score']:.1f}", "✓ best" if c is best else "", sc["residues"], f"{sc['q_mean']:.3f}",
+                         f"{sc['cc_mask']:.3f}", sc["fragments"], sc["duplicated"], c["round"]])
+        return rows
+
+    def _runs_table(self, title: str, rows: list[list[Any]]) -> None:
+        self.ctx.add_table(title, ["Run", "Map", "Settings", "Fitted", "Score", "Best", "Residues", "Q-score", "CC (mask)",
+                                   "Fragments", "Duplicated", "Round"], rows, key="runs",
+                           note=f"Fitted: residues whose mean atom Q-score is at least "
+                                f"{self.ms.fitted_cutoff(self.resolution):.2f} (expected Q at {self.resolution:g} Å minus 0.2). "
+                                "Score: fitted residues, those traced twice counted once. All scored against the "
+                                "experimental map.")
+
+    def _runs_plot(self) -> None:
+        runs = [c for c in self.candidates if "combined_from" not in c]
+        if len(runs) > 1:
+            x = list(range(1, len(runs) + 1))
+            self.ctx.add_plot("Fitted residues by run", [{"name": "Fitted residues", "x": x, "y": [c["score"]["fitted"] for c in runs]},
+                                                         {"name": "Residues built", "x": x, "y": [c["score"]["residues"] for c in runs]}],
+                              x_label="Run", y_label="Residues", key="runs_plot")
+
     def _report(self, best: dict[str, Any], rounds: int, hand: str) -> None:
         ctx = self.ctx
         final = ctx.path("best_model.cif")
@@ -612,12 +681,7 @@ class CryoAtomEnhanced(JobType):
             shutil.copyfile(best["raw"], raw)
             ctx.add_output("model_raw", "model", raw, "Raw model of the best run (all built residues)", inherit=["map"])
         s = best["score"]
-        ctx.add_highlight("Fitted", f"{s['fitted']} ({s['fitted_fraction']:.0%})",
-                          "good" if s["fitted_fraction"] >= 0.7 else "warn" if s["fitted_fraction"] >= 0.5 else "bad")
-        ctx.add_highlight("Q-score", f"{s['q_mean']:.3f}")
-        ctx.add_highlight("CC (mask)", f"{s['cc_mask']:.3f}", "good" if s["cc_mask"] >= 0.7 else "warn" if s["cc_mask"] >= 0.5 else "bad")
-        ctx.add_highlight("Runs", str(len([c for c in self.candidates if "combined_from" not in c])))
-        ctx.add_highlight("Best run", f"{PRESETS[best['setting']][0]} · {best['map_short']}")
+        self._highlights(best, str(len([c for c in self.candidates if "combined_from" not in c])))
 
         improved = getattr(self, "improved", {}).get(best["map"])
         if improved:
@@ -627,30 +691,16 @@ class CryoAtomEnhanced(JobType):
         if identified and (rounds > 1 or not given):
             from cryoplug.jobs.imports import write_sequence_outputs
             write_sequence_outputs(ctx, identified, "sequence", "Sequences (with the identified ones)")
-        rows = []
+        ctx.remove_section("best_preview")
+        rows = self._run_rows(best)
         order = self.candidates
-        for c in order:
-            sc = c["score"]
-            rows.append([c["label"], c["map_short"], PRESETS[c["setting"]][0], f"{sc['fitted']} ({sc['fitted_fraction']:.0%})",
-                         f"{sc['score']:.1f}", "✓ best" if c is best else "", sc["residues"], f"{sc['q_mean']:.3f}",
-                         f"{sc['cc_mask']:.3f}", sc["fragments"], sc["duplicated"], c["round"]])
         if getattr(self, "hand_candidate", None):
             sc = self.hand_candidate["score"]
             rows.append(["other hand", "mirrored (scored against it)", PRESETS[self.hand_candidate["setting"]][0],
                          f"{sc['fitted']} ({sc['fitted_fraction']:.0%})", f"{sc['score']:.1f}", "", sc["residues"],
                          f"{sc['q_mean']:.3f}", f"{sc['cc_mask']:.3f}", sc["fragments"], sc["duplicated"], "—"])
-        ctx.add_table("Runs compared", ["Run", "Map", "Settings", "Fitted", "Score", "Best", "Residues", "Q-score",
-                                        "CC (mask)", "Fragments", "Duplicated", "Round"], rows,
-                      note=f"Fitted: residues whose mean atom Q-score is at least {self.ms.fitted_cutoff(self.resolution):.2f} "
-                           f"(expected Q at {self.resolution:g} Å minus 0.2). Score: fitted residues, those traced twice "
-                           "counted once. All scored against the experimental map.")
-        runs = [c for c in order if "combined_from" not in c]
-        if len(runs) > 1:
-            ctx.add_plot("Fitted residues by run", [{"name": "Fitted residues", "x": list(range(1, len(runs) + 1)),
-                                                     "y": [c["score"]["fitted"] for c in runs]},
-                                                    {"name": "Residues built", "x": list(range(1, len(runs) + 1)),
-                                                     "y": [c["score"]["residues"] for c in runs]}],
-                         x_label="Run", y_label="Residues")
+        self._runs_table("Runs compared", rows)
+        self._runs_plot()
         if best.get("combined_from"):
             ctx.add_table("Pieces added from other runs", ["From run", "Chain", "Residues", "Length", "Q-score", "New chain"],
                           [[a["source"], a["chain"], f"{a['first']}-{a['last']}", a["length"], f"{a['q_mean']:.3f}", a["new_chain"]]

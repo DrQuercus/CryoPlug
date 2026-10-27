@@ -307,6 +307,22 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); out
 .alert.info { border-color: var(--st-running); }
 .alert.warn { border-color: var(--st-warn); }
 .alert.wait { border-color: var(--st-waiting); }
+/* warnings of the job, above its report (as in CryoSPARC) */
+.warnings-box { margin-top: 10px; border-radius: 8px; border-left: 4px solid var(--st-warn); background: var(--surface-2); }
+.warnings-box > summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; font-size: 13px; color: var(--warn-ink); list-style: none; }
+.warnings-box > summary::-webkit-details-marker { display: none; }
+.warnings-box > summary svg.ic { width: 16px; height: 16px; }
+.warnings-count { margin-left: auto; min-width: 20px; padding: 0 6px; border-radius: 10px; background: rgba(250, 178, 25, .22); text-align: center; font-size: 12px; font-weight: 600; }
+.warnings-list { display: flex; flex-direction: column; gap: 6px; padding: 0 12px 10px; max-height: 260px; overflow: auto; }
+.warning-item { background: var(--surface-1); border-radius: 6px; padding: 6px 9px; }
+.warning-time { font-size: 11px; color: var(--ink-3); }
+.warning-text { font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* one frame per step of a job (iterations, runs), with a slider */
+.frames-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.frames-bar input[type=range] { flex: 1 1 140px; min-width: 100px; accent-color: var(--accent); }
+.frames-label { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.frame-img { display: block; max-width: 100%; border-radius: 8px; background: var(--surface-3); }
+.frame-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 table.data { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 table.data th { text-align: left; font-weight: 600; color: var(--ink-2); border-bottom: 1px solid var(--axis); padding: 5px 8px; white-space: nowrap; }
 table.data td { border-bottom: 1px solid var(--hairline); padding: 5px 8px; vertical-align: top; font-variant-numeric: tabular-nums; }

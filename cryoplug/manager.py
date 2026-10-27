@@ -82,6 +82,8 @@ class Manager:
                 pass
         self.lanes = {lane.name: make_lane(lane) for lane in config.lanes}
         self.tool_status: dict[str, dict[str, Any]] = self.db.get_meta("tool_status", {}) or {}
+        self._warnings: dict[str, tuple[int, list[dict[str, Any]]]] = {}  # log offset read, warnings found (per job)
+        self._warnings_lock = threading.Lock()
 
     # =============================================================== lanes
     @property
@@ -927,11 +929,16 @@ class Manager:
             job["disk_bytes"] = self.measure_job(puid, juid)  # a job that ended before sizes were kept
         report_path = jdir / "report.json"
         job["report"] = {"sections": []}
+        job["report_mtime"] = 0.0  # the panel redraws the report of a running job when it changes
         if report_path.exists():
             try:
+                job["report_mtime"] = report_path.stat().st_mtime
                 job["report"] = json.loads(report_path.read_text())
             except (OSError, ValueError):
                 pass
+        if job["status"] not in ACTIVE_STATUSES:
+            self._drop_cleared_views(puid, job["report"])
+        job["warnings"] = self.job_warnings(puid, juid)
         inputs = {}
         for slot, ref in job["inputs"].items():
             parent = self.db.get_job(puid, ref["job"])
@@ -950,6 +957,69 @@ class Manager:
             from cryoplug.jobs.interactive import list_candidate_models
             job["candidates"] = list_candidate_models(jdir) if jdir.exists() else []
         return job
+
+    WARNING_LINE = re.compile(r"^\[(?P<time>[^\]]+)\] WARNING(?P<more>[:+]) (?P<text>.*)$")
+
+    def job_warnings(self, puid: str, juid: str, keep: int = 30) -> list[dict[str, Any]]:
+        """The warnings CryoPlug wrote in the log of a job ({time, text, count}, the last ``keep``), shown above its
+        report as CryoSPARC does; the log is read from where the previous call stopped."""
+        path = self.job_dir(puid, juid) / "job.log"
+        key = f"{puid}/{juid}"
+        try:
+            size = path.stat().st_size
+        except OSError:
+            with self._warnings_lock:
+                self._warnings.pop(key, None)
+            return []
+        with self._warnings_lock:
+            offset, found = self._warnings.get(key, (0, []))
+        if size < offset:  # the job was cleared and runs again
+            offset, found = 0, []
+        if size > offset:
+            found = [dict(w) for w in found]
+            carry = b""
+            with open(path, "rb") as fh:  # by pieces: RELION's logs reach tens of megabytes
+                fh.seek(offset)
+                while offset + len(carry) < size:
+                    chunk = fh.read(min(4 << 20, size - offset - len(carry)))
+                    if not chunk:
+                        break
+                    data = carry + chunk
+                    end = data.rfind(b"\n") + 1  # a line being written is read next time
+                    lines, carry = data[:end], data[end:]
+                    offset += end
+                    if b"] WARNING" in lines:
+                        for raw in lines.split(b"\n"):
+                            if b"] WARNING" in raw:
+                                self._add_warning(found, raw.decode("utf-8", errors="replace"))
+            found = found[-keep:]
+            with self._warnings_lock:
+                self._warnings[key] = (offset, found)
+        return [{k: v for k, v in w.items() if k != "lines"} for w in found]
+
+    def _add_warning(self, found: list[dict[str, Any]], line: str) -> None:
+        m = self.WARNING_LINE.match(line)
+        if not m:
+            return
+        last = found[-1] if found else None
+        if m["more"] == "+":  # the next line of the same message
+            if last and last.get("lines", 1) < 20:
+                last["text"] += "\n" + m["text"]
+                last["lines"] = last.get("lines", 1) + 1
+        elif last and last["text"] == m["text"]:
+            last["count"] = last.get("count", 1) + 1
+            last["time"] = m["time"]
+        else:
+            found.append({"time": m["time"], "text": m["text"]})
+
+    def _drop_cleared_views(self, puid: str, report: dict[str, Any]) -> None:
+        """Maps of the steps of a finished job opened from its frames: those deleted since (Clear intermediate
+        iterations) are not offered any more."""
+        root = self.project_dir(puid)
+        for sec in report.get("sections", []):
+            for frame in sec.get("frames") or []:
+                if frame.get("view"):
+                    frame["view"] = [v for v in frame["view"] if (root / v["path"]).exists()]
 
     def read_log(self, puid: str, juid: str, offset: int = 0, limit: int = 400_000) -> dict[str, Any]:
         path = self.job_dir(puid, juid) / "job.log"

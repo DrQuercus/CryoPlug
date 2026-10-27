@@ -15,6 +15,7 @@ import numpy as np
 from cryoplug import relion as rl
 from cryoplug.jobs import register
 from cryoplug.jobs.base import InputData, JobContext, JobError, JobType, OutputDef, Param, Slot, extra_args_param
+from cryoplug.jobs.iterations import IterationDashboard
 from cryoplug.jobs.relion import (
     Progress, absolute_greyscale, finish_refinement, map_on_grid, outputs_of_refine, partial_refine_outputs, postprocess,
 )
@@ -125,9 +126,10 @@ class RelionRefine3D(RelionJob):
             ctx.add_table("3D auto-refine", ["Setting", "Value"], [
                 ["Continued", f"from iteration {it} ({Path(opt).name})"],
                 ["Particles", f"{parts['n']:,} · box {parts['box']} px · {parts['pixel_size']:g} Å/px"], ["Symmetry", sym]])
-            progress = Progress(ctx)
+            progress = IterationDashboard(ctx, "refine", mask=mask)
             ctx.progress(0.03, f"relion_refine (auto-refine, continued from iteration {it})")
             run_relion(ctx, args, on_line=progress)
+            progress.finish()
             finish_refinement(ctx, outputs_of_refine(ctx, root), parts, sym, mask, mask_data, progress, kind="refine3d")
             return
         diameter = mask_diameter(ctx, parts)
@@ -170,9 +172,10 @@ class RelionRefine3D(RelionJob):
             ["Angular sampling", f"{p['angular_step']}, local from {p['local_from']}"],
             ["Mask diameter", f"{diameter:g} Å"], ["Mask", mask_in.source if mask_in else "none"],
             ["Blush", "yes" if p["blush"] else "no"]])
-        progress = Progress(ctx)
+        progress = IterationDashboard(ctx, "refine", mask=mask)
         ctx.progress(0.03, "relion_refine (auto-refine)")
         run_relion(ctx, args, on_line=progress)
+        progress.finish()
         finish_refinement(ctx, outputs_of_refine(ctx), parts, sym, mask, mask_data, progress, kind="refine3d")
 
 

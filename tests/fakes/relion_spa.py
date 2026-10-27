@@ -727,8 +727,17 @@ def initial_model(a: dict) -> None:
     box, apix = rl.grid_from_star(tables)
     particle_images(tables)
     k, n_iter = int(a.get("--K", 1)), int(a.get("--iter", 200))
-    for it in range(1, n_iter + 1, max(1, n_iter // 10)):
+    for it in range(1, n_iter, max(1, n_iter // 10)):  # VDAM writes its model at every iteration
         print(f" Gradient optimisation iteration {it} of {n_iter}")
+        stem, w = f"{root}_it{it:03d}", it / n_iter
+        for c in range(1, k + 1):
+            write_image(f"{stem}_class{c:03d}.mrc", blob_map(box, apix, 2.0 * (c - 1) + 3.0 * (1 - w)), apix)
+        classes = rl.StarTable("model_classes")
+        classes.set_column("rlnReferenceImage", [f"{stem}_class{c:03d}.mrc" for c in range(1, k + 1)])
+        classes.set_column("rlnClassDistribution", [1.0 / k] * k)
+        classes.set_column("rlnEstimatedResolution", [12.0 + 10.0 * (1 - w)] * k)
+        rl.write_star(f"{stem}_model.star", [model_general(3, k, box, apix, 12.0 + 10.0 * (1 - w)), classes])
+    print(f" Gradient optimisation iteration {n_iter} of {n_iter}")
     last = f"{root}_it{n_iter:03d}"
     for c in range(1, k + 1):
         write_image(f"{last}_class{c:03d}.mrc", blob_map(box, apix, 2.0 * (c - 1)), apix)

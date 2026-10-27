@@ -368,7 +368,7 @@ def refinement_diagnostics(ctx: JobContext, data_star: Path, folder: Path | None
         ctx.add_plot("Share of each class over the iterations",
                      [{"name": f"Class {c + 1}", "x": x, "y": [round(100 * h["distribution"][c], 2) if c < len(h["distribution"]) else None
                                                               for h in shares]} for c in range(k)],
-                     x_label="Iteration", y_label="Particles (%)",
+                     x_label="Iteration", y_label="Particles (%)", key="it_shares",
                      note="Classes still exchanging particles at the end have not converged: more iterations, or a "
                           "different regularisation T.")
         if any(h.get("resolution") for h in shares):
@@ -376,7 +376,7 @@ def refinement_diagnostics(ctx: JobContext, data_star: Path, folder: Path | None
                          [{"name": f"Class {c + 1}", "x": x,
                            "y": [round(h["resolution"][c], 2) if h.get("resolution") and c < len(h["resolution"]) and h["resolution"][c] < 900 else None
                                  for h in shares]} for c in range(k)],
-                         x_label="Iteration", y_label="Resolution (Å)")
+                         x_label="Iteration", y_label="Resolution (Å)", key="it_class_resolution")
 
 
 # ------------------------------------------------------------------ helical processing (RELION's GUI options)

@@ -541,6 +541,9 @@ def report_lines(report: dict[str, Any] | None, full: bool = False) -> list[str]
             lines += ["  " + line for line in body.splitlines()]
         elif kind == "plot":
             lines += plot_lines(sec)
+            if len(sec.get("frames") or []) > 1:
+                lines.append(f"  (the last of {len(sec['frames'])} steps: {sec['frames'][-1].get('label', '')}; the panel "
+                             "has a slider for the others)")
         elif kind == "heatmap":
             values = [v for row in sec.get("values") or [] for v in row if v is not None]
             span = f", values {value_text(min(values))} to {value_text(max(values))} {sec.get('unit', '')}" if values else ""
@@ -548,7 +551,10 @@ def report_lines(report: dict[str, Any] | None, full: bool = False) -> list[str]
                          + (f" — {short(sec['note'], 200)}" if sec.get("note") else ""))
         elif kind == "image":
             images += 1
-            lines.append(f"[{title}] image {sec.get('path', '')} (get_job_images shows it)")
+            frames = sec.get("frames") or []
+            step = f", the last of {len(frames)} steps ({frames[-1].get('label', '')})" if len(frames) > 1 else ""
+            lines.append(f"[{title}] image {sec.get('path', '')}{step} (get_job_images shows it)"
+                         + (f" — {frames[-1]['caption']}" if frames and frames[-1].get("caption") else ""))
         elif kind == "latent":
             lines.append(f"[{title}] interactive latent-space explorer (in the web interface)")
         elif kind == "classes2d":

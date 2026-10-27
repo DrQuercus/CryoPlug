@@ -61,6 +61,7 @@ DATA_TYPES = {
     "files": "Files",
 }
 TERMINAL_STATUSES = {"completed", "failed", "killed"}
+MAX_FRAMES = 300  # steps a live section keeps (the iterations of a long VDAM run)
 ACTIVE_STATUSES = {"queued", "launched", "running"}
 
 
@@ -496,9 +497,11 @@ class JobContext:
     # ------------------------------------------------------------ logging
     def log(self, message: str, level: str = "info") -> None:
         prefix = {"info": "", "warning": "WARNING: ", "error": "ERROR: "}.get(level, "")
+        more = {"warning": "WARNING+ ", "error": "ERROR+ "}.get(level, "")  # the next lines of the same message
+        now = _now()
         with open(self.log_path, "a", encoding="utf-8") as fh:
-            for line in str(message).splitlines() or [""]:
-                fh.write(f"[{_now()}] {prefix}{line}\n")
+            for i, line in enumerate(str(message).splitlines() or [""]):
+                fh.write(f"[{now}] {prefix if i == 0 else more}{line}\n")
 
     def warn(self, message: str) -> None:
         self.log(message, "warning")
@@ -836,6 +839,68 @@ class JobContext:
 
     def add_image(self, title: str, path: str | Path, key: str | None = None) -> None:
         self._section("image", title, key=key, path=self.rel(path))
+
+    # ------------------------------------------------- one frame per step (live dashboards)
+    def _framed(self, key: str, kind: str) -> dict[str, Any]:
+        """The section ``key`` drawn so far (empty when none)."""
+        for sec in self.report.get("sections", []):
+            if sec.get("key") == key and sec.get("kind") == kind:
+                return sec
+        return {}
+
+    def _frames(self, key: str, kind: str) -> list[dict[str, Any]]:
+        return list(self._framed(key, kind).get("frames") or [])
+
+    def view_items(self, items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Maps and models to open in the 3D viewer, as the panel's View 3D buttons take them."""
+        return [{"kind": it.get("kind", "map"), "path": self.rel(it["path"]), "label": it.get("label") or Path(it["path"]).name}
+                for it in items if it.get("path")]
+
+    def add_image_frame(self, title: str, path: str | Path, label: str, key: str, note: str = "", caption: str = "",
+                        view: Iterable[dict[str, Any]] = (), group: str = "", keep: bool = True) -> None:
+        """One more picture of a section keeping one per step of a running job (an iteration, a run): the panel shows
+        the latest while the job runs, and a slider brings back the others, as CryoSPARC's iteration sliders.
+        ``view``: maps and models of that step to open in the 3D viewer ([{kind, path, label}]); ``caption``: what the
+        picture shows; ``group``: sections whose sliders move together (the iterations of a refinement); ``keep``
+        False: this picture replaces the others (the best result so far)."""
+        frame: dict[str, Any] = {"label": label, "path": self.rel(path)}
+        if caption:
+            frame["caption"] = caption
+        items = self.view_items(view)
+        if items:
+            frame["view"] = items
+        old = self._framed(key, "image")
+        frames = ([f for f in old.get("frames") or [] if f.get("label") != label] if keep else []) + [frame]
+        note, group = note or old.get("note", ""), group or old.get("group", "")
+        self._section("image", title, key=key, path=frame["path"], frames=frames[-MAX_FRAMES:],
+                      **({"note": note} if note else {}), **({"group": group} if group else {}))
+
+    def add_plot_frame(self, title: str, series: list[dict[str, Any]], label: str, key: str, x_label: str = "",
+                       y_label: str = "", x_kind: str = "linear", hlines: list[dict[str, Any]] | None = None,
+                       y_range: list[float] | None = None, note: str = "", group: str = "") -> None:
+        """One more curve set of a plot keeping one per step (the FSC of each iteration): the latest is drawn, a
+        slider shows the others."""
+        frame: dict[str, Any] = {"label": label, "series": series}
+        old = self._framed(key, "plot")
+        frames = [f for f in old.get("frames") or [] if f.get("label") != label] + [frame]
+        note, group = note or old.get("note", ""), group or old.get("group", "")
+        self._section("plot", title, key=key, series=series, x_label=x_label, y_label=y_label, x_kind=x_kind,
+                      hlines=hlines or [], y_range=y_range, frames=frames[-MAX_FRAMES:],
+                      **({"note": note} if note else {}), **({"group": group} if group else {}))
+
+    def remove_section(self, key: str) -> None:
+        """Drop a section shown while the job ran (a preview the final report supersedes)."""
+        sections = self.report.get("sections", [])
+        kept = [sec for sec in sections if sec.get("key") != key]
+        if len(kept) != len(sections):
+            self.report["sections"] = kept
+            self.save_report()
+
+    def remove_highlight(self, label: str) -> None:
+        before = len(self.highlights)
+        self.highlights = [h for h in self.highlights if h["label"] != label]
+        if len(self.highlights) != before:
+            self.write_state()
 
     def add_classes(self, title: str, classes: list[dict[str, Any]], key: str | None = None, **data: Any) -> None:
         """Gallery of 2D class averages: [{class, image (PNG), particles, fraction, resolution...}]; ``selectable``

@@ -21,14 +21,14 @@ import {
 } from './ui.js';
 
 const D = { puid: null, uid: null, job: null, mode: 'panel', tab: 'overview', log: '', logOffset: 0, filesSub: '', autoscroll: true, busy: false, again: false,
-  wide: false };
+  wide: false, frameSel: {}, frameViews: [], warningsOpen: null };
 const container = () => document.getElementById(D.mode === 'page' ? 'content' : 'panel');
 
 // mode: 'panel' (right side) or 'page' (main area, next to the job builder).
 export function openDetail(uid, mode = 'panel') {
   const puid = state.project?.uid || null;
   if (D.uid !== uid || D.mode !== mode || D.puid !== puid) {
-    Object.assign(D, { puid, uid, mode, job: null, tab: 'overview', log: '', logOffset: 0, filesSub: '' });
+    Object.assign(D, { puid, uid, mode, job: null, tab: 'overview', log: '', logOffset: 0, filesSub: '', frameSel: {}, warningsOpen: null });
     setWide(D.wide);
     container().scrollTop = 0;
     renderLoading();
@@ -95,7 +95,8 @@ export async function refreshDetail(force = false) {
     if (D.uid !== uid || state.project?.uid !== puid) return; // another job was opened meanwhile
     const changed = force || !D.job || D.job.status !== job.status || JSON.stringify(D.job.outputs) !== JSON.stringify(job.outputs)
       || D.job.progress !== job.progress || D.job.message !== job.message || JSON.stringify(D.job.candidates) !== JSON.stringify(job.candidates)
-      || D.job.title !== job.title || D.job.queue_position !== job.queue_position;
+      || D.job.title !== job.title || D.job.queue_position !== job.queue_position
+      || D.job.report_mtime !== job.report_mtime || JSON.stringify(D.job.warnings) !== JSON.stringify(job.warnings);
     D.job = job;
     // newer than the job list (the status changed in between): bring the cards and the summary up to date now
     if (state.jobsByUid[uid] && state.jobsByUid[uid].status !== job.status) refreshJobs().catch(() => {});
@@ -124,14 +125,18 @@ let headEl = null;
 let bodyEl = null;
 
 function render() {
+  const scroller = container();
+  const keep = scroller.scrollTop; // a live redraw (new iteration) leaves the reader where they were
   headEl = h('div', { class: 'panel-head' });
   bodyEl = h('div', { class: 'panel-body' });
-  if (D.mode === 'page') clear(container(), h('div', { class: 'job-page' }, headEl, bodyEl));
-  else clear(container(), headEl, bodyEl);
+  D.frameViews = [];
+  if (D.mode === 'page') clear(scroller, h('div', { class: 'job-page' }, headEl, bodyEl));
+  else clear(scroller, headEl, bodyEl);
   renderHeaderOnly();
   if (D.tab === 'overview') renderOverview(bodyEl);
   else if (D.tab === 'log') renderLog(bodyEl);
   else renderFiles(bodyEl);
+  scroller.scrollTop = keep;
 }
 
 function renderHeaderOnly() {
@@ -452,6 +457,8 @@ function renderOverview(body) {
       h('div', { class: 'label' }, hl.label), h('div', { class: 'value' }, String(hl.value)), hl.status ? statusMark(hl.status) : null)))));
   }
 
+  if (job.warnings && job.warnings.length) body.appendChild(warningsBox(job));
+
   // a live session first: its dashboard is what the job is about while it runs
   for (const sec of (job.report?.sections || []).filter((s) => s.kind === 'live')) body.appendChild(reportSection(sec, puid, job));
 
@@ -593,6 +600,8 @@ function reportSection(sec, puid, job) {
       h('thead', {}, h('tr', {}, h('th', {}, 'Metric'), h('th', {}, 'Value'), h('th', {}, 'Assessment'), h('th', {}, 'Target'))),
       h('tbody', {}, sec.metrics.map((m) => h('tr', {}, h('td', {}, m.label), h('td', {}, h('b', {}, String(m.value))),
         h('td', {}, statusMark(m.status) || ''), h('td', { class: 'muted' }, m.target || '')))))));
+  } else if (sec.kind === 'plot' && sec.frames && sec.frames.length) {
+    wrap.append(h('div', { class: 'box' }, frameView(sec, (f) => lineChart({ ...sec, series: f.series, hlines: f.hlines || sec.hlines })), note));
   } else if (sec.kind === 'plot') {
     wrap.append(h('div', { class: 'box' }, sec.style === 'bars' ? barChart(sec) : lineChart(sec), note));
   } else if (sec.kind === 'heatmap') {
@@ -669,11 +678,81 @@ function reportSection(sec, puid, job) {
           h('span', { class: 'muted small' }, `${s.mean} picks per micrograph (${(s.counts || []).join(', ')})`)),
         usable ? h('button', { class: 'btn small', type: 'button', title: 'Auto-picking of all the micrographs with these settings',
           onclick: () => pickWithSettings(job, s.params) }, icon('play'), 'Pick with these settings…') : null))), note));
+  } else if (sec.kind === 'image' && sec.frames && sec.frames.length) {
+    wrap.append(h('h4', {}, sec.title), h('div', { class: 'box' }, frameView(sec, (f) => [
+      h('a', { href: api.fileUrl(puid, f.path), target: '_blank', rel: 'noopener' },
+        h('img', { class: 'frame-img', src: api.fileUrl(puid, f.path), alt: `${sec.title}, ${f.label}` })),
+      f.caption || (f.view && f.view.length) ? h('div', { class: 'frame-foot' },
+        f.caption ? h('span', { class: 'muted small grow' }, f.caption) : h('span', { class: 'grow' }),
+        f.view && f.view.length ? h('a', { class: 'btn small', href: viewerUrl(f.view), target: '_blank', rel: 'noopener',
+          title: `Open ${f.view.map((v) => v.label).join(', ')} in the 3D viewer` }, icon('eye'), 'View 3D') : null) : null,
+    ]), note));
   } else if (sec.kind === 'image') {
     wrap.append(h('h4', {}, sec.title), h('a', { href: api.fileUrl(puid, sec.path), target: '_blank', rel: 'noopener' },
       h('img', { src: api.fileUrl(puid, sec.path), alt: sec.title, style: { maxWidth: '100%', borderRadius: '8px' } })));
   }
   return wrap;
+}
+
+// A section keeping one frame per step of the job (an iteration, a run): the latest is shown while the job runs, a
+// slider brings back the others, as CryoSPARC's iteration sliders. The sliders of one group (the iterations of a
+// refinement) move together; a step chosen by hand stays chosen when new ones arrive.
+function frameView(sec, content) {
+  const frames = sec.frames;
+  const id = sec.group || sec.key || sec.title;
+  const last = frames.length - 1;
+  const place = h('div', { class: 'frame-content' });
+  const label = h('span', { class: 'frames-label' });
+  const range = h('input', { type: 'range', min: '0', max: String(last), step: '1', 'aria-label': `${sec.title}: step` });
+  const prev = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Previous step' }, icon('back'));
+  const next = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Next step' }, icon('next'));
+  const latest = h('button', { class: 'btn small', type: 'button', title: 'Follow the latest step' }, 'Latest');
+  let current = -1;
+  const draw = (i) => {
+    i = Math.max(0, Math.min(last, i));
+    if (i === current) return;
+    current = i;
+    range.value = String(i);
+    prev.disabled = i === 0;
+    next.disabled = i === last;
+    latest.hidden = i === last;
+    label.textContent = `${frames[i].label}${frames.length > 1 ? ` · ${i + 1}/${frames.length}` : ''}`;
+    clear(place, content(frames[i], i));
+  };
+  const choose = (i) => {
+    i = Math.max(0, Math.min(last, i));
+    if (i === last) delete D.frameSel[id];
+    else D.frameSel[id] = frames[i].label;
+    for (const v of D.frameViews) if (v.id === id) v.show(frames[i].label, i === last);
+  };
+  range.addEventListener('input', () => choose(+range.value));
+  prev.addEventListener('click', () => choose(current - 1));
+  next.addEventListener('click', () => choose(current + 1));
+  latest.addEventListener('click', () => choose(last));
+  D.frameViews.push({ id, show: (lab, toLast) => {
+    if (toLast) { draw(last); return; }
+    const j = frames.findIndex((f) => f.label === lab);
+    if (j >= 0) draw(j);
+  } });
+  const chosen = D.frameSel[id];
+  const start = chosen === undefined ? last : frames.findIndex((f) => f.label === chosen);
+  draw(start >= 0 ? start : last);
+  return h('div', { class: 'frames' },
+    frames.length > 1 ? h('div', { class: 'frames-bar' }, prev, range, next, label, latest) : h('div', { class: 'frames-bar' }, label),
+    place);
+}
+
+// The warnings CryoPlug wrote in the log, above the report (collapsible, as in CryoSPARC).
+function warningsBox(job) {
+  const list = job.warnings;
+  const box = h('details', { class: 'warnings-box' },
+    h('summary', {}, icon('alert'), h('b', {}, 'Warnings'), h('span', { class: 'warnings-count' }, String(list.length))),
+    h('div', { class: 'warnings-list' }, list.slice().reverse().map((w) => h('div', { class: 'warning-item' },
+      h('div', { class: 'warning-time mono' }, w.time, w.count > 1 ? ` · ×${w.count}` : ''),
+      h('div', { class: 'warning-text' }, w.text)))));
+  box.open = D.warningsOpen === null ? list.length <= 5 : D.warningsOpen;
+  box.addEventListener('toggle', () => { D.warningsOpen = box.open; });
+  return box;
 }
 
 // The auto-picking of all the micrographs a tuning job tried settings on, with the setting chosen: the builder, filled

@@ -346,6 +346,15 @@ section 6). La commande affiche les jobs d'import à créer.
   d'abord, la dernière activité, par statut (en cours, en attente, en file, échoués…), par catégorie et type de job,
   par titre, ou par durée d'exécution. Le choix est gardé par le navigateur.
 
+### Suivi en direct (tableau de bord)
+
+Comme dans CryoSPARC, le panneau d'un job en cours se met à jour tout seul : tuiles des résultats clés,
+avertissements du job, et **un curseur d'itération** sur les graphiques (FSC, coupes de la carte avec le contour
+du masque, classes, part de chaque classe) des raffinements, classifications et modèles initiaux RELION ; **View 3D**
+ouvre les cartes d'une itération pendant que le job continue. CryoAtom2 enhanced montre le modèle de chaque essai,
+le tableau des essais et le meilleur modèle à ce stade avec ses scores. Détails : guide, *Suivre un job pendant
+qu'il tourne*.
+
 ### Vue en arbre
 
 - Comme le *Tree View* de CryoSPARC : les cartes des jobs (vignette, statut, résultat ou progression) de haut

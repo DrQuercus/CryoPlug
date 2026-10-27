@@ -199,7 +199,10 @@ def refine(argv):
         for it in range(1, 5):
             print(f" Auto-refine: Iteration= {it}")
             print(f" Auto-refine: Resolution= {8.0 - it:.4f} (no gain for 0 iter) ")
-            # every iteration with the half sets apart: their maps, models, particles and optimiser
+            print(f" Auto-refine: Changes in angles= {30.0 / it:.3f} degrees; and in offsets= {3.0 / it:.3f} Angstroms "
+                  "(no gain for 0 iter) ")
+            # every iteration with the half sets apart: their maps, models (with the gold-standard FSC of the
+            # iteration and the accuracies), particles and optimiser
             last = f"{root}_it{it:03d}"
             models = []
             for h in (1, 2):
@@ -207,8 +210,12 @@ def refine(argv):
                 classes = rl.StarTable("model_classes")
                 classes.set_column("rlnReferenceImage", [f"{last}_half{h}_class001.mrc"])
                 classes.set_column("rlnClassDistribution", [1.0])
+                classes.set_column("rlnAccuracyRotations", [6.0 / it])
+                classes.set_column("rlnAccuracyTranslationsAngst", [2.0 / it])
+                classes.set_column("rlnEstimatedResolution", [8.0 - it])
                 general = rl.StarTable("model_general", ["rlnCurrentResolution"], [[f"{8.0 - it:.6f}"]], loop=False)
-                rl.write_star(f"{last}_half{h}_model.star", [general, classes])
+                curve, _f, _c = fsc_table(box, apix, 8.0 - it)
+                rl.write_star(f"{last}_half{h}_model.star", [general, classes, curve])
                 models.append(f"{last}_half{h}_model.star")
             rl.write_star(f"{last}_data.star", list(tables.values()))
             write_optimiser(f"{last}_optimiser.star", f"{last}_data.star", models[0], True, root, models[1])

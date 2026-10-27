@@ -12,6 +12,7 @@ import numpy as np
 from cryoplug import relion as rl
 from cryoplug.jobs import register
 from cryoplug.jobs.base import JobContext, JobError, JobType, OutputDef, Param, Slot, extra_args_param
+from cryoplug.jobs.iterations import IterationDashboard
 from cryoplug.jobs.relion import Progress, absolute_greyscale, map_on_grid
 from cryoplug.jobs.tomo_common import is_tomo, particle_args, tomo_output
 from cryoplug.jobs.relion_common import (
@@ -113,8 +114,30 @@ class LiveClasses(Progress):
             records = render_classes(self.ctx, files)
             class_section(self.ctx, records, it, files, running=True)
             self.shown = it
+            self.sheet(it, files, records)
         except Exception as exc:  # pictures are cosmetic; the final gallery is drawn at the end
             self.ctx.log(f"(class averages of iteration {it} not shown: {exc})")
+
+    def sheet(self, it: int, files: dict[str, Path], records: list[dict[str, Any]], shown: int = 24) -> None:
+        """The largest classes of the iteration side by side: one frame of a slider over the iterations."""
+        import mrcfile
+
+        from cryoplug.imaging import write_png
+        from cryoplug.micrographs import class_tile, tile_sheet
+        best = sorted(records, key=lambda r: -r["particles"])[:shown]
+        if not best:
+            return
+        with mrcfile.open(str(files["classes"]), permissive=True) as m:
+            stack = np.asarray(m.data, dtype=np.float32)
+        if stack.ndim == 2:
+            stack = stack[np.newaxis]
+        tiles = [class_tile(stack[r["class"] - 1], 64) for r in best if r["class"] <= len(stack)]
+        live = self.ctx.path("live")
+        live.mkdir(exist_ok=True)
+        png = write_png(live / f"classes2d_it{it:03d}.png", tile_sheet(tiles, per_row=8, gap=2))
+        self.ctx.add_image_frame("Class averages over the iterations", png, f"Iteration {it}", key="it_classes2d",
+                                 group="iterations",
+                                 caption=f"The {len(tiles)} largest of {len(records)} classes, by number of particles")
 
 
 def classes_output_meta(ctx: JobContext, files: dict[str, Path], records: list[dict[str, Any]], kind: str) -> dict[str, Any]:
@@ -688,8 +711,9 @@ class RelionInitialModel(RelionJob):
             if it >= iters:
                 raise JobError(f"The run already reached iteration {it} of {iters}: nothing to continue")
             ctx.progress(0.03, f"relion_refine: initial model, continued from iteration {it} to {iters}")
-            run_relion(ctx, continue_args(ctx, p, opt, root) + ["--iter", str(iters)],
-                       on_line=Progress(ctx, total=iters, end=0.85))
+            dashboard = IterationDashboard(ctx, "classes", total=iters, end=0.85)
+            run_relion(ctx, continue_args(ctx, p, opt, root) + ["--iter", str(iters)], on_line=dashboard)
+            dashboard.finish()
             self.finish(ctx)
             return
         sym = (str(p["symmetry"]).strip() or "C1").upper()
@@ -714,7 +738,9 @@ class RelionInitialModel(RelionJob):
             args += ["--gpu", ""]
         args += ctx.split_extra()
         ctx.progress(0.03, f"relion_refine: initial model, {k} class(es)")
-        run_relion(ctx, args, on_line=Progress(ctx, total=iters, end=0.85))
+        dashboard = IterationDashboard(ctx, "classes", total=iters, end=0.85)
+        run_relion(ctx, args, on_line=dashboard)
+        dashboard.finish()
         self.finish(ctx)
 
     def finish_partial(self, ctx: JobContext) -> str:
@@ -850,7 +876,9 @@ class RelionClass3DGlobal(RelionJob):
                 raise JobError(f"The run already reached iteration {it} of {iters}: nothing to continue")
             args = continue_args(ctx, p, opt, root) + ["--iter", str(iters)]
             ctx.progress(0.03, f"relion_refine: {k} classes, continued from iteration {it} to {iters}")
-            run_relion(ctx, args, on_line=Progress(ctx, total=iters))
+            dashboard = IterationDashboard(ctx, "classes", total=iters)
+            run_relion(ctx, args, on_line=dashboard)
+            dashboard.finish()
             it, files = rl.iteration_files(ctx.job_dir)
             if not it or not files["data"].exists():
                 raise JobError("relion_refine wrote no run_itNNN_data.star (see the log)")
@@ -900,7 +928,9 @@ class RelionClass3DGlobal(RelionJob):
                 args += ["--gpu", ""]
         args += ctx.split_extra()
         ctx.progress(0.03, f"relion_refine: {k} classes, {iters} iterations")
-        run_relion(ctx, args, on_line=Progress(ctx, total=iters))
+        dashboard = IterationDashboard(ctx, "classes", total=iters)
+        run_relion(ctx, args, on_line=dashboard)
+        dashboard.finish()
         it, files = rl.iteration_files(ctx.job_dir)
         if not it or not files["data"].exists():
             raise JobError("relion_refine wrote no run_itNNN_data.star (see the log)")
