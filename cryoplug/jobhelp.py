@@ -445,6 +445,32 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "next": ["relion_extract", "relion_pick_inspect"],
     },
+    "micrograph_junk": {
+        "purpose": "Repère le « junk » de chaque micrographie, comme le « Micrograph Junk Detector » de CryoSPARC mais à "
+                   "partir de la micrographie elle-même (sans réseau entraîné) : zones dont le fond est bien plus sombre "
+                   "(contamination, glace épaisse, carbone) ou plus clair (trous) que le reste, ou traversé par une marche "
+                   "nette (bords du film). Rejette les picks ou les particules qui y tombent, donne la part de junk de "
+                   "chaque micrographie et garde les micrographies les plus propres.",
+        "when": [
+            "Après le picking (LoG, Topaz, importé) : retirer les particules sur la contamination et les bords du carbone "
+            "avant l'extraction.",
+            "Trier les micrographies sur leur part de junk.",
+        ],
+        "avoid": [
+            "Des micrographies à peine plus grandes que quelques particules : le fond n'y est pas mesurable.",
+            "Des seuils trop bas sur des grilles très chargées : un amas de particules peut passer pour du junk.",
+        ],
+        "inputs": "Les micrographies, et leurs picks ou des particules extraites de ces micrographies.",
+        "tips": [
+            "Les seuils sont des écarts robustes (médiane, MAD) du fond : 4 σ pour le sombre, 5 σ pour les bords ; "
+            "baissez « Dark areas beyond » (2,5) pour rejeter aussi le carbone, activez « Bright » pour les trous.",
+            "La pente d'épaisseur de glace sur la micrographie est retirée avant : elle n'est pas du junk.",
+            "Chaque zone est prise jusqu'à la moitié du seuil autour de son cœur, puis élargie d'une marge (un rayon de "
+            "particule par défaut).",
+            "Le rapport montre les micrographies les plus touchées, junk en rouge, picks gardés en vert et rejetés en rouge.",
+        ],
+        "next": ["relion_extract", "relion_pick_inspect", "relion_curate"],
+    },
     "relion_pick_tuner": {
         "purpose": "Essaie plusieurs réglages du picking par Laplacien de Gaussienne (plages de diamètres × seuils) sur "
                    "quelques micrographies, comme le « Blob Picker Tuner » de CryoSPARC, et montre côte à côte les "

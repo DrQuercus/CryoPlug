@@ -210,6 +210,12 @@ def _autopick(pr: Processing, job: dict[str, Any], p: dict[str, Any]) -> None:
         pr.cite(HELICAL)
 
 
+def _junk(pr: Processing, job: dict[str, Any], p: dict[str, Any]) -> None:
+    rej = output_meta(job, "rejected").get("n_particles") or output_meta(job, "rejected_particles").get("n_particles")
+    pr.say((f"{_count(rej)} picks" if rej else "Picks") + " on ice contamination and support-film edges (background "
+           "outliers of the micrographs) were removed.")
+
+
 def _topaz_train(pr: Processing, job: dict[str, Any], p: dict[str, Any]) -> None:
     pr.say("A Topaz picking model was trained on particles from selected 2D classes.", TOPAZ)
 
@@ -505,7 +511,7 @@ def _tomo_reconstruct_particle(pr: Processing, job: dict[str, Any], p: dict[str,
 BUILDERS: dict[str, Callable[[Processing, dict[str, Any], dict[str, Any]], None]] = {
     "relion_import": _import, "relion_live": _live, "relion_motioncorr": _motioncorr, "relion_ctffind": _ctffind,
     "relion_curate": _curate, "relion_topaz_denoise": _denoise, "relion_autopick": _autopick,
-    "relion_topaz_train": _topaz_train, "relion_extract": _extract, "relion_class2d": _class2d,
+    "relion_topaz_train": _topaz_train, "micrograph_junk": _junk, "relion_extract": _extract, "relion_class2d": _class2d,
     "relion_select2d": _select2d, "relion_initial_model": _initial_model, "relion_class3d_global": _class3d,
     "relion_class3d": _class3d, "relion_hetero_refine": _hetero, "relion_select3d": _select3d,
     "relion_refine3d": _refine, "relion_local_refine": _local_refine, "relion_ctf_refine": _ctf_refine,

@@ -113,6 +113,12 @@ built-in · interactive: a person works in it. In: micrographs: micrographs, coo
 Shows every micrograph with its picked particles, as CryoSPARC's Inspect Picks and Manual Picker: a figure-of-merit threshold set on its histogram, particles removed or added with a click, zoom, pan and low-pass filter. Without picks, particles are picked by hand (a training set for Topaz). Writes the coordinate files RELION's extraction reads.
 Usually followed by: `relion_extract`, `relion_topaz_train`.
 
+### `micrograph_junk` — Junk detector (micrographs)
+built-in. In: micrographs: micrographs, coordinates?: coordinates, particles?: particles. Out: micrographs: micrographs, coordinates: coordinates, rejected: coordinates, particles: particles, rejected_particles: particles.
+
+Finds the junk of each micrograph, as CryoSPARC's Micrograph Junk Detector but from the micrograph itself: areas whose background is far darker (ice contamination, thick ice, carbon) or brighter (holes) than the rest, or crossed by a sharp step (edges of the support film). Rejects the picks or particles on junk, gives the junk share of every micrograph and keeps the cleaner micrographs.
+Usually followed by: `relion_extract`, `relion_pick_inspect`, `relion_curate`.
+
 ### `relion_extract` — Particle extraction (RELION)
 RELION. In: micrographs: micrographs, coordinates?: coordinates, particles?: particles. Out: particles: particles.
 

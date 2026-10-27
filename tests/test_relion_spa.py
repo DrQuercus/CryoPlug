@@ -1526,3 +1526,52 @@ def test_pick_tuner(manager, spa):
     pick = _run(manager, puid, "relion_autopick", {**cards[2]["params"], "mpi": 1}, mics)
     assert "--LoG_diam_min 50 --LoG_diam_max 70" in _command(manager, puid, pick)
     assert _outs(pick)["coordinates"]["meta"]["n_micrographs"] == 4
+
+
+def test_junk_detector_finds_contamination_and_film_edges():
+    from cryoplug import junk as jk
+    rng = np.random.default_rng(1)
+    n, apix, diameter = 1024, 2.0, 100.0
+    y, x = np.mgrid[0:n, 0:n].astype(np.float32)
+    img = rng.normal(0, 1.0, (n, n)).astype(np.float32) + 0.6 * x / n  # noise and an ice thickness gradient
+    for cx, cy in rng.uniform(60, n - 60, (120, 2)):
+        img -= 1.2 * np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * 12.5 ** 2))
+    clean_junk, _ = jk.detect(img, apix, diameter)
+    assert clean_junk.mean() < 0.05  # particles and the gradient are not junk (a dense cluster may be)
+    img -= 6.0 * np.exp(-((x - 700) ** 2 + (y - 300) ** 2) / (2 * 60.0 ** 2))  # a drop of contamination
+    img[:, :200] -= 1.5  # carbon film on the left
+    junk, f = jk.detect(img, apix, diameter)
+    assert list(jk.on_junk(junk, f, np.array([[700, 300], [200, 512], [500, 800]]))) == [True, True, False]
+    assert not jk.detect(img, apix, diameter, dark=0, edges=0, bright=0)[0].any()
+
+
+def test_micrograph_junk_job(manager, spa):
+    import mrcfile
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = {"micrographs": _ref(ctf, "micrographs")}
+    names = rl.micrograph_table(rl.read_star(pdir / _outs(ctf)["micrographs"]["path"])).column("rlnMicrographName")
+    with mrcfile.open(str(pdir / names[1]), mode="r+") as m:  # contamination painted on the second micrograph
+        d = np.asarray(m.data, dtype=np.float32)
+        yy, xx = np.mgrid[0:d.shape[0], 0:d.shape[1]]
+        d = d - 10.0 * float(d.std()) * np.exp(-((xx - 250) ** 2 + (yy - 250) ** 2) / (2 * 25.0 ** 2))
+        m.set_data(d.astype(m.data.dtype))
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1}, mics)
+    bad = manager.create_job(puid, "micrograph_junk", {"dark": 0, "edges": 0}, mics)
+    with pytest.raises(Exception, match="at least one kind of junk"):
+        manager.queue_job(puid, bad["uid"])
+    job = _run(manager, puid, "micrograph_junk", {"max_junk": 5, "particle_diameter": 60},
+               {**mics, "coordinates": _ref(pick, "coordinates")})
+    outs = _outs(job)
+    assert {"coordinates", "rejected"} <= set(outs)
+    n_in = _outs(pick)["coordinates"]["meta"]["n_particles"]
+    assert outs["coordinates"]["meta"]["n_particles"] + outs["rejected"]["meta"]["n_particles"] == n_in
+    table = next(s for s in _sections(manager, puid, job, "table") if s["title"].startswith("Junk per micrograph"))
+    assert table["rows"][0][0] == names[1] and float(table["rows"][0][1]) > 5, table["rows"]  # the painted one is the worst
+    for mic, cf in rl.coordinate_files(pdir / outs["rejected"]["path"]):  # rejected picks only around the paint
+        xy, _ = rl.read_coordinates(pdir / cf)
+        if len(xy):
+            assert mic == names[1] and np.all(np.hypot(xy[:, 0] - 250, xy[:, 1] - 250) < 120)
+    clean = rl.micrograph_table(rl.read_star(pdir / outs["micrographs"]["path"])).column("rlnMicrographName")
+    assert names[1] not in clean and len(clean) == len(names) - 1
+    assert (pdir / job["uid"] / "junk.png").exists()

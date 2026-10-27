@@ -543,6 +543,182 @@ class RelionPickTuner(RelionJob):
         ctx.add_output("tuning", "report", out, f"{len(cards)} picking settings tried",
                        meta={"settings": len(cards), "micrographs": len(chosen)})
 
+
+@register
+class MicrographJunk(JobType):
+    name = "micrograph_junk"
+    title = "Junk detector (micrographs)"
+    category = "Picking"
+    software = ["CryoPlug"]
+    cpus = 2
+    description = ("Finds the junk of each micrograph, as CryoSPARC's Micrograph Junk Detector but from the micrograph "
+                   "itself: areas whose background is far darker (ice contamination, thick ice, carbon) or brighter "
+                   "(holes) than the rest, or crossed by a sharp step (edges of the support film). Rejects the picks or "
+                   "particles on junk, gives the junk share of every micrograph and keeps the cleaner micrographs.")
+    inputs = [Slot("micrographs", ("micrographs",), "Micrographs"),
+              Slot("coordinates", ("coordinates",), "Picks to clean", required=False,
+                   help="Picks of these micrographs (auto-picking, Topaz, imported...)."),
+              Slot("particles", ("particles",), "Particles to clean", required=False,
+                   help="Or extracted particles of these micrographs.")]
+    params = [
+        Param("particle_diameter", "float", 0.0, label="Particle diameter", unit="Å", min=0,
+              help="Sets the scale of the background and of the margins; 0 = that of the picks."),
+        Param("dark", "float", 4.0, label="Dark areas beyond", unit="σ", min=0,
+              help="Background darker than the rest of the micrograph by this many robust σ: contamination, thick "
+                   "ice (lower, e.g. 2.5, to reject carbon too). 0 = off."),
+        Param("bright", "float", 0.0, label="Bright areas beyond", unit="σ", min=0,
+              help="Background brighter by this many σ: holes, broken or very thin ice. 0 = off."),
+        Param("edges", "float", 5.0, label="Edges beyond", unit="σ", min=0,
+              help="Sharp steps of the background (edges of the support film, of contamination). 0 = off."),
+        Param("margin", "float", 0.0, label="Margin", unit="Å", min=0,
+              help="The junk areas grown by this much; 0 = half the particle diameter."),
+        Param("max_junk", "float", 30.0, label="Keep micrographs up to", unit="% junk", min=0, max=100,
+              help="Micrographs with more of their area on junk are left out of the clean micrographs."),
+    ]
+    outputs = [OutputDef("micrographs", "micrographs", "Clean micrographs"),
+               OutputDef("coordinates", "coordinates", "Picks off junk"), OutputDef("rejected", "coordinates", "Picks on junk"),
+               OutputDef("particles", "particles", "Particles off junk"),
+               OutputDef("rejected_particles", "particles", "Particles on junk")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        if "coordinates" in connected and "particles" in connected:
+            return ["Connect the picks or the particles, not both"]
+        if not any(float(params.get(k) or 0) > 0 for k in ("dark", "bright", "edges")):
+            return ["Turn on at least one kind of junk (dark, bright or edges)"]
+        return []
+
+    def run(self, ctx: JobContext) -> None:
+        from cryoplug import junk as jk
+        from cryoplug.imaging import write_png
+        from cryoplug.micrographs import read_image, tile_sheet
+        p = ctx.params
+        mics_in = ctx.require("micrographs")
+        star, _ref = star_of(ctx, mics_in)
+        tables = rl.read_star(star)
+        table = rl.micrograph_table(tables)
+        names = table.column("rlnMicrographName")
+        apix = rl.micrograph_pixel_size(tables)
+        if not apix:
+            raise JobError("The pixel size of the micrographs is unknown")
+        coords, parts = ctx.input("coordinates"), ctx.input("particles")
+        picks: dict[str, np.ndarray] = {}
+        foms: dict[str, np.ndarray | None] = {}
+        diameter = float(p["particle_diameter"] or 0)
+        if coords is not None:
+            for mic, cf in rl.coordinate_files(Path(coords.path)):
+                f = ctx.abs(cf)
+                if f.exists():
+                    picks[mic], foms[mic] = rl.read_coordinates(f)
+            diameter = diameter or float(coords.meta.get("diameter") or 0)
+        ptables = ptab = None
+        if parts is not None:
+            pin = relion_particles(ctx, parts)
+            ptables = pin["tables"]
+            ptab = rl.particle_table(ptables)
+            if not (ptab.has("rlnMicrographName") and ptab.has("rlnCoordinateX")):
+                raise JobError("These particles have no micrograph positions (rlnMicrographName, rlnCoordinateX)")
+            diameter = diameter or 0.5 * pin["box"] * pin["pixel_size"]
+        if not diameter:
+            raise JobError("Give the particle diameter")
+        margin = float(p["margin"]) or diameter / 2
+        mic_of = ptab.column("rlnMicrographName") if ptab is not None else []
+        pxy = np.stack([ptab.floats("rlnCoordinateX"), ptab.floats("rlnCoordinateY")], axis=1) if ptab is not None else None
+        on_junk_rows = np.zeros(len(ptab) if ptab is not None else 0, dtype=bool)
+        rows_of: dict[str, list[int]] = {}
+        for i, m in enumerate(mic_of):
+            rows_of.setdefault(m, []).append(i)
+        fractions, results = [], {}
+        kept_pairs, rej_pairs = [], []
+        for k, name in enumerate(names):
+            ctx.progress(0.03 + 0.8 * k / len(names), f"Micrograph {k + 1}/{len(names)}")
+            path = ctx.abs(name)
+            try:
+                image = read_image(path)
+            except (OSError, ValueError) as exc:
+                ctx.warn(f"{name}: not read ({exc})")
+                fractions.append(float("nan"))
+                continue
+            junk, factor = jk.detect(image, apix, diameter, float(p["dark"]), float(p["bright"]), float(p["edges"]), margin)
+            frac = float(junk.mean())
+            fractions.append(frac)
+            kept = rejected = np.zeros((0, 2))
+            if coords is not None:
+                xy = picks.get(name, np.zeros((0, 2)))
+                bad = jk.on_junk(junk, factor, xy)
+                kept, rejected = xy[~bad], xy[bad]
+                fom = foms.get(name)
+                stem = Path(name).stem
+                kept_pairs.append((name, ctx.rel(rl.write_coordinates(ctx.path(f"kept/{stem}_kept.star"), kept,
+                                                                       None if fom is None else fom[~bad]))))
+                rej_pairs.append((name, ctx.rel(rl.write_coordinates(ctx.path(f"rejected/{stem}_junk.star"), rejected,
+                                                                      None if fom is None else fom[bad]))))
+            elif pxy is not None and name in rows_of:
+                idx = np.array(rows_of[name])
+                bad = jk.on_junk(junk, factor, pxy[idx])
+                on_junk_rows[idx[bad]] = True
+                kept, rejected = pxy[idx[~bad]], pxy[idx[bad]]
+            results[name] = (frac, junk, factor, kept, rejected)
+        valid = [f for f in fractions if f == f]
+        if not valid:
+            raise JobError("No micrograph could be read")
+        thr = float(p["max_junk"]) / 100.0
+        clean = [i for i, f in enumerate(fractions) if f == f and f <= thr]
+        rows = [[names[i], f"{100 * fractions[i]:.1f}" if fractions[i] == fractions[i] else "–",
+                 len(results[names[i]][3]) if names[i] in results else "–",
+                 len(results[names[i]][4]) if names[i] in results else "–"]
+                for i in sorted(range(len(names)), key=lambda i: -(fractions[i] if fractions[i] == fractions[i] else 2))]
+        ctx.add_table("Junk per micrograph (worst first)", ["Micrograph", "Junk (%)", "Kept", "On junk"], rows[:500])
+        ctx.add_plot("Share of each micrograph on junk", [{"name": "Micrographs", **histogram(100 * np.array(valid), 20, 0.0, 100.0)}],
+                     x_label="Junk (% of the area)", y_label="Micrographs", style="bars",
+                     vlines=[{"x": 100 * thr, "label": f"kept up to {100 * thr:g} %"}])
+        worst = sorted(results, key=lambda m: -results[m][0])[:4]
+        tiles = []
+        for m in worst:
+            frac, junk, factor, kept, rejected = results[m]
+            try:
+                tiles.append(jk.overlay(read_image(ctx.abs(m)), junk, factor, kept, rejected, diameter / apix, 340))
+            except Exception as exc:  # cosmetic
+                ctx.warn(f"Could not draw {m}: {exc}")
+        if tiles:
+            hh = min(t.shape[0] for t in tiles)
+            ww = min(t.shape[1] for t in tiles)
+            png = write_png(ctx.path("junk.png"), tile_sheet([t[:hh, :ww] for t in tiles], per_row=2, gap=4))
+            ctx.add_image("The micrographs with the most junk: junk in red, picks kept in green, rejected in red", png)
+        out = rl.write_star(ctx.path("micrographs_clean.star"),
+                            [t if t is not table else table.select(clean) for t in tables.values()],
+                            comment=f"Micrographs with at most {100 * thr:g} % of their area on junk")
+        if not clean:
+            ctx.warn(f"No micrograph has {100 * thr:g} % junk or less: raise the limit")
+        else:
+            ctx.add_output("micrographs", "micrographs", out, f"{len(clean):,} clean micrographs",
+                           meta=micrograph_meta(ctx, out, "junk", junk_limit=100 * thr))
+        ctx.add_highlight("Junk", f"{100 * float(np.mean(valid)):.1f} % of the area on average")
+        ctx.add_highlight("Clean micrographs", f"{len(clean):,} / {len(names):,}")
+        if coords is not None:
+            n_kept = sum(len(results[m][3]) for m in results)
+            n_rej = sum(len(results[m][4]) for m in results)
+            listing = rl.write_coordinate_list(ctx.path("picks_kept.star"), kept_pairs)
+            rej_list = rl.write_coordinate_list(ctx.path("picks_junk.star"), rej_pairs)
+            meta = {"n_particles": n_kept, "n_micrographs": len(kept_pairs), "diameter": diameter,
+                    "pixel_size": round(apix, 4), "micrographs": ctx.rel(star),
+                    "relion": {"star": ctx.rel(listing), "kind": "junk"}}
+            ctx.add_output("coordinates", "coordinates", listing, f"{n_kept:,} picks off junk", meta=meta)
+            ctx.add_output("rejected", "coordinates", rej_list, f"{n_rej:,} picks on junk",
+                           meta={**meta, "n_particles": n_rej, "relion": {"star": ctx.rel(rej_list), "kind": "junk"}})
+            ctx.add_highlight("Picks on junk", f"{n_rej:,} of {n_kept + n_rej:,}")
+        if ptab is not None and ptables is not None:
+            keep_rows = np.nonzero(~on_junk_rows)[0]
+            junk_rows = np.nonzero(on_junk_rows)[0]
+            for name, rows_sel, label in (("particles", keep_rows, "off junk"), ("rejected_particles", junk_rows, "on junk")):
+                if not len(rows_sel):
+                    continue
+                f = rl.write_star(ctx.path(f"{name}.star"),
+                                  [t if t is not ptab else ptab.select(rows_sel) for t in ptables.values()])
+                ctx.add_output(name, "particles", f, f"{len(rows_sel):,} particles {label}",
+                               meta=particles_out_meta(ctx, f, "junk"))
+            ctx.add_highlight("Particles on junk", f"{len(junk_rows):,} of {len(ptab):,}")
+
 # ------------------------------------------------------------------ imports of picks and templates
 COORD_SUFFIXES = re.compile(r"(_(autopick|manualpick|coords?|picks?|particles|extract|cryolo|topaz))+$", re.I)
 

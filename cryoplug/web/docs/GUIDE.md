@@ -319,6 +319,11 @@ particules gardées.
   **Done** écrit les micrographies gardées et les rejetées. Le mode *thresholds* applique les seuils d'un coup. Avec des
   picks ou des particules connectés, leur nombre par micrographie devient un histogramme de plus (micrographies trop
   chargées ou vides) et ceux des micrographies gardées forment une sortie.
+- **Junk detector (micrographs)**, comme le *Micrograph Junk Detector* de CryoSPARC mais sans réseau entraîné : les
+  zones dont le fond est bien plus sombre (contamination, glace épaisse, carbone) ou plus clair (trous) que le reste
+  de la micrographie, et les bords du film, élargies d'une marge ; les picks ou particules qui y tombent sont rejetés,
+  la part de junk de chaque micrographie la classe (sortie des micrographies propres). Les micrographies les plus
+  touchées s'affichent avec le junk en rouge.
 - **Tune LoG picking (RELION)**, comme le *Blob Picker Tuner* de CryoSPARC : plusieurs plages de diamètres et seuils
   du Laplacien de Gaussienne essayés sur quelques micrographies (les meilleures CTF, réparties sur la session), leurs
   particules côte à côte avec leur nombre par micrographie ; **Pick with these settings…** sur une carte prépare le

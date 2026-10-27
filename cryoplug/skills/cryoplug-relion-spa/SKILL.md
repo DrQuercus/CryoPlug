@@ -19,6 +19,7 @@ DynaMight): confirm with the person first.
 | 3. CTF | `relion_ctffind` | `res_max` 5 Å (3–4 Å for good data), power spectra of step 2 | CTF fit resolution histogram, fits image |
 | 4. Curation | `relion_curate` | `mode=thresholds` as an agent, `max_ctf_resolution` 6–8 Å, `max_motion` 30–50 Å; `interactive` (default) waits for a person | histograms with thresholds, rejected output |
 | 5. Picking | `relion_autopick` (settings first compared with `relion_pick_tuner`: `diameters` "100-150; 150-200", `thresholds` "-1, 0, 1") | `method=log`, `diameter_min`/`diameter_max` around the particle | picks drawn on micrographs, particles per micrograph |
+| 5b. Junk (optional) | `micrograph_junk` with the picks | `dark` 4, `edges` 5 (σ), `particle_diameter` | junk share per micrograph, picks on junk in red; use its `coordinates` output |
 | 6. Extraction | `relion_extract` | `box` ≈ 2 × diameter (even), `rescale` to 64–128 px for 2D/3D | particle count, box, pixel size |
 | 7. 2D | `relion_class2d` | `algorithm=vdam`, `classes` 50–200, `vdam_batches` 200 | class gallery |
 | 8. Selection | `relion_select2d` | `mode=list` with `classes` (e.g. "1, 4, 7-9") as an agent; `interactive` waits for a person's clicks; `auto` uses RELION's class ranker; `reference` keeps the classes that correlate (`min_correlation` 0.8) with projections of a map connected as `reference` | kept / rejected particles |
