@@ -80,19 +80,21 @@ def test_sections_picture_outlines_the_mask(tmp_path):
 
 
 def _iteration_files(job_dir, it, box=24, apix=2.0):
-    """What relion_refine writes for an iteration of an auto-refinement."""
+    """What relion_refine writes for an iteration of an auto-refinement (iteration 0: the starting reference, no FSC
+    yet, 999 for the accuracies)."""
     vol = MapVolume(data=np.random.default_rng(it).normal(size=(box, box, box)).astype(np.float32), voxel=np.full(3, apix))
     stem = job_dir / f"run_it{it:03d}"
     freq = np.arange(1, box // 2 + 1) / (box * apix)
     curve = rl.StarTable("model_class_1")
     curve.set_column("rlnResolution", freq)
-    curve.set_column("rlnGoldStandardFsc", 1.0 / (1.0 + np.exp((freq - 1.0 / (10.0 - it)) * box * apix / 2.0)))
+    curve.set_column("rlnGoldStandardFsc", 1.0 / (1.0 + np.exp((freq - 1.0 / (10.0 - it)) * box * apix / 2.0)) if it
+                     else np.zeros_like(freq))
     classes = rl.StarTable("model_classes")
     classes.set_column("rlnReferenceImage", [f"{stem.name}_half1_class001.mrc"])
     classes.set_column("rlnClassDistribution", [1.0])
-    classes.set_column("rlnAccuracyRotations", [3.0 / it])
-    classes.set_column("rlnAccuracyTranslationsAngst", [1.0 / it])
-    general = rl.StarTable("model_general", ["rlnCurrentResolution"], [[f"{10.0 - it:.4f}"]], loop=False)
+    classes.set_column("rlnAccuracyRotations", [3.0 / it if it else 999.0])
+    classes.set_column("rlnAccuracyTranslationsAngst", [1.0 / it if it else 999.0])
+    general = rl.StarTable("model_general", ["rlnCurrentResolution"], [[f"{10.0 - it if it else 60.0:.4f}"]], loop=False)
     for h in (1, 2):
         vol.write(f"{stem}_half{h}_class001.mrc")
         rl.write_star(f"{stem}_half{h}_model.star", [general, classes, curve])
@@ -130,6 +132,23 @@ def test_iteration_dashboard_draws_the_iterations_that_ended(tmp_path):
     assert highlights["Iterations"] == "3" and "Iteration" not in highlights and highlights["Resolution"].endswith("Å")
     dash.finish()  # nothing new: nothing drawn twice
     assert len(_by_key(_report(ctx.report_path))["it_sections"]["frames"]) == 3
+
+
+def test_the_starting_reference_is_shown_without_a_resolution(tmp_path):
+    ctx = _ctx(tmp_path)
+    dash = IterationDashboard(ctx, "refine")
+    _iteration_files(ctx.job_dir, 0)  # written before the first iteration
+    dash(" Auto-refine: Iteration= 1")
+    _iteration_files(ctx.job_dir, 1)
+    dash(" Auto-refine: Iteration= 2")
+    dash.finish()
+    sections = _by_key(_report(ctx.report_path))
+    frames = sections["it_sections"]["frames"]
+    assert [f["label"] for f in frames] == ["Iteration 0", "Iteration 1"]
+    assert frames[0]["caption"] == "starting reference" and "999" not in json.dumps(sections)
+    assert [f["label"] for f in sections["it_fsc"]["frames"]] == ["Iteration 1"]  # no FSC yet at iteration 0
+    assert sections["resolution_history"]["series"][0]["x"] == [1]
+    assert {h["label"]: h["value"] for h in ctx.highlights}["Iterations"] == "1"
 
 
 # ------------------------------------------------------------------ RELION jobs

@@ -164,14 +164,15 @@ class IterationDashboard(Progress):
         ctx, label = self.ctx, f"Iteration {it}"
         info = rl.model_fsc(ctx.path(f"{stem}_half1_model.star"))
         rec: dict[str, Any] = {"iteration": it}
-        if info.get("fsc"):
+        # iteration 0 is the starting reference: its FSC is all zeros and its accuracies 999
+        if it > 0 and info.get("fsc") and max(info["fsc"]) > 0.143:
             rec["resolution"] = rl.resolution_at(info["frequency"], info["fsc"])
             ctx.add_plot_frame("FSC at each iteration", [{"name": label, "x": info["frequency"], "y": info["fsc"]}], label,
                                key="it_fsc", x_label="Resolution (Å)", y_label="FSC", x_kind="resolution",
                                hlines=FSC_LINES, y_range=[-0.1, 1.05], group=GROUP,
                                note="Gold-standard FSC between the two half maps of the iteration (no mask correction): "
                                     "the final, masked FSC comes with the post-processing at the end.")
-        if not rec.get("resolution") and info.get("current_resolution"):
+        if not rec.get("resolution") and it > 0 and info.get("current_resolution"):
             rec["resolution"] = info["current_resolution"]
         rec["accuracy"] = (info.get("accuracy_rotations"), info.get("accuracy_translations"))
         self.records[it] = rec
@@ -179,9 +180,10 @@ class IterationDashboard(Progress):
         if halves:
             from cryoplug.imaging import write_png
             png = write_png(self.live / f"sections_it{it:03d}.png", sections_picture(halves, self.mask))
-            parts = [f"resolution {rec['resolution']:.2f} Å" if rec.get("resolution") else ""]
+            parts = ["starting reference" if it == 0 else "",
+                     f"resolution {rec['resolution']:.2f} Å" if rec.get("resolution") else ""]
             rot, trans = rec["accuracy"]
-            if rot is not None and trans is not None:
+            if rot is not None and trans is not None and rot < 900:
                 parts.append(f"accuracy {rot:.2f}° · {trans:.2f} Å")
             ctx.add_image_frame("Central sections of the map", png, label, key="it_sections", group=GROUP,
                                 caption=" · ".join(p for p in parts if p),
@@ -200,8 +202,8 @@ class IterationDashboard(Progress):
         classes = rl.model_classes(ctx.path(f"{stem}_model.star"))
         general = rl.model_fsc(ctx.path(f"{stem}_model.star"))
         rec: dict[str, Any] = {"iteration": it, "shares": [c["distribution"] for c in classes],
-                               "class_resolution": [c["resolution"] for c in classes],
-                               "resolution": general.get("current_resolution")}
+                               "class_resolution": [c["resolution"] for c in classes] if it > 0 else [],
+                               "resolution": general.get("current_resolution") if it > 0 else None}
         self.records[it] = rec
         maps = [(c["class"], ctx.path(f"{stem}_class{c['class']:03d}.mrc")) for c in classes]
         maps = [(k, p) for k, p in maps if p.exists()]
@@ -209,7 +211,8 @@ class IterationDashboard(Progress):
             from cryoplug.imaging import write_png
             png = write_png(self.live / f"classes_it{it:03d}.png", projections_picture([p for _, p in maps]))
             shares = {c["class"]: c["distribution"] for c in classes}
-            caption = (f"Class{'es' if len(maps) > 1 else ''} {', '.join(str(k) for k, _ in maps)} (left to right): "
+            caption = ("Starting references · " if it == 0 else "") + (
+                       f"Class{'es' if len(maps) > 1 else ''} {', '.join(str(k) for k, _ in maps)} (left to right): "
                        + ", ".join(f"{100 * shares.get(k, 0):.0f} %" for k, _ in maps))
             ctx.add_image_frame("Classes (projections)" if len(maps) > 1 else "Map (projection)", png, label,
                                 key="it_classes", group=GROUP, caption=caption,
