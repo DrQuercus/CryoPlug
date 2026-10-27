@@ -346,6 +346,97 @@ class CheckParticles(JobType):
             ctx.add_highlight("Rejected", f"{n_bad:,}", "warn")
 
 
+# ------------------------------------------------------------------ simulated particles
+@register
+class RelionSimulate(JobType):
+    name = "relion_simulate"
+    title = "Simulate particles (RELION)"
+    category = "Utilities"
+    tool = "relion"
+    software = ["RELION"]
+    description = ("Particle images made from a map (relion_project), as CryoSPARC's Simulate Data: projections in random "
+                   "orientations with white noise, with the orientations and CTFs of real particles, or realistic data "
+                   "(the signal of real particles replaced by projections of the map in new orientations, known as the "
+                   "ground truth). To test a pipeline, a mask or a heterogeneity method on data with a known answer.")
+    inputs = [Slot("map", ("map",), "Map", prefer=("map",)),
+              Slot("particles", ("particles",), "Particles", required=False,
+                   help="Particles refined against this map: their orientations and CTFs (projections as they would be "
+                        "imaged), and for realistic data their images, whose signal is subtracted.")]
+    params = [
+        Param("mode", "choice", "uniform", choices=["uniform", "particles", "realistic"], label="Particles made",
+              labels={"uniform": "Random orientations, white noise", "particles": "Orientations and CTFs of the particles",
+                      "realistic": "Realistic: the particles' signal replaced (ground truth)"}),
+        Param("n_particles", "int", 10000, label="Number of particles", min=1, max=10000000, show_if="mode=uniform"),
+        Param("sigma_offset", "float", 0.0, label="Random shifts", unit="Å", min=0, show_if="mode=uniform",
+              help="Standard deviation of the random in-plane shifts."),
+        Param("noise", "float", 0.0, label="White noise (standard deviation)", min=0, show_if="mode=uniform|particles",
+              help="Added to every image, in the units of the map (0: noise-free projections)."),
+        Param("ctf", "bool", True, label="Apply the CTFs", show_if="mode=particles"),
+        Param("snr_factor", "float", 1.0, label="Signal-to-noise relative to the data", min=0.01, max=100, show_if="mode=realistic",
+              help="1: as in the particles; 0.5: half."),
+        Param("maxres", "float", 0.0, label="Highest resolution projected", unit="Å", min=0, advanced=True, help="0 = Nyquist."),
+        Param("float16", "bool", False, label="Write half-precision images", advanced=True),
+        extra_args_param(),
+    ]
+    outputs = [OutputDef("particles", "particles", "Simulated particles")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        if params.get("mode") in ("particles", "realistic") and "particles" not in connected:
+            return ["Connect the particles (or make random orientations)"]
+        return []
+
+    def run(self, ctx: JobContext) -> None:
+        from cryoplug.mrc import MapVolume
+        p = ctx.params
+        map_in = ctx.require("map")
+        head = MapVolume.read(map_in.path, header_only=True)
+        apix, box = float(head.voxel[0]), int(head.shape_xyz[0])
+        root = ctx.path("simulated")
+        args = [ctx.program("relion", "relion_project"), "--i", ctx.rel(map_in.path), "--o", ctx.rel(root), "--angpix", f"{apix:g}"]
+        if p["mode"] == "uniform":
+            args += ["--nr_uniform", str(p["n_particles"])]
+            if p["sigma_offset"] > 0:
+                args += ["--sigma_offset", f"{p['sigma_offset']:g}"]
+        else:
+            pin = relion_particles(ctx, ctx.require("particles"), need_poses=True)
+            if not pin["has_poses"]:
+                raise JobError("The particles have no orientations: refine them against this map first (3D auto-refine)")
+            if p["mode"] == "realistic" and pin["box"] and pin["box"] != box:
+                raise JobError(f"The particles ({pin['box']} px) and the map ({box} px) must have the same box: "
+                               "RELION subtracts the projections of the map from the images")
+            if pin["pixel_size"] and abs(pin["pixel_size"] - apix) > 0.01 * apix:
+                ctx.log(f"Warning: particles at {pin['pixel_size']:g} Å/px, map at {apix:g} Å/px "
+                        "(the projections and CTFs are made at the pixel size of the map)")
+            args += ["--ang", pin["ref"]]
+            if p["mode"] == "particles" and p["ctf"]:
+                args.append("--ctf")
+            if p["mode"] == "realistic":
+                args += ["--simulate", "--adjust_simulation_SNR", f"{p['snr_factor']:g}"]
+        if p["mode"] != "realistic" and p["noise"] > 0:
+            args += ["--add_noise", "--white_noise", f"{p['noise']:g}"]
+        if p["maxres"] > 0:
+            args += ["--maxres", f"{p['maxres']:g}"]
+        if p["float16"]:
+            args.append("--float16")
+        args += ctx.split_extra()
+        ctx.progress(0.05, "relion_project")
+        run_relion(ctx, args)
+        star = ctx.path("simulated.star")
+        if not star.exists():
+            raise JobError("relion_project wrote no simulated.star (see the log)")
+        n = rl.star_rows(star)
+        ctx.add_table("Simulation", ["", "Value"], [
+            ["Map", map_in.source], ["Particles", f"{n:,}"],
+            ["Orientations", {"uniform": "random (uniform)", "particles": "those of the particles",
+                              "realistic": "new random ones (ground truth in the file)"}[p["mode"]]],
+            ["Noise", f"white, σ = {p['noise']:g}" if p["mode"] != "realistic" and p["noise"] > 0
+             else ("from the data" if p["mode"] == "realistic" else "none")]])
+        ctx.add_highlight("Particles", f"{n:,}")
+        ctx.add_output("particles", "particles", star, f"{n:,} simulated particles",
+                       meta=particles_out_meta(ctx, star, "simulated", simulated_from=map_in.source))
+
+
 # ------------------------------------------------------------------ average power spectra
 def aligned_power_spectrum(image: np.ndarray, psi: float) -> np.ndarray:
     """Power spectrum (centred) of a particle image turned into the frame of its 2D class. RELION's projector reads the

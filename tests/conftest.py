@@ -510,7 +510,7 @@ exit 0
                  "relion_particle_symmetry_expand", "relion_postprocess", "relion_postprocess_mpi", "relion_reconstruct",
                  "relion_reconstruct_mpi", "mpirun", "relion_run_motioncorr", "relion_run_motioncorr_mpi",
                  "relion_run_ctffind", "relion_run_ctffind_mpi", "relion_autopick", "relion_autopick_mpi",
-                 "relion_preprocess", "relion_preprocess_mpi", "relion_align_symmetry", "relion_class_ranker",
+                 "relion_preprocess", "relion_preprocess_mpi", "relion_align_symmetry", "relion_class_ranker", "relion_project",
                  "relion_mask_create", "relion_ctf_refine", "relion_ctf_refine_mpi", "relion_motion_refine",
                  "relion_motion_refine_mpi", "relion_star_handler", "relion_flex_analyse", "relion_python_dynamight",
                  "relion_stack_create", "relion_helix_toolbox", "relion_estimate_gain", "relion_helix_inimodel2d"):

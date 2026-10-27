@@ -795,6 +795,54 @@ def _mpi() -> int:
     return int(os.environ.get("FAKE_MPI_SIZE", "1"))
 
 
+# ------------------------------------------------------------------ projections (simulated particles)
+def project(argv: list[str]) -> None:
+    """relion_project: projections of a map, with the orientations (and CTFs) of particles (--ang), or random ones
+    (--nr_uniform); <o>.mrcs and <o>.star."""
+    a = parse(argv, "relion_project")
+    need(a, "--i")
+    out = str(a.get("--o", "proj"))
+    vol = MapVolume.read(str(a["--i"]))
+    box = vol.data.shape[0]
+    apix = float(a.get("--angpix", vol.pixel_size))
+    rng = np.random.default_rng(11)
+    if "--ang" in a:
+        tables = rl.read_star(str(a["--ang"]))
+        ptab = rl.particle_table(tables)
+        n = len(ptab)
+        if "--simulate" in a:
+            particle_images(tables)  # the experimental images are needed to subtract their signal
+        if "--ctf" in a and not ptab.has("rlnDefocusU"):
+            die("--ctf needs the CTF parameters of the particles (rlnDefocusU)")
+    elif "--nr_uniform" in a:
+        n = int(a["--nr_uniform"])
+        optics = rl.StarTable("optics")
+        for label, value in (("rlnOpticsGroup", 1), ("rlnOpticsGroupName", "opticsGroup1"), ("rlnImagePixelSize", apix),
+                             ("rlnImageSize", box), ("rlnImageDimensionality", 2), ("rlnVoltage", 300), ("rlnSphericalAberration", 2.7),
+                             ("rlnAmplitudeContrast", 0.1)):
+            optics.set_column(label, [value])
+        ptab = rl.StarTable("particles")
+        ptab.set_column("rlnAngleRot", rng.uniform(0, 360, n))
+        ptab.set_column("rlnAngleTilt", np.degrees(np.arccos(rng.uniform(-1, 1, n))))
+        ptab.set_column("rlnAnglePsi", rng.uniform(0, 360, n))
+        sigma = float(a.get("--sigma_offset", 0))
+        ptab.set_column("rlnOriginXAngst", rng.normal(0, sigma, n))
+        ptab.set_column("rlnOriginYAngst", rng.normal(0, sigma, n))
+        ptab.set_column("rlnOpticsGroup", [1] * n)
+        tables = {"optics": optics, "particles": ptab}
+    else:
+        die("Give --ang or --nr_uniform for several projections")
+    noise = float(a.get("--white_noise", 0)) if "--add_noise" in a else 0.0
+    proj = vol.data.sum(axis=0).astype(np.float32)
+    stack = np.stack([proj + rng.normal(0, noise or 1e-6, proj.shape).astype(np.float32) for _ in range(n)])
+    write_image(f"{out}.mrcs", stack, apix)
+    ptab.set_column("rlnImageName", [f"{i + 1:06d}@{out}.mrcs" for i in range(n)])
+    if "--simulate" in a:
+        ptab.set_column("rlnAngleRot", rng.uniform(0, 360, n))
+    rl.write_star(f"{out}.star", list(tables.values()))
+    print(f" Done writing {n} images in {out}.star")
+
+
 # ------------------------------------------------------------------ symmetry, class ranker, masks
 def align_symmetry(argv: list[str]) -> None:
     a = parse(argv, "relion_align_symmetry")
@@ -1094,6 +1142,7 @@ PROGRAMS = {
     "relion_autopick": autopick, "relion_autopick_mpi": autopick,
     "relion_preprocess": preprocess, "relion_preprocess_mpi": preprocess,
     "relion_align_symmetry": align_symmetry, "relion_class_ranker": class_ranker, "relion_mask_create": mask_create,
+    "relion_project": project,
     "relion_ctf_refine": ctf_refine, "relion_ctf_refine_mpi": ctf_refine,
     "relion_motion_refine": motion_refine, "relion_motion_refine_mpi": motion_refine,
     "relion_star_handler": star_handler, "relion_flex_analyse": flex_analyse, "relion_python_dynamight": dynamight,

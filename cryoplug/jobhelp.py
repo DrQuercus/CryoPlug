@@ -767,6 +767,31 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "next": ["relion_extract", "relion_local_refine", "relion_class3d"],
     },
+    "relion_simulate": {
+        "purpose": "Fabrique des images de particules à partir d'une carte (relion_project), comme « Simulate Data » de "
+                   "CryoSPARC : projections en orientations aléatoires avec bruit blanc, avec les orientations et les CTF de "
+                   "vraies particules, ou données réalistes (le signal de vraies particules remplacé par des projections de "
+                   "la carte dans de nouvelles orientations, la vérité terrain gardée dans le fichier).",
+        "when": [
+            "Tester une chaîne de traitement, un masque ou une méthode d'hétérogénéité sur des données dont on connaît la réponse.",
+            "Vérifier qu'une classification sépare bien deux états simulés (deux cartes simulées puis réunies).",
+        ],
+        "avoid": [
+            "Présenter des particules simulées comme des données : elles servent au contrôle uniquement.",
+            "Des particules sans orientations (sortie d'extraction) : les modes « particules » et réaliste exigent des "
+            "particules raffinées contre cette carte.",
+        ],
+        "inputs": "Une carte ; facultatif : des particules raffinées contre elle (orientations et CTF, et leurs images "
+                  "pour le mode réaliste, même boîte que la carte).",
+        "tips": [
+            "Mode réaliste : RELION soustrait de chaque image la projection de la carte dans l'orientation de la particule, "
+            "puis ajoute une projection dans l'orientation d'une autre particule ; prendre la carte non affûtée du "
+            "raffinement (même échelle de gris que les images).",
+            "Mode réaliste : « Signal-to-noise relative to the data » = 1 garde le rapport signal/bruit des données.",
+            "Join star files réunit des particules simulées de deux cartes pour tester une classification 3D.",
+        ],
+        "next": ["relion_class2d", "relion_refine3d", "relion_class3d_global", "relion_join"],
+    },
     "check_particles": {
         "purpose": "Lit chaque image de particule et met de côté celles qui arrêteraient ou fausseraient un job, comme « Check "
                    "For Corrupt Particles » de CryoSPARC : piles ou images manquantes, mauvaise taille de boîte, valeurs NaN "

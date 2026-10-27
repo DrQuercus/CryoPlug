@@ -2783,6 +2783,32 @@ Réécrit les images d'un jeu de particules dans de nouvelles piles (relion_stac
 
 **Étapes suivantes** : 3D auto-refine (RELION), 2D classification (RELION), 3D classification (RELION)
 
+### Simulate particles (RELION)
+
+`relion_simulate` — logiciel : `relion`
+
+Fabrique des images de particules à partir d'une carte (relion_project), comme « Simulate Data » de CryoSPARC : projections en orientations aléatoires avec bruit blanc, avec les orientations et les CTF de vraies particules, ou données réalistes (le signal de vraies particules remplacé par des projections de la carte dans de nouvelles orientations, la vérité terrain gardée dans le fichier).
+
+**Quand l'utiliser**
+
+- Tester une chaîne de traitement, un masque ou une méthode d'hétérogénéité sur des données dont on connaît la réponse.
+- Vérifier qu'une classification sépare bien deux états simulés (deux cartes simulées puis réunies).
+
+**À éviter / pièges**
+
+- Présenter des particules simulées comme des données : elles servent au contrôle uniquement.
+- Des particules sans orientations (sortie d'extraction) : les modes « particules » et réaliste exigent des particules raffinées contre cette carte.
+
+**Entrées conseillées** : Une carte ; facultatif : des particules raffinées contre elle (orientations et CTF, et leurs images pour le mode réaliste, même boîte que la carte).
+
+**Conseils**
+
+- Mode réaliste : RELION soustrait de chaque image la projection de la carte dans l'orientation de la particule, puis ajoute une projection dans l'orientation d'une autre particule ; prendre la carte non affûtée du raffinement (même échelle de gris que les images).
+- Mode réaliste : « Signal-to-noise relative to the data » = 1 garde le rapport signal/bruit des données.
+- Join star files réunit des particules simulées de deux cartes pour tester une classification 3D.
+
+**Étapes suivantes** : 2D classification (RELION), 3D auto-refine (RELION), 3D classification (RELION), Join star files (RELION)
+
 ### Subset selection (RELION)
 
 `relion_subset` — logiciel : `relion`

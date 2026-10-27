@@ -670,6 +670,12 @@ RELION. In: particles: particles. Out: particles: particles.
 Writes the images of a particle set into new stacks (relion_stack_create), as CryoSPARC's Restack Particles: a subset kept after cleaning then reads only its own images, from fewer and smaller files (faster on network disks, and the original extraction can be removed). Optionally re-centred on the alignment shifts, rounded to whole pixels (no interpolation).
 Usually followed by: `relion_refine3d`, `relion_class2d`, `relion_class3d_global`.
 
+### `relion_simulate` — Simulate particles (RELION)
+RELION. In: map: map, particles?: particles. Out: particles: particles.
+
+Particle images made from a map (relion_project), as CryoSPARC's Simulate Data: projections in random orientations with white noise, with the orientations and CTFs of real particles, or realistic data (the signal of real particles replaced by projections of the map in new orientations, known as the ground truth). To test a pipeline, a mask or a heterogeneity method on data with a known answer.
+Usually followed by: `relion_class2d`, `relion_refine3d`, `relion_class3d_global`, `relion_join`.
+
 ### `relion_subset` — Subset selection (RELION)
 RELION. In: data: particles/micrographs. Out: particles: particles, micrographs: micrographs, subset_1: particles, subset_2: particles.
 

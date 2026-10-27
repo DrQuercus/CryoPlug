@@ -1381,3 +1381,33 @@ def test_import_coordinates_and_templates(manager, spa, tmp_path):
     pick = _run(manager, puid, "relion_autopick", {"method": "template", "mpi": 1, "gpus": 0},
                 {"micrographs": mics, "references": _ref(tpl, "classes")})
     assert f"--ref {tpl['uid']}/templates.mrcs" in _command(manager, puid, pick)
+
+
+def test_simulate_particles(manager, spa):
+    """relion_project: random orientations with noise, or the orientations and CTFs of real particles."""
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = _ref(ctf, "micrographs")
+    pick = _run(manager, puid, "relion_autopick", {"method": "log", "diameter_min": 50, "diameter_max": 70, "mpi": 1},
+                {"micrographs": mics})
+    ext = _run(manager, puid, "relion_extract", {"box": 64, "rescale": 32, "mpi": 1},
+               {"micrographs": mics, "coordinates": _ref(pick, "coordinates")})
+    MapVolume(data=np.random.default_rng(5).normal(0, 1, (32, 32, 32)).astype(np.float32), voxel=np.full(3, 2.0)).write(pdir / "ref.mrc")
+    ref = _ref(_run(manager, puid, "import_maps", {"map": str(pdir / "ref.mrc"), "compute_fsc": False}), "map")
+    uni = _run(manager, puid, "relion_simulate", {"n_particles": 25, "noise": 2.0, "sigma_offset": 3}, {"map": ref})
+    assert (f"relion_project --i {ref['job']}/" in _command(manager, puid, uni)
+            and f"--o {uni['uid']}/simulated --angpix 2 --nr_uniform 25 --sigma_offset 3 --add_noise --white_noise 2" in _command(manager, puid, uni))
+    out = _outs(uni)["particles"]
+    assert out["meta"]["n_particles"] == 25 and out["meta"]["has_poses"] and out["meta"]["box"] == 32
+    # the orientations and CTFs of particles refined against the map (extracted ones have no orientations)
+    bad = _run(manager, puid, "relion_simulate", {"mode": "particles"}, {"map": ref, "particles": _ref(ext, "particles")}, ok=False)
+    assert bad["status"] == "failed" and "no orientations" in bad["error"]
+    r3 = _run(manager, puid, "relion_refine3d", {"threads": 1, "gpus": 0}, {"particles": _ref(ext, "particles"), "map": ref})
+    real = _run(manager, puid, "relion_simulate", {"mode": "particles"}, {"map": ref, "particles": _ref(r3, "particles")})
+    assert f"--ang {_outs(r3)['particles']['path']} --ctf" in _command(manager, puid, real)
+    assert _outs(real)["particles"]["meta"]["n_particles"] == _outs(ext)["particles"]["meta"]["n_particles"]
+    gt = _run(manager, puid, "relion_simulate", {"mode": "realistic", "snr_factor": 0.5}, {"map": ref, "particles": _ref(r3, "particles")})
+    assert "--simulate --adjust_simulation_SNR 0.5" in _command(manager, puid, gt) and "--add_noise" not in _command(manager, puid, gt)
+    job = manager.create_job(puid, "relion_simulate", {"mode": "particles"}, {"map": ref})
+    with pytest.raises(Exception, match="Connect the particles"):
+        manager.queue_job(puid, job["uid"])

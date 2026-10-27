@@ -357,6 +357,7 @@ particules gardées.
 | Micrographies communes à deux jeux, ou d'un jeu sans l'autre | **Particle sets** avec deux jeux de micrographies (par nom) |
 | Images corrompues, piles manquantes, NaN (un job qui s'arrête en lisant les particules) | **Check particles (corrupt images)** |
 | Centrer les particules sur un domaine (avant une boîte plus petite) | **Re-centre on a region** (centre de masse d'un masque), puis ré-extraction |
+| Des données dont on connaît la réponse, pour tester une chaîne ou une classification | **Simulate particles (RELION)** (relion_project) |
 | Lignes de couche d'un filament, pour indexer sa symétrie | **Average power spectra (2D classes)** (spectres des particules tournés dans le repère de la classe) |
 
 **Curate particles (statistics)** attend, comme le tri des micrographies, avec l'histogramme de chaque statistique des
