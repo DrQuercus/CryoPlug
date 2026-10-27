@@ -136,8 +136,8 @@ def prepare_particles(ctx: JobContext, particles: InputData, need_poses: bool = 
         info = {**info, "half_sets": True, "random_halves": True}
         ctx.log("The particles carry no half-set assignment: random half sets given")
     if need_poses and not info.get("has_poses"):
-        raise JobError("These particles have no 3D poses: RELION local refinement starts from the poses of a consensus "
-                       "refinement (import the particles of a CryoSPARC refinement job)")
+        raise JobError(f"These particles have no 3D poses: {ctx.spec.get('title') or 'this job'} starts from the poses of a "
+                       "consensus refinement (the particles of a 3D auto-refine, or of a CryoSPARC refinement job)")
     box, apix = int(info.get("box") or meta.get("box") or 0), float(info.get("pixel_size") or meta.get("pixel_size") or 0)
     if not box or not apix:
         raise JobError("The box or the pixel size of the particles is unknown (no optics table in the STAR file?)")
