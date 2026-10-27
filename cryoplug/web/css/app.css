@@ -410,6 +410,11 @@ pre.log .cmd { color: #8ec5ff; }
 .cls-bar b { color: var(--ink-1); font-variant-numeric: tabular-nums; }
 .cls-tools { display: inline-flex; gap: 4px; }
 .cls-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--cls-size, 112px), 1fr)); gap: 6px; }
+.tune-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.tune-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); }
+.tune-card img { width: 100%; display: block; border-radius: 6px; background: #000; }
+.tune-label { display: flex; flex-direction: column; gap: 2px; }
+.tune-card .btn { align-self: flex-start; }
 .cls-tile { position: relative; display: flex; flex-direction: column; padding: 0; border: 2px solid transparent; border-radius: 6px;
   overflow: hidden; background: #000; color: inherit; font: inherit; text-align: left; }
 button.cls-tile { cursor: pointer; }

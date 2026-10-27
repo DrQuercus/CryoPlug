@@ -319,6 +319,10 @@ particules gardées.
   **Done** écrit les micrographies gardées et les rejetées. Le mode *thresholds* applique les seuils d'un coup. Avec des
   picks ou des particules connectés, leur nombre par micrographie devient un histogramme de plus (micrographies trop
   chargées ou vides) et ceux des micrographies gardées forment une sortie.
+- **Tune LoG picking (RELION)**, comme le *Blob Picker Tuner* de CryoSPARC : plusieurs plages de diamètres et seuils
+  du Laplacien de Gaussienne essayés sur quelques micrographies (les meilleures CTF, réparties sur la session), leurs
+  particules côte à côte avec leur nombre par micrographie ; **Pick with these settings…** sur une carte prépare le
+  picking de toutes les micrographies avec ce réglage.
 - **Inspect picks / manual picking** montre les particules repérées sur chaque micrographie : seuil de figure de mérite
   glissé sur son histogramme (le nombre gardé par micrographie suit), gamme de *power score* (puissance locale autour
   de chaque pick, comme dans CryoSPARC : la glace cristalline, le carbone et la contamination sont hauts, la glace vide

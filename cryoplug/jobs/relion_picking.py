@@ -403,6 +403,146 @@ class RelionAutopick(RelionJob):
                        thumbnail=thumb)
 
 
+
+def _ranges(text: str) -> list[tuple[float, float]]:
+    """'100-150; 150-200' -> [(100, 150), (150, 200)] (diameter ranges in Å)."""
+    out = []
+    for part in re.split(r"[;,]", str(text or "")):
+        m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*", part)
+        if part.strip() and not m:
+            raise ValueError(f"'{part.strip()}': give diameter ranges such as 100-150")
+        if m:
+            lo, hi = float(m.group(1)), float(m.group(2))
+            if lo > hi:
+                raise ValueError(f"'{part.strip()}': the minimum is larger than the maximum")
+            out.append((lo, hi))
+    if not out:
+        raise ValueError("Give at least one diameter range (e.g. 100-150)")
+    return out
+
+
+def _numbers(text: str) -> list[float]:
+    try:
+        values = [float(v) for v in re.split(r"[;,\s]+", str(text or "").strip()) if v]
+    except ValueError:
+        raise ValueError("Thresholds: numbers separated by commas (e.g. -1, 0, 1)") from None
+    if not values:
+        raise ValueError("Give at least one threshold (e.g. 0)")
+    return values
+
+
+@register
+class RelionPickTuner(RelionJob):
+    name = "relion_pick_tuner"
+    title = "Tune LoG picking (RELION)"
+    category = "Picking"
+    description = ("Tries several settings of the Laplacian-of-Gaussian picker (diameter ranges × thresholds) on a few "
+                   "micrographs, as CryoSPARC's Blob Picker Tuner, and shows the picks of each side by side with their "
+                   "number per micrograph: choose a setting, then 'Pick with these settings' prepares the auto-picking "
+                   "of all the micrographs.")
+    gpu_param = ""
+    cpu_param = "mpi"
+    inputs = [Slot("micrographs", ("micrographs",), "Micrographs", help="Motion-corrected (best CTF-estimated) micrographs.")]
+    params = [
+        Param("diameters", "str", "100-150; 150-200", label="Diameter ranges", unit="Å", required=True,
+              placeholder="100-150; 150-200", help="Minimum-maximum diameters tried, separated by semicolons."),
+        Param("thresholds", "str", "-1, 0, 1", label="Threshold adjustments", unit="σ", required=True,
+              help="LoG thresholds tried: lower picks more particles (and more junk)."),
+        Param("n_micrographs", "int", 3, label="Micrographs to try", min=1, max=20,
+              help="Spread over the data set (the best CTF fits first when known)."),
+        Param("log_upper", "float", 0.0, label="LoG upper threshold", unit="σ", min=0, advanced=True,
+              help="Discards blobs this many σ above the average (ice, ethane drops). 0 = none."),
+        Param("log_maxres", "float", 20.0, label="LoG maximum resolution", unit="Å", min=0, advanced=True),
+        Param("white_particles", "bool", False, label="White particles", advanced=True),
+        mpi(1, help="Micrographs processed at the same time."),
+    ]
+    outputs = [OutputDef("tuning", "report", "Settings tried")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        try:
+            n = len(_ranges(params.get("diameters", ""))) * len(_numbers(params.get("thresholds", "")))
+        except ValueError as exc:
+            return [str(exc)]
+        if n > 24:
+            return [f"{n} settings: try at most 24 at once (fewer ranges or thresholds)"]
+        return []
+
+    def run(self, ctx: JobContext) -> None:
+        from cryoplug.imaging import write_png
+        from cryoplug.micrographs import picks_image, tile_sheet
+        p = ctx.params
+        mics_in = ctx.require("micrographs")
+        star, _ref = star_of(ctx, mics_in)
+        tables = rl.read_star(star)
+        table = rl.micrograph_table(tables)
+        if not len(table):
+            raise JobError("No micrograph in the input")
+        apix = rl.micrograph_pixel_size(tables)
+        if not apix:
+            raise JobError("The pixel size of the micrographs is unknown")
+        names = table.column("rlnMicrographName")
+        order = list(range(len(names)))
+        if table.has("rlnCtfMaxResolution"):  # the better half of the CTF fits, spread over the session
+            res = table.floats("rlnCtfMaxResolution")
+            order = sorted(order, key=lambda i: res[i])[:max(1, (len(order) + 1) // 2)]
+            order.sort()
+        k = min(int(p["n_micrographs"]), len(order))
+        chosen = [order[int(round(j * (len(order) - 1) / max(1, k - 1)))] for j in range(k)] if k > 1 else [order[0]]
+        chosen = sorted(set(chosen))
+        subset = ctx.path("micrographs_subset.star")
+        rl.write_star(subset, [t if t is not table else table.select(chosen) for t in tables.values()],
+                      comment=f"{len(chosen)} micrographs to try the picking settings on")
+        settings = [(lo, hi, thr) for lo, hi in _ranges(p["diameters"]) for thr in _numbers(p["thresholds"])]
+        ctx.add_table("Micrographs tried", ["Micrograph"], [[n] for n in (names[i] for i in chosen)])
+        cards, rows = [], []
+        for i, (lo, hi, thr) in enumerate(settings, start=1):
+            ctx.progress(0.05 + 0.9 * (i - 1) / len(settings), f"relion_autopick: Ø {lo:g}-{hi:g} Å, threshold {thr:g}")
+            odir = ctx.path(f"setting_{i:02d}")
+            odir.mkdir(exist_ok=True)
+            args = [*relion_command(ctx, "relion_autopick", p["mpi"]), "--i", ctx.rel(subset), "--odir",
+                    ctx.rel(odir) + "/", "--pickname", "autopick", "--LoG", "--LoG_diam_min", f"{lo:g}", "--LoG_diam_max",
+                    f"{hi:g}", "--shrink", "0", "--lowpass", f"{p['log_maxres']:g}", "--LoG_adjust_threshold", f"{thr:g}"]
+            if p["log_upper"] > 0:
+                args += ["--LoG_upper_threshold", f"{p['log_upper']:g}"]
+            if p["white_particles"]:
+                args.append("--Log_invert")
+            run_relion(ctx, args)
+            listing = odir / "autopick.star"
+            picks: dict[str, np.ndarray] = {}
+            if listing.exists():
+                for mic, coords in rl.coordinate_files(listing):
+                    f = ctx.abs(coords)
+                    picks[mic] = rl.read_coordinates(f)[0] if f.exists() else np.zeros((0, 2))
+            counts = [len(picks.get(names[c], [])) for c in chosen]
+            tiles = []
+            for c in chosen[:2]:
+                try:
+                    tiles.append(picks_image(ctx.abs(names[c]), picks.get(names[c], np.zeros((0, 2))), (lo + hi) / 2 / apix, 300))
+                except Exception as exc:  # cosmetic
+                    ctx.warn(f"Could not draw {names[c]}: {exc}")
+            image = None
+            if tiles:
+                h = min(t.shape[0] for t in tiles)
+                w = min(t.shape[1] for t in tiles)
+                image = ctx.rel(write_png(odir / "picks.png", tile_sheet([t[:h, :w] for t in tiles], per_row=2, gap=4)))
+            mean = float(np.mean(counts)) if counts else 0.0
+            params = {"method": "log", "diameter_min": lo, "diameter_max": hi, "log_threshold": thr,
+                      "log_upper": p["log_upper"], "log_maxres": p["log_maxres"], "white_particles": p["white_particles"]}
+            cards.append({"id": i, "label": f"Ø {lo:g}-{hi:g} Å · threshold {thr:g}", "params": params,
+                          "counts": counts, "mean": round(mean, 1), "image": image})
+            rows.append([i, f"{lo:g}-{hi:g}", f"{thr:g}", ", ".join(map(str, counts)), f"{mean:.1f}"])
+        ctx.add_table("Settings tried", ["#", "Diameters (Å)", "Threshold (σ)", "Picks per micrograph", "Mean"], rows)
+        ctx._section("picktuning", "Picks of each setting (first micrographs)", settings=cards,
+                     micrographs=[names[c] for c in chosen[:2]])
+        out = ctx.path("tuning.json")
+        out.write_text(json.dumps({"micrographs": [names[c] for c in chosen], "settings": cards}, indent=1))
+        best = max(cards, key=lambda c: c["mean"])
+        ctx.add_highlight("Settings", str(len(cards)))
+        ctx.add_highlight("Most picks", f"{best['mean']:.0f}/micrograph ({best['label']})")
+        ctx.add_output("tuning", "report", out, f"{len(cards)} picking settings tried",
+                       meta={"settings": len(cards), "micrographs": len(chosen)})
+
 # ------------------------------------------------------------------ imports of picks and templates
 COORD_SUFFIXES = re.compile(r"(_(autopick|manualpick|coords?|picks?|particles|extract|cryolo|topaz))+$", re.I)
 

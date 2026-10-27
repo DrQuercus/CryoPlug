@@ -431,7 +431,7 @@ Repère les particules sur les micrographies (relion_autopick) : détection de b
 
 **Conseils**
 
-- LoG : diamètres minimum et maximum encadrant la particule ; ajustez le seuil (σ) d'après l'image des particules repérées.
+- LoG : diamètres minimum et maximum encadrant la particule ; ajustez le seuil (σ) d'après l'image des particules repérées, ou comparez plusieurs réglages d'un coup avec « Tune LoG picking ».
 - Modèles 2D : recentrez les classes (option de « Select 2D classes ») ; distance minimale ≈ le diamètre.
 - Topaz : le diamètre est obligatoire ; le seuil de figure de mérite se règle ensuite à l'extraction (-1 ou 0).
 - L'histogramme des figures de mérite aide à choisir ce seuil ; « Inspect and edit… » le règle sur les micrographies.
@@ -520,6 +520,31 @@ Entraîne un réseau Topaz sur ce jeu de données (relion_autopick --topaz_train
 - Le modèle gardé est celui de l'époque à la meilleure précision de test (AUPRC), tracée dans le rapport.
 
 **Étapes suivantes** : Auto-picking (RELION)
+
+### Tune LoG picking (RELION)
+
+`relion_pick_tuner` — logiciel : `relion`
+
+Essaie plusieurs réglages du picking par Laplacien de Gaussienne (plages de diamètres × seuils) sur quelques micrographies, comme le « Blob Picker Tuner » de CryoSPARC, et montre côte à côte les particules repérées par chacun avec leur nombre par micrographie ; « Pick with these settings » prépare le picking de toutes les micrographies avec le réglage choisi.
+
+**Quand l'utiliser**
+
+- Nouveau jeu de données : trouver vite le diamètre et le seuil du LoG avant de tout picker.
+
+**À éviter / pièges**
+
+- Juger sur le seul nombre de particules : regardez les images (glace, carbone, agrégats repérés aussi).
+- Trop de réglages à la fois : 24 au plus ; affinez en deux tours (plages larges, puis serrées).
+
+**Entrées conseillées** : Les micrographies (de préférence avec leur CTF : les meilleurs ajustements sont essayés).
+
+**Conseils**
+
+- Les micrographies essayées sont prises dans la meilleure moitié des ajustements de CTF, réparties sur la session ; les images montrent les deux premières avec le cercle du diamètre moyen.
+- Seuil plus bas : plus de particules (et de faux positifs) ; plus haut : moins.
+- Le bouton d'une carte ouvre le picking de toutes les micrographies avec ces réglages, à vérifier puis lancer.
+
+**Étapes suivantes** : Auto-picking (RELION), Inspect picks / manual picking
 
 ## Classification 2D / 3D
 

@@ -125,6 +125,12 @@ RELION · GPU. In: micrographs: micrographs, particles?: particles, coordinates?
 Trains a Topaz picking network on this data set (relion_autopick --topaz_train): from particles picked and cleaned once (the particles of good 2D classes) or from coordinates. Pick the whole data set with the trained model next (Auto-picking, Topaz).
 Usually followed by: `relion_autopick`.
 
+### `relion_pick_tuner` — Tune LoG picking (RELION)
+RELION. In: micrographs: micrographs. Out: tuning: report.
+
+Tries several settings of the Laplacian-of-Gaussian picker (diameter ranges × thresholds) on a few micrographs, as CryoSPARC's Blob Picker Tuner, and shows the picks of each side by side with their number per micrograph: choose a setting, then 'Pick with these settings' prepares the auto-picking of all the micrographs.
+Usually followed by: `relion_autopick`, `relion_pick_inspect`.
+
 ## Classification
 
 ### `relion_class2d` — 2D classification (RELION)

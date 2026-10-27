@@ -2,7 +2,7 @@
 // Shown in the right panel, or in the main area while the job builder occupies the panel
 // (as in CryoSPARC), where its outputs can be dragged onto the builder's inputs.
 import { api } from './api.js';
-import { builderConnect, builderPrefill, builderSetParams, builderSlotsFor, openBuilder } from './builder.js';
+import { builderConnect, builderPrefill, builderSetParams, builderSlotsFor, openBuilder, refreshBuilderInputs } from './builder.js';
 import { classGallery, forgetSelection } from './classes.js';
 import { computeRows } from './compute.js';
 import { exposureCurator } from './curate.js';
@@ -659,11 +659,34 @@ function reportSection(sec, puid, job) {
       finish: (payload) => act(api.finish(puid, job.uid, JSON.stringify(payload)), 'Curation saved'),
       widen: () => widenFor(job),
     })));
+  } else if (sec.kind === 'picktuning') {
+    const usable = job.status === 'completed' && !!job.inputs?.micrographs;
+    wrap.append(h('h4', {}, sec.title), h('div', { class: 'box' }, h('div', { class: 'tune-grid' },
+      (sec.settings || []).map((s) => h('div', { class: 'tune-card' },
+        s.image ? h('a', { href: api.fileUrl(puid, s.image), target: '_blank', rel: 'noopener' },
+          h('img', { src: api.fileUrl(puid, s.image), alt: s.label, loading: 'lazy' })) : h('div', { class: 'muted small' }, 'No picture'),
+        h('div', { class: 'tune-label' }, h('b', {}, s.label),
+          h('span', { class: 'muted small' }, `${s.mean} picks per micrograph (${(s.counts || []).join(', ')})`)),
+        usable ? h('button', { class: 'btn small', type: 'button', title: 'Auto-picking of all the micrographs with these settings',
+          onclick: () => pickWithSettings(job, s.params) }, icon('play'), 'Pick with these settings…') : null))), note));
   } else if (sec.kind === 'image') {
     wrap.append(h('h4', {}, sec.title), h('a', { href: api.fileUrl(puid, sec.path), target: '_blank', rel: 'noopener' },
       h('img', { src: api.fileUrl(puid, sec.path), alt: sec.title, style: { maxWidth: '100%', borderRadius: '8px' } })));
   }
   return wrap;
+}
+
+// The auto-picking of all the micrographs a tuning job tried settings on, with the setting chosen: the builder, filled
+// in, to check and queue.
+function pickWithSettings(job, params) {
+  const ref = job.inputs.micrographs;
+  const parent = state.jobsByUid[ref.job];
+  if (!parent) { toast('The micrographs of this job are not in the project any more', 'error'); return; }
+  continueWith(parent, 'relion_autopick', params);
+  if (state.builder?.type === 'relion_autopick') {
+    state.builder.inputs.micrographs = { job: ref.job, output: ref.output };
+    refreshBuilderInputs();
+  }
 }
 
 // An inspection of the picks of a picking job, starting from the threshold looked at, queued at once.

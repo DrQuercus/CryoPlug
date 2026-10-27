@@ -1496,3 +1496,33 @@ def test_symmetry_search(manager, tmp_path):
     imp1 = _run(manager, puid, "import_maps", {"map": str(tmp_path / "c1.mrc"), "compute_fsc": False})
     none = _run(manager, puid, "relion_symmetry_search", {"groups": "C2-C4, D2"}, {"map": _ref(imp1, "map")})
     assert "map" not in _outs(none) and "No group tried reaches" in log_of(manager, puid, none["uid"])
+
+
+def test_pick_tuner(manager, spa):
+    """Tune LoG picking (CryoSPARC's Blob Picker Tuner): relion_autopick for every diameter range × threshold on a few
+    micrographs, their picks side by side; the settings chosen go to an auto-picking of all the micrographs."""
+    puid, ctf = spa["puid"], spa["ctf"]
+    pdir = manager.project_dir(puid)
+    mics = {"micrographs": _ref(ctf, "micrographs")}
+    for params, error in (({"diameters": "70-50"}, "minimum is larger"), ({"thresholds": "low, high"}, "numbers separated"),
+                          ({"diameters": "1-2; 2-3; 3-4; 4-5; 5-6", "thresholds": "-2, -1, 0, 1, 2"}, "at most 24")):
+        bad = manager.create_job(puid, "relion_pick_tuner", params, mics)
+        with pytest.raises(Exception, match=error):
+            manager.queue_job(puid, bad["uid"])
+    job = _run(manager, puid, "relion_pick_tuner", {"diameters": "40-60; 50-70", "thresholds": "-0.5, 0.5",
+                                                    "n_micrographs": 2}, mics)
+    log = _command(manager, puid, job)
+    assert log.count("relion_autopick --i") == 4 and f"--i {job['uid']}/micrographs_subset.star" in log
+    assert "--LoG --LoG_diam_min 50 --LoG_diam_max 70 --shrink 0 --lowpass 20 --LoG_adjust_threshold -0.5" in log
+    assert len(rl.micrograph_table(rl.read_star(pdir / job["uid"] / "micrographs_subset.star"))) == 2
+    sec = _sections(manager, puid, job, "picktuning")[0]
+    cards = sec["settings"]
+    assert [c["label"] for c in cards] == ["Ø 40-60 Å · threshold -0.5", "Ø 40-60 Å · threshold 0.5",
+                                           "Ø 50-70 Å · threshold -0.5", "Ø 50-70 Å · threshold 0.5"]
+    assert all(c["image"] and (pdir / c["image"]).exists() and len(c["counts"]) == 2 for c in cards)
+    assert sum(cards[0]["counts"]) >= sum(cards[1]["counts"]) and sum(cards[0]["counts"]) > 0  # lower threshold, more picks
+    assert _outs(job)["tuning"]["meta"] == {"settings": 4, "micrographs": 2}
+    # a setting chosen: the auto-picking of all the micrographs with it
+    pick = _run(manager, puid, "relion_autopick", {**cards[2]["params"], "mpi": 1}, mics)
+    assert "--LoG_diam_min 50 --LoG_diam_max 70" in _command(manager, puid, pick)
+    assert _outs(pick)["coordinates"]["meta"]["n_micrographs"] == 4
