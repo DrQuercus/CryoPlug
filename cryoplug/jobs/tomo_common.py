@@ -51,7 +51,7 @@ def particle_args(parts: dict[str, Any]) -> list[str]:
 
 
 def tomo_output(ctx: JobContext, name: str, star: Path, label: str, parts: dict[str, Any], kind: str,
-                opt: Path | None = None, **extra: Any) -> dict[str, Any]:
+                opt: Path | None = None, thumbnail: Path | None = None, **extra: Any) -> dict[str, Any]:
     """Subtomogram particles written in this job as an output: the optimisation set RELION wrote with them, or a new one
     naming them with the tomograms (and trajectories) of the input."""
     if opt is None or not opt.exists():
@@ -59,4 +59,4 @@ def tomo_output(ctx: JobContext, name: str, star: Path, label: str, parts: dict[
         tm.write_optimisation_set(opt, particles=ctx.rel(star), tomograms=parts.get("tomograms"),
                                   trajectories=parts.get("trajectories"))
     meta = tm.particle_meta(ctx.rel, opt, ctx.project_dir, kind, **extra)
-    return ctx.add_output(name, "tomo_particles", opt, label, meta=meta)
+    return ctx.add_output(name, "tomo_particles", opt, label, meta=meta, thumbnail=thumbnail)

@@ -439,6 +439,74 @@ une par ligne) et le mode *cluster* sépare les particules en groupes d'une stat
 - Hétérogénéité dans RELION : **3D multi-body refinement** (domaines rigides, mouvements joués comme des séries de
   cartes) et **DynaMight** (déformations continues).
 
+### 2.8 Tomographie : des séries d'inclinaison à la moyenne de sous-tomogrammes (RELION 5)
+
+La catégorie **Tomography** fait tourner la moyenne de sous-tomogrammes de **RELION 5** : les programmes et les options
+que lance l'interface de RELION 5.1, depuis le dossier du projet, et les fichiers de RELION — jeux de séries
+d'inclinaison (`tilt_series.star` et un fichier STAR par série), jeux de tomogrammes (`tomograms.star`), jeux de
+particules et jeux d'optimisation (`optimisation_set.star`, qui nomment les particules, les tomogrammes et les
+trajectoires). Les outils napari de RELION (exclusion d'images, pointage) sont remplacés par des outils du panneau du
+job, qui écrivent les mêmes fichiers.
+
+| Étape | Job | Réglages de départ | À regarder |
+|---|---|---|---|
+| Import | Import tilt series (RELION) | motifs des films et des fichiers mdoc (SerialEM), pixel, dose par image, main de défocalisation | séries, images, plage d'angles, dose |
+| Mouvement | Motion correction (tilt series) | 1 × 1 patch, *Save images for denoising* | mouvement contre l'angle d'inclinaison |
+| CTF | CTF estimation (tilt series) | recherche autour de la défocalisation nominale, résolution relâchée avec la dose | défocalisation et ajustement contre l'angle, chaque image avec son ajustement |
+| Exclusion | Exclude tilt images | limites d'angle, de dose et d'ajustement, puis à la main | images barrées, images gardées par série |
+| Alignement | Align tilt series (IMOD, AreTomo2) | méthode (billes d'or, suivi de patchs, AreTomo2), épaisseur | erreur résiduelle d'IMOD ou score d'axe d'AreTomo2 |
+| Reconstruction | Reconstruct tomograms (RELION) | 5–10 Å par voxel, *Tomograms for denoising* | projections, tomogrammes coupe par coupe |
+| Débruitage | Denoise tomograms (cryoCARE) | entraînement sur 2–3 tomogrammes | tomogrammes débruités |
+| Pointage | Pick particles in tomograms | particules, sphères ou filaments ; diamètre, espacement | particules par tomogramme |
+| Extraction | Extract subtomograms (RELION) | boîte en Å, boîte binnée, piles 2D | vignettes des sous-tomogrammes |
+| Moyenne | Reconstruct particle (RELION) | boîte et binning des images | la moyenne ; avec des demi-jeux, la FSC |
+| Ab initio | 3D initial model (subtomograms) | C1, a priori de tilt pour les sphères et filaments | carte initiale |
+| Raffinement | 3D auto-refine (subtomograms) | 3 processus MPI au moins | FSC, carte, particules raffinées |
+| Tri (facultatif) | 3D classification (subtomograms) | 2–6 classes | cartes et particules des classes |
+| Finitions | CTF refinement (tomography), Frame alignment / polishing, puis 3D auto-refine | les cycles du tutoriel de RELION | gain de résolution à chaque tour |
+
+Le workflow **Tilt series to subtomogram average (RELION 5)** crée toute la chaîne : elle tourne jusqu'à l'exclusion
+des images, qui attend votre tri, puis (après cryoCARE) jusqu'au pointage, qui attend vos clics, puis va seule jusqu'au
+post-traitement ; la CTF refinement, l'alignement des trames et un dernier raffinement sont proposés en option.
+
+**Configurer.** Page **Tools** : **RELION** (son dossier `bin`, avec les programmes Python `relion_python_tomo_*`),
+**CTFFIND**, et selon l'alignement **AreTomo2** ou **IMOD** (`batchruntomo`) ; **cryoCARE** pour le débruitage (le
+dossier de `cryoCARE_train.py`, `cryoCARE_extract_train_data.py` et `cryoCARE_predict.py`). Un outil non configuré est
+cherché dans le PATH de RELION.
+
+**Les outils du panneau.**
+
+- *Les séries d'inclinaison* (correction de mouvement, CTF, alignement, exclusion) : les images de chaque série dans
+  l'ordre de l'angle, avec leur angle et la résolution de l'ajustement de CTF ; l'image choisie en grand avec son
+  ajustement, sa dose, sa défocalisation et son mouvement. Pendant qu'un job d'exclusion attend, un clic sur une image
+  déjà choisie (ou X, espace) l'exclut ou la garde ; ← → passent d'une image à l'autre, ↑ ↓ d'une série à l'autre ;
+  *Done* écrit `selected_tilt_series.star`.
+- *Les tomogrammes* (reconstruction, débruitage, AreTomo2) : la molette ou ↑ ↓ changent la coupe, *Slab* moyenne
+  plusieurs coupes, *Filter* lisse l'affichage, Ctrl + molette zoome, un glisser déplace ; *Raw* montre la
+  reconstruction au lieu du tomogramme débruité.
+- *Le pointeur* : en mode particules, un clic ajoute une particule sur la coupe affichée (ou retire celle qui est
+  sous le pointeur) ; les cercles montrent la section de chaque particule sur la coupe, ce qui aide à cliquer sur la
+  coupe où elle est centrée. En mode sphères, un clic au centre puis un clic sur le bord ; en mode filaments, des
+  points le long du filament (sur les coupes où il passe), Entrée pour le finir. *Done* écrit les annotations du
+  pointeur de RELION et le jeu de particules qu'il en dérive (positions centrées en Å, orientations par rapport à la
+  surface ou à l'axe avec leurs a priori).
+
+**Points d'attention (RELION 5.1.1).**
+
+- L'option `--prefix` de l'import ne trouve plus aucune série : CryoPlug ajoute le préfixe après l'import.
+- Un fichier mdoc dont aucune image n'est parmi les fichiers fait associer les autres séries aux mauvais fichiers
+  mdoc : CryoPlug arrête le job et nomme le fichier.
+- Une reconstruction pour le débruitage n'écrit que les deux moitiés des tomogrammes ; une reconstruction d'un seul
+  tomogramme (`--tn`) n'écrit pas de jeu de tomogrammes (CryoPlug l'écrit) ; une moyenne de particules sans
+  demi-jeux n'écrit que la carte complète.
+- L'échelle « par tomogramme » de la CTF refinement : l'interface de RELION passe `--per_tomo_scale`, que le
+  programme ignore ; CryoPlug passe `--per_tomogram_scale`.
+- Les programmes C++ de RELION nomment les fichiers de séries qu'ils écrivent d'après le dossier du job puis le nom
+  d'entrée (`J6/J5/tilt_series/TS_01.star`), faute de dossier `jobNNN/` à retirer dans un projet CryoPlug : c'est
+  attendu.
+- Les cartes produites (moyenne, raffinement) se chaînent avec le reste de CryoPlug : masque, post-traitement,
+  résolution locale, LocScale, construction de modèle.
+
 ---
 
 ## 3. Quelle carte pour quoi ?

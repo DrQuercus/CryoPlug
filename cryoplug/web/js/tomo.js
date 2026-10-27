@@ -16,7 +16,7 @@ const COLOURS = { pick: '#34c759', near: 'rgba(52, 199, 89, 0.45)', drawing: '#0
 const fmt = (n) => Number(n).toLocaleString();
 const round2 = (v) => Math.round(v * 100) / 100;
 const base = (name) => (name || '').split('/').pop();
-const plural = (n, word) => `${fmt(n)} ${word}${n === 1 ? '' : 's'}`;
+const plural = (n, word) => `${fmt(n)} ${word}${n === 1 || word.endsWith('series') ? '' : 's'}`;
 
 async function readJson(puid, path) {
   const r = await fetch(api.fileUrl(puid, path));
@@ -110,7 +110,7 @@ export function tiltSeriesBrowser(sec, { puid, job, finish = null, widen = null 
         ...(t.defocus !== null ? fact('Defocus', `${t.defocus.toFixed(2)} µm`) : []),
         ...(t.ctf_res !== null ? fact('CTF fit', `${t.ctf_res} Å`) : []),
         ...(t.fom !== null ? fact('CTF figure of merit', String(t.fom)) : []),
-        ...(t.motion !== null ? fact('Total motion', `${t.motion} Å`) : []),
+        ...(t.motion !== null ? fact('Total motion', `${t.motion.toFixed(2)} Å`) : []),
         ...fact('Image', h('span', { class: 'mono', title: t.image || '' }, base(t.image))),
         ...fact('Status', out ? h('b', { class: 'tsb-out' }, 'excluded') : 'kept'));
       if (toggle) toggle.lastChild.textContent = out ? 'Keep' : 'Exclude';
@@ -126,7 +126,9 @@ export function tiltSeriesBrowser(sec, { puid, job, finish = null, widen = null 
       summary.textContent = `${plural(s.tilts.length, 'image')}${out ? ` · ${out} excluded` : ''}`;
       const all = series.reduce((a, x) => a + x.tilts.length, 0);
       const outAll = [...excluded.values()].reduce((a, x) => a + x.size, 0);
-      total.replaceChildren(h('b', {}, fmt(all - outAll)), ` of ${fmt(all)} tilt images kept in ${plural(series.length, 'tilt series')}`);
+      total.replaceChildren(...(editable || outAll
+        ? [h('b', {}, fmt(all - outAll)), ` of ${fmt(all)} tilt images kept in ${plural(series.length, 'tilt series')}`]
+        : [h('b', {}, fmt(all)), ` tilt images in ${plural(series.length, 'tilt series')}`]));
       if (doneBtn) doneBtn.disabled = all === outAll;
     }
     function show(k, keepSel = false) {
@@ -241,7 +243,7 @@ function sliceView(root, puid, { overlay = null, click = null, hover = null, cha
       if (st.url !== url) return;
       st.img = im;
       status.textContent = '';
-      if (refit || !st.cx) fit();
+      if (refit) fit();
       resize();
       for (const dz of [1, -1]) { // the neighbouring slices, ahead of the wheel
         const z = st.z + dz;
@@ -251,11 +253,11 @@ function sliceView(root, puid, { overlay = null, click = null, hover = null, cha
     im.onerror = () => { if (st.url === url) status.textContent = 'tomogram not readable'; };
     im.src = url;
   }
-  function fit() {
+  function fit() { // the whole slice, centred (voxel v spans v − 0.5 … v + 0.5)
     if (!st.tomo) return;
     st.zoom = 1;
-    st.cx = st.tomo.shape[0] / 2;
-    st.cy = st.tomo.shape[1] / 2;
+    st.cx = st.tomo.shape[0] / 2 - 0.5;
+    st.cy = st.tomo.shape[1] / 2 - 0.5;
   }
   function scale() { // device pixels per voxel
     if (!st.tomo) return 1;

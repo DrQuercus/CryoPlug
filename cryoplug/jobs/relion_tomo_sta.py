@@ -22,7 +22,7 @@ from cryoplug.jobs.relion import symmetry_param
 from cryoplug.jobs.relion_classify import RelionClass3DGlobal, RelionInitialModel
 from cryoplug.jobs.relion_common import TOOL, RelionJob, mpi, relion_command, run_relion, sample, threads
 from cryoplug.jobs.relion_refinement import RelionRefine3D
-from cryoplug.jobs.relion_tomo import CATEGORY, tilt_set_input, tomogram_index
+from cryoplug.jobs.relion_tomo import CATEGORY, central_slice_thumbnail, tilt_set_input, tomogram_index
 from cryoplug.jobs.tomo_common import tomo_output, tomo_particles
 
 
@@ -278,7 +278,7 @@ class RelionTomoPick(JobType):
         ctx.save_report()
         parts = {"tomograms": state["star"], "trajectories": None}
         tomo_output(ctx, "particles", pstar, f"{len(table):,} particles in {len(rows)} tomograms", parts, f"pick_{mode}",
-                    opt=ctx.path("optimisation_set.star"))
+                    opt=ctx.path("optimisation_set.star"), thumbnail=central_slice_thumbnail(ctx, tset))
 
 
 # ------------------------------------------------------------------ coordinate import
@@ -406,13 +406,13 @@ class RelionTomoExtract(RelionJob):
         if len(ptab) < parts["n"]:
             ctx.warn(f"{parts['n'] - len(ptab):,} particle(s) left out (outside the tomogram, or too few tilts)")
         ctx.add_highlight("Subtomograms", f"{len(ptab):,}")
-        self.gallery(ctx, ptab)
-        out = tomo_output(ctx, "particles", pstar, f"{len(ptab):,} subtomograms", parts, "subtomo", opt=opt)
+        png = self.gallery(ctx, ptab)
+        out = tomo_output(ctx, "particles", pstar, f"{len(ptab):,} subtomograms", parts, "subtomo", opt=opt, thumbnail=png)
         if out["meta"].get("box"):
             ctx.add_highlight("Box", f"{out['meta']['box']} px · {out['meta'].get('pixel_size', 0):g} Å/px")
 
     @staticmethod
-    def gallery(ctx: JobContext, ptab: rl.StarTable) -> None:
+    def gallery(ctx: JobContext, ptab: rl.StarTable) -> Path | None:
         """A few subtomograms: the central (zero-tilt) image of a 2D stack, or the central slice of a 3D one."""
         from cryoplug.imaging import write_png
         from cryoplug.micrographs import preview, tile_sheet
@@ -426,10 +426,12 @@ class RelionTomoExtract(RelionJob):
                 tiles.append(preview(img, 96, sigma=0.6)[0])
             except Exception:  # cosmetic
                 continue
-        if tiles:
-            s = min(min(t.shape) for t in tiles)
-            png = write_png(ctx.path("subtomograms.png"), tile_sheet([t[:s, :s] for t in tiles], per_row=8, gap=3))
-            ctx.add_image("Subtomograms (central image or slice)", png)
+        if not tiles:
+            return None
+        s = min(min(t.shape) for t in tiles)
+        png = write_png(ctx.path("subtomograms.png"), tile_sheet([t[:s, :s] for t in tiles], per_row=8, gap=3))
+        ctx.add_image("Subtomograms (central image or slice)", png)
+        return write_png(ctx.path("thumbnail_subtomograms.png"), tile_sheet([t[:s, :s] for t in tiles[:4]], per_row=2, gap=2))
 
 
 # ------------------------------------------------------------------ particle reconstruction

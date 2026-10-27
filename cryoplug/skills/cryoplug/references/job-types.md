@@ -213,6 +213,104 @@ RELION. In: particles: particles, mask: mask. Out: particles: particles, map: ma
 Removes from each particle image the projection of everything outside a mask (relion_particle_subtract), re-centres the particles on the masked region and puts them in a smaller box: the particles of a focused refinement or classification. Optionally expands the symmetry first, so that every copy of a symmetric complex becomes a particle. Needs particles refined in RELION (it uses that refinement's model).
 Usually followed by: `relion_local_refine`, `relion_class3d`, `cryodrgn_train`.
 
+## Tomography
+
+### `relion_tomo_refine3d` — 3D auto-refine (subtomograms)
+RELION · GPU optional. In: particles: tomo_particles, map: map, mask?: mask. Out: map: map, half_maps: half_maps, map_sharp: map, mask: mask, fsc: fsc, particles: tomo_particles.
+
+Gold-standard 3D refinement of the subtomograms against a reference (relion_refine --auto_refine --ios): global then local angular searches, two independent half sets. Gives the map, the half maps, the FSC and the refined particles (for CTF refinement and frame alignment).
+Usually followed by: `relion_mask_create`, `relion_postprocess`, `relion_tomo_ctf_refine`, `relion_tomo_frame_align`, `relion_tomo_reconstruct_particle`.
+
+### `relion_tomo_class3d` — 3D classification (subtomograms)
+RELION · GPU optional. In: particles: tomo_particles, map: map, mask?: mask. Out: maps: volume_series, particles: tomo_particles, map_1: map, class_1: tomo_particles.
+
+Sorts the subtomograms into 3D classes against a reference (relion_refine --K --ios): global or local searches, or none. Every class gives a map and its particles.
+Usually followed by: `relion_tomo_refine3d`, `relion_tomo_reconstruct_particle`.
+
+### `relion_tomo_initial_model` — 3D initial model (subtomograms)
+RELION · GPU optional. In: particles: tomo_particles. Out: map: map, maps: volume_series, particles: tomo_particles.
+
+A first map from the subtomograms without any reference (relion_refine --grad --denovo_3dref --ios, VDAM), aligned on the symmetry axes and symmetrised: RELION 5's ab initio for tomography.
+Usually followed by: `relion_tomo_refine3d`, `relion_tomo_class3d`.
+
+### `relion_tomo_align` — Align tilt series (IMOD, AreTomo2)
+RELION. In: tiltseries: tiltseries. Out: tiltseries: tiltseries, tomograms: tomograms.
+
+Aligns the images of every tilt series (relion_align_tiltseries): IMOD's fiducial-based alignment (gold beads), IMOD's patch tracking (no fiducials), or AreTomo2's projection matching on GPUs, which can also estimate the CTF and reconstruct the tomograms. Gives the tilt angles, tilt axis and shifts of every image, the geometry of the tomograms.
+Usually followed by: `relion_tomo_reconstruct`.
+
+### `relion_tomo_ctffind` — CTF estimation (tilt series)
+RELION. In: tiltseries: tiltseries. Out: tiltseries: tiltseries.
+
+Fits the CTF of every tilt image with CTFFIND (relion_run_ctffind on a tilt-series set): the defocus is searched around the nominal defocus of the mdoc files, and the highest resolution of the fit lowered with the dose the image received before (its Thon rings fade).
+Usually followed by: `relion_tomo_exclude`, `relion_tomo_align`.
+
+### `relion_tomo_ctf_refine` — CTF refinement (tomography)
+RELION. In: particles: tomo_particles, half_maps: half_maps, mask?: mask, postprocess?: map. Out: particles: tomo_particles, tomograms: tomograms.
+
+Refines the defocus of every tilt image and the contrast scale (ice thickness) against the reference (relion_tomo_refine_ctf). Then reconstruct or refine the particles again.
+Usually followed by: `relion_tomo_frame_align`, `relion_tomo_reconstruct_particle`, `relion_tomo_refine3d`.
+
+### `relion_tomo_denoise` — Denoise tomograms (cryoCARE)
+RELION · GPU. In: tomograms: tomograms. Out: tomograms: tomograms.
+
+Denoises the tomograms with cryoCARE (relion_python_tomo_denoise): a network learns, on the tomograms of the even and of the odd frames of a few tilt series (Noise2Noise), to remove the noise, then denoises every tomogram. Much easier picking; the averaging still uses the raw tilt images.
+Usually followed by: `relion_tomo_pick`.
+
+### `relion_tomo_exclude` — Exclude tilt images
+RELION · interactive: a person works in it. In: tiltseries: tiltseries. Out: tiltseries: tiltseries.
+
+Leaves out the bad images of each tilt series (an edge of the grid or a lamella in the beam, ice crystals, drift, a failed CTF fit), as RELION's tilt-image excluder: the images by tilt angle with their CTF fit, a click to exclude or keep one, and limits on the tilt, the dose and the CTF fit. Writes the selected tilt series as RELION does (selected_tilt_series.star).
+Usually followed by: `relion_tomo_align`.
+
+### `relion_tomo_extract` — Extract subtomograms (RELION)
+RELION. In: particles: tomo_particles. Out: particles: tomo_particles.
+
+Extracts the particles from the tilt series (relion_tomo_subtomo): for each particle the CTF-premultiplied images of the tilts that see it, as a stack of 2D images (RELION 5), a 3D pseudo-subtomogram (RELION 4) or a real-space subtomogram, binned to a box for refinement.
+Usually followed by: `relion_tomo_reconstruct_particle`, `relion_tomo_initial_model`, `relion_tomo_refine3d`, `relion_tomo_class3d`.
+
+### `relion_tomo_frame_align` — Frame alignment / polishing (tomography)
+RELION. In: particles: tomo_particles, half_maps: half_maps, mask?: mask, postprocess?: map. Out: particles: tomo_particles, tomograms: tomograms.
+
+Refines the alignment of every tilt image against the reference (relion_tomo_align): rigid shifts and angles of the tilts, the 3D positions of the particles and optionally their motion during the tilt series (the subtomogram version of Bayesian polishing). Then reconstruct or refine again.
+Usually followed by: `relion_tomo_reconstruct_particle`, `relion_tomo_refine3d`, `relion_tomo_ctf_refine`.
+
+### `relion_tomo_import` — Import tilt series (RELION)
+RELION. In: none. Out: tiltseries: tiltseries.
+
+Imports tilt series collected with SerialEM (relion_python_tomo_import SerialEM): the movies (or motion-corrected images) of every tilt and the mdoc file of each tilt series, which gives the tilt angles, the order of acquisition (hence the dose before each tilt) and the nominal defocus. Writes RELION 5's tilt-series set: the start of subtomogram averaging.
+Usually followed by: `relion_tomo_motioncorr`, `relion_tomo_ctffind`.
+
+### `relion_tomo_import_coords` — Import tomogram coordinates
+RELION. In: tomograms: tomograms. Out: particles: tomo_particles.
+
+Imports particle positions picked elsewhere (crYOLO, PyTom, Dynamo, IMOD models converted, template matching): STAR files or text files with three columns (X Y Z), or six with the subtomogram angles (relion_tomo_import_coordinates), one file per tomogram named after it.
+Usually followed by: `relion_tomo_extract`, `relion_tomo_pick`.
+
+### `relion_tomo_motioncorr` — Motion correction (tilt series)
+RELION · GPU optional. In: tiltseries: tiltseries. Out: tiltseries: tiltseries.
+
+Aligns the frames of every tilt movie and sums them (relion_run_motioncorr on a tilt-series set, RELION's own CPU implementation or MotionCor2): the tilt images, their motion and the power spectra CTFFIND reads. Optionally also the sums of the even and of the odd frames, for denoising.
+Usually followed by: `relion_tomo_ctffind`.
+
+### `relion_tomo_pick` — Pick particles in tomograms
+RELION · interactive: a person works in it. In: tomograms: tomograms, particles?: tomo_particles. Out: particles: tomo_particles.
+
+Picks particles in the tomograms, slice by slice, as RELION's napari picker: single particles (a click on each), spheres (vesicles, virus capsids: a centre and a radius, particles sampled on the surface) or filaments (points along each tube, particles sampled along it), with their orientations relative to the surface or the axis. Writes the annotations and the particle set RELION derives from them (particles.star, optimisation_set.star).
+Usually followed by: `relion_tomo_extract`, `relion_tomo_reconstruct_particle`.
+
+### `relion_tomo_reconstruct_particle` — Reconstruct particle (RELION)
+RELION. In: particles: tomo_particles, mask?: mask. Out: map: map, half_maps: half_maps, fsc: fsc.
+
+Reconstructs the average of the particles from the tilt images, in their current orientations (relion_tomo_reconstruct_particle): the two half maps and the full map, at any binning and box. The first average of particles picked on spheres or filaments, a map after refinement, CTF refinement or polishing at full size.
+Usually followed by: `relion_tomo_refine3d`, `relion_mask_create`, `relion_postprocess`.
+
+### `relion_tomo_reconstruct` — Reconstruct tomograms (RELION)
+RELION. In: tiltseries: tiltseries. Out: tomograms: tomograms.
+
+Reconstructs a binned tomogram of every aligned tilt series (relion_tomo_reconstruct_tomogram), CTF-corrected by Fourier inversion with a Wiener filter, for looking at the data and picking particles (subtomogram averaging goes back to the tilt images). Optionally the tomograms of the even and odd frames, for denoising, and a 2D projection of a slab of each tomogram.
+Usually followed by: `relion_tomo_denoise`, `relion_tomo_pick`, `relion_tomo_import_coords`.
+
 ## Map processing
 
 ### `align_3d_maps` — Align 3D maps

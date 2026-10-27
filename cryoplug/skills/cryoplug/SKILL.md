@@ -137,6 +137,7 @@ Steps marked optional are chosen with `include`; the parameters a step asks for 
 | Refinement, ISOLDE/Coot, validation metrics, deposition | `cryoplug-refinement-validation` |
 | Flexible or partially occupied regions, cryoDRGN, 3D variability | `cryoplug-heterogeneity` |
 | Movies or micrographs to a refined map with RELION (motion, CTF, picking, 2D/3D, refinement, polishing) | `cryoplug-relion-spa` |
+| Tilt series (cryo-ET) to a subtomogram average with RELION 5 (alignment, tomograms, picking, refinement) | `cryoplug-relion-tomo` |
 | Focused refinement or classification of a region with RELION | `cryoplug-relion-focused` |
 | A job failed or behaves strangely | `cryoplug-troubleshooting` |
 

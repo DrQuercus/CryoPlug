@@ -11,6 +11,7 @@ CryoSPARC (projets, cartes de jobs, file d'attente, lanes, **choix des GPU**, **
 |---|---|---|
 | Import | Films (TIFF, EER, MRC), CryoSPARC, RELION, fichiers MRC, PDB, AlphaFold DB, UniProt | `Import movies (RELION)`, `Import from CryoSPARC`, `Import maps`, `Import atomic model`, `Import sequence`, `Import particle coordinates`, `Import 2D templates` |
 | Des films à la carte (RELION) | **RELION 5.1** : **prétraitement en direct** pendant la collecte (comme CryoSPARC Live), correction de mouvement (RELION ou MotionCor2), CTF (**CTFFIND** 4.1/5), **tri interactif des micrographies** (comme *Manually Curate Exposures*), picking **LoG**, par **modèles** ou **Topaz** (et son entraînement), **inspection des picks et picking manuel**, débruitage Topaz, extraction, **classification 2D** (VDAM/EM), **sélection des classes en cliquant dans la galerie** (2D et 3D, ou class ranker automatique), modèle initial, classification 3D, **raffinement hétérogène**, **auto-refine** gold-standard, masques, post-traitement, **CTF refinement**, **polissage bayésien**, résolution locale, **multi-corps**, **DynaMight** ; groupes d'optique (beam shift EPU), **filaments** (options hélicoïdales), outils sur les particules (ensembles, rééquilibrage des vues, réduction, expansion de symétrie) | les commandes du GUI de RELION 5.1, fichiers STAR de RELION ; histogrammes à seuils déplaçables, micrographies avec CTF et dérive, particules sur les micrographies, galeries de classes, directions de vue et précision des poses ; workflow *Movies to map* |
+| Tomographie (sous-tomogrammes) | **RELION 5** : import SerialEM (films et mdoc), correction de mouvement et CTF des séries d'inclinaison, **exclusion interactive des images**, alignement (**IMOD**, **AreTomo2**), reconstruction, débruitage **cryoCARE**, **pointage dans les tomogrammes** (particules, sphères, filaments), extraction, moyenne, modèle initial, classification et raffinement gold-standard, CTF refinement, alignement des trames | `Import tilt series (RELION)`, `Exclude tilt images`, `Align tilt series (IMOD, AreTomo2)`, `Reconstruct tomograms (RELION)`, `Denoise tomograms (cryoCARE)`, `Pick particles in tomograms`, `Extract subtomograms (RELION)`, `3D auto-refine (subtomograms)`… |
 | Raffinement local (RELION) | **RELION 5** : raffinement local gold-standard (recherches locales depuis les poses CryoSPARC, Blush), **soustraction de signal** recentrée et recadrée (avec expansion de symétrie), **classification 3D focalisée** sans alignement, post-traitement, reconstruction | conversion CryoSPARC → RELION automatique (conventions de pyem), cartes toujours rendues sur la grille de la carte consensus, workflows *Focused refinement* et *Focused classification* |
 | Amélioration de carte | **LocScale 2** (model-free / pseudo-modèle / model-based / hybride), **EMmerNet** (avec la carte de confiance pVDDT), **DeepEMhancer**, **EMReady2**, **spIsoNet** (correction de l'anisotropie due à l'orientation préférentielle), Phenix `resolve_cryo_em`, `map_sharpening` (Phenix 2), `auto_sharpen`, `local_aniso_sharpen`, **résolution locale** (`local_resolution`), **cartes composites** de raffinements locaux (`combine_focused_maps`) | + FSC demi-cartes (masquée, corrigée par randomisation de phase), **résolution directionnelle / 3D FSC**, **création de masques** (densité, chaînes du modèle, carte simulée du modèle comme `molmap`, densité proche du modèle ; dilatation et bord doux en Å), **masques dessinés à la main dans le visualiseur 3D** (comme Chimera : sphères, boîtes, cylindres, région de densité cliquée, zone autour de chaînes, carte simulée de chaînes) et opérations de carte (main, B-factor, filtre, masque, boîte) intégrées |
 | Hétérogénéité (variabilité 3D) | **cryoDRGN** (contrôle des entrées, entraînement en deux tours, convergence, analyse, paysage, trajectoires), **cryoDRGN-AI** (ab initio, sans consensus : poses apprises, main et repère, validation), **CryoSPARC 3D Variability** et *3D Variability Display* / 3D Flex (import des coordonnées des particules et des séries de volumes) | **Explorateur de l'espace latent** interactif (UMAP / PCA, coloration par densité, défocus ou orientation, galerie des volumes avec alertes junk, lasso, images des particules, clusters → volumes en 3D, sélection de particules, trajectoire), **lecture des séries** dans le visualiseur 3D, **analyse de série** (carte de variabilité, corrélation entre états, chaînes qui bougent ou disparaissent), sélection de particules vers CryoSPARC ou un nouvel entraînement |
@@ -175,6 +176,15 @@ executable = "/opt/ctffind-5.0/bin/ctffind5"
 [tools.motioncor]          # facultatif : MotionCor2 / MotionCor3 sur GPU (la correction de mouvement de RELION n'en a pas besoin)
 executable = "/opt/motioncor2/MotionCor2_1.6.4_Cuda121"
 
+[tools.aretomo]            # tomographie : alignement des séries par AreTomo2 (GPU), lancé par relion_align_tiltseries
+executable = "/opt/aretomo2/AreTomo2"
+
+[tools.imod]               # tomographie : alignement IMOD (billes d'or ou suivi de patchs) par batchruntomo
+bin_dir = "/usr/local/IMOD/bin"
+
+[tools.cryocare]           # tomographie : débruitage cryoCARE (cryoCARE_train.py, cryoCARE_predict.py…)
+setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate cryocare"
+
 [tools.modelangelo]
 setup = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate model_angelo"
 
@@ -232,7 +242,7 @@ Les fichiers de particules `.cs` des versions récentes de CryoSPARC (format com
 `cryosparc-tools` : `~/cryoplug-venv/bin/pip install cryosparc-tools` (inutile pour le format NumPy classique).
 
 > Les lignes de commande suivent la documentation et le code source actuels de chaque logiciel
-> (RELION 5.1, ModelAngelo 1.0.18, CryoAtom2 2.1, LocScale 2.4, spIsoNet 1.0, Boltz 2.2, ColabFold 1.6,
+> (RELION 5.1 — tomographie comprise, d'après les sources de RELION 5.1.1 —, ModelAngelo 1.0.18, CryoAtom2 2.1, LocScale 2.4, spIsoNet 1.0, Boltz 2.2, ColabFold 1.6,
 > DeepEMhancer 0.18, EMReady2, Servalcat 0.4, Phenix 2.x et 1.21, cryoDRGN 4.3, checkMySequence 1.5). Si votre version
 > diffère, utilisez *Extra arguments* ou adaptez le job correspondant (§7) ; la commande exacte exécutée
 > est toujours enregistrée dans `commands.sh` et dans le log du job.
@@ -463,6 +473,34 @@ refinement** et **DynaMight** pour la suite. Le workflow *Movies to map (RELION 
 ![Tri des particules sur leurs statistiques](docs/images/relion_particle_curate.png)
 
 ![Prétraitement en direct pendant la collecte](docs/images/relion_live.png)
+
+### Tomographie : des séries d'inclinaison à la moyenne de sous-tomogrammes (RELION 5)
+
+La catégorie **Tomography** reprend la moyenne de sous-tomogrammes de **RELION 5** : **Import tilt series (RELION)**
+(films et fichiers mdoc de SerialEM) → **Motion correction (tilt series)** (avec les sommes paires et impaires pour le
+débruitage) → **CTF estimation (tilt series)** → **Exclude tilt images** → **Align tilt series (IMOD, AreTomo2)** →
+**Reconstruct tomograms** → **Denoise tomograms (cryoCARE)** → **Pick particles in tomograms** (ou **Import tomogram
+coordinates**) → **Extract subtomograms** → **Reconstruct particle** → **3D initial model**, **3D classification** et
+**3D auto-refine (subtomograms)** (`relion_refine --ios`) → masque et post-traitement, puis **CTF refinement
+(tomography)** et **Frame alignment / polishing (tomography)**. Le workflow *Tilt series to subtomogram average
+(RELION 5)* crée la chaîne.
+
+- Les commandes sont celles de l'interface de RELION 5.1 ; les fichiers (jeux de séries, `tomograms.star`, jeux de
+  particules et `optimisation_set.star`) sont ceux de RELION et se relisent dans RELION.
+- **À la place des outils napari de RELION**, des outils dans le panneau du job : les images de chaque série dans
+  l'ordre de l'angle avec leur ajustement de CTF (un clic pour exclure ou garder une image), une visionneuse des
+  tomogrammes coupe par coupe (tranche de plusieurs coupes, filtre, zoom) et un **pointeur 3D** : particules isolées,
+  sphères (vésicules, capsides : centre et rayon) ou filaments (points le long de chacun), écrits comme le pointeur de
+  RELION avec les orientations et leurs a priori.
+- Défauts de RELION 5.1.1 pris en charge : le préfixe de l'import (que `--prefix` rend inopérant) est ajouté après
+  coup, un fichier mdoc sans images est refusé, le jeu de tomogrammes d'une reconstruction unique (`--tn`) est écrit,
+  l'échelle par tomogramme de la CTF refinement passe par l'option que lit le programme (`--per_tomogram_scale`).
+- Logiciels : RELION et CTFFIND, et selon les étapes **AreTomo2**, **IMOD** (`batchruntomo`) et **cryoCARE** dans
+  *Tools* (§2).
+
+| **Exclusion des images d'inclinaison** : images par angle avec leur ajustement de CTF, exclues d'un clic | **Pointage dans les tomogrammes** : sections des particules sur la coupe affichée |
+|---|---|
+| ![](docs/images/tomo_exclude.png) | ![](docs/images/tomo_picker.png) |
 
 ### Raffinement local et classification focalisée (RELION)
 
