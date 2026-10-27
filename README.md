@@ -1003,7 +1003,7 @@ La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes
 | Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · CryoAtom2 enhanced (meilleur de plusieurs essais) · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Fit in map (rigid body) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
 | Interactive | ISOLDE session · Coot session |
 | Refinement | CTF refinement (RELION) · Bayesian polishing (RELION) · Real-space refinement (Phenix) · Refinement (Servalcat) · Add waters (phenix.douse) |
-| Validation | Local resolution (RELION) · Comprehensive validation (Phenix) · MolProbity · EMRinger · Map-model validation (Q-score, FSC) · Sequence register check (checkMySequence) · wwPDB validation report (OneDep) |
+| Validation | Local resolution (RELION) · ResLog analysis (RELION) · Comprehensive validation (Phenix) · MolProbity · EMRinger · Map-model validation (Q-score, FSC) · Sequence register check (checkMySequence) · wwPDB validation report (OneDep) |
 | Deposition | Pre-deposition checks · Deposition package |
 | Utilities | Join star files (RELION) · Subset selection (RELION) · Particle sets (intersection, difference) · Curate particles (statistics) · Check particles (corrupt images) · Re-centre on a region · Simulate particles (RELION) · Restack particles · Rebalance orientations · Downsample particles · Symmetry expansion (RELION) · Optics groups (beam shift, file names) · Model operations · Merge models · Render images (ChimeraX) · Custom command |
 

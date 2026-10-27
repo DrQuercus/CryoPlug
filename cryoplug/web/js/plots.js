@@ -30,11 +30,31 @@ function nearestIndex(xs, x) {
 
 function fmtVal(v) {
   if (v === null || v === undefined || Number.isNaN(v)) return '–';
+  if (v !== 0 && Math.abs(v) < 0.01) return v.toPrecision(3);
   return Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(3);
+}
+
+// Counts on a log axis: 1k, 20k, 1.5M.
+const fmtCount = (v) => (v >= 1e6 ? `${+(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `${+(v / 1e3).toFixed(1)}k` : `${+v.toFixed(0)}`);
+
+// Ticks 1, 2, 5 × 10^k between two log10 values.
+function logTicks(lo, hi) {
+  const out = [];
+  for (let e = Math.floor(lo); e <= Math.ceil(hi); e++) {
+    for (const f of [1, 2, 5]) {
+      const v = f * 10 ** e;
+      if (Math.log10(v) >= lo - 1e-9 && Math.log10(v) <= hi + 1e-9) out.push(v);
+    }
+  }
+  return out;
 }
 
 export function lineChart(section) {
   const isRes = section.x_kind === 'resolution';
+  const isLog = section.x_kind === 'log'; // x drawn on a log scale (counts)
+  const px = (x) => (isLog ? Math.log10(x) : x); // where along the axis
+  const yRes = section.y_kind === 'inv_d2'; // y in 1/Å², read as resolutions (Å)
+  const yVal = (y) => (yRes ? (y > 0 ? `${(1 / Math.sqrt(y)).toFixed(2)} Å` : '∞') : fmtVal(y));
   const all = (section.series || []).filter((sr) => sr.x && sr.x.length);
   const series = all.slice(0, MAX_SERIES);
   const folded = all.length - series.length;
@@ -45,29 +65,43 @@ export function lineChart(section) {
   for (const sr of series) {
     sr.x.forEach((x, i) => {
       const y = sr.y[i];
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-      xmin = Math.min(xmin, x); xmax = Math.max(xmax, x); ymin = Math.min(ymin, y); ymax = Math.max(ymax, y);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || (isLog && x <= 0)) return;
+      xmin = Math.min(xmin, px(x)); xmax = Math.max(xmax, px(x)); ymin = Math.min(ymin, y); ymax = Math.max(ymax, y);
     });
   }
   if (!Number.isFinite(xmin)) return h('div', { class: 'muted small' }, 'No data');
   if (isRes) xmin = 0;
+  if (isLog) { const pad = (xmax - xmin) * 0.04 || 0.1; xmin -= pad; xmax += pad; }
   if (section.y_range) [ymin, ymax] = section.y_range;
   else { const pad = (ymax - ymin) * 0.06 || 1; ymin -= pad; ymax += pad; }
   // room for the longest tick label, and for the axis title beside it
-  const yticks = niceTicks(ymin, ymax, 5);
-  const longest = Math.max(1, ...yticks.map((t) => String(+t.toFixed(3)).length));
+  let yticks = niceTicks(ymin, ymax, 5);
+  if (yRes) { // ticks at round resolutions, an eighth of the height apart at least
+    const span = ymax - ymin || 1;
+    yticks = [];
+    let last = -Infinity;
+    for (const r of RES_TICKS) { // coarse to fine: 1/d² grows
+      const t = 1 / (r * r);
+      if (t < ymin + 0.03 * span || t > ymax) continue;
+      if ((t - last) / span < 0.12) continue;
+      yticks.push(t); last = t;
+    }
+  }
+  const yTickLabel = (t) => (yRes ? `${+(1 / Math.sqrt(t)).toFixed(1)}` : `${+t.toFixed(3)}`);
+  const longest = Math.max(1, ...yticks.map((t) => yTickLabel(t).length));
   m.l = Math.max(46, Math.round(longest * 6.4) + (section.y_label ? 26 : 12));
   const iw = W - m.l - m.r;
-  const X = (x) => m.l + ((x - xmin) / (xmax - xmin || 1)) * iw;
+  const X = (x) => m.l + ((px(x) - xmin) / (xmax - xmin || 1)) * iw;
   const Y = (y) => m.t + (1 - (y - ymin) / (ymax - ymin || 1)) * ih;
-  const xLabel = (x) => (isRes ? (x > 0 ? `${(1 / x).toFixed(2)} Å` : '∞') : `${section.x_label || 'x'} ${Number.isInteger(x) ? x : x.toFixed(2)}`);
+  const xLabel = (x) => (isRes ? (x > 0 ? `${(1 / x).toFixed(2)} Å` : '∞')
+    : `${section.x_label || 'x'} ${isLog ? Math.round(x).toLocaleString() : Number.isInteger(x) ? x : x.toFixed(2)}`);
 
   const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': section.title || 'Chart' });
   const grid = s('g', { class: 'grid' });
   const axis = s('g', { class: 'axis' });
   for (const t of yticks) {
     grid.appendChild(s('line', { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t) }));
-    axis.appendChild(s('text', { x: m.l - 6, y: Y(t) + 4, 'text-anchor': 'end' }, +t.toFixed(3)));
+    axis.appendChild(s('text', { x: m.l - 6, y: Y(t) + 4, 'text-anchor': 'end' }, yTickLabel(t)));
   }
   let xticks;
   if (isRes) {
@@ -80,12 +114,15 @@ export function lineChart(section) {
       if (px - lastPx < 38) continue;
       xticks.push(f); lastPx = px;
     }
+  } else if (isLog) {
+    xticks = logTicks(xmin, xmax);
+    if (xticks.length > 8) xticks = xticks.filter((t) => /^[15]/.test(String(t)));
   } else {
     xticks = niceTicks(xmin, xmax, 6);
   }
   for (const t of xticks) {
     axis.appendChild(s('line', { x1: X(t), x2: X(t), y1: H - m.b, y2: H - m.b + 4 }));
-    axis.appendChild(s('text', { x: X(t), y: H - m.b + 16, 'text-anchor': 'middle' }, isRes ? (+(1 / t).toFixed(2)) : +t.toFixed(2)));
+    axis.appendChild(s('text', { x: X(t), y: H - m.b + 16, 'text-anchor': 'middle' }, isRes ? (+(1 / t).toFixed(2)) : isLog ? fmtCount(t) : +t.toFixed(2)));
   }
   axis.appendChild(s('line', { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b }));
   if (section.x_label) axis.appendChild(s('text', { x: m.l + iw / 2, y: H - 6, 'text-anchor': 'middle' }, section.x_label));
@@ -99,11 +136,11 @@ export function lineChart(section) {
     ref.appendChild(s('text', { x: W - m.r + 4, y: Y(hl.y) + 4 }, hl.label ?? hl.y));
   }
   svg.appendChild(ref);
-  svg.appendChild(thresholds(section.vlines, xmin, xmax, X, m.t, H - m.b));
+  svg.appendChild(thresholds(section.vlines, isLog ? 10 ** xmin : xmin, isLog ? 10 ** xmax : xmax, X, m.t, H - m.b));
 
   const sg = s('g', { class: 'series' });
   series.forEach((sr, i) => {
-    if (section.style === 'points') { // a scatter plot: one dot per point
+    if (section.style === 'points' || sr.style === 'points') { // a scatter plot (or one series of it): one dot per point
       sr.x.forEach((x, k) => {
         const y = sr.y[k];
         if (Number.isFinite(x) && Number.isFinite(y)) sg.appendChild(s('circle', { cx: X(x).toFixed(1), cy: Y(y).toFixed(1), r: 3, fill: `var(--series-${i + 1})`, 'fill-opacity': 0.8, stroke: 'none' }));
@@ -146,7 +183,7 @@ export function lineChart(section) {
         dots[i].setAttribute('visibility', 'visible');
       }
       tip.appendChild(h('div', { class: 'tip-row' }, h('span', { class: 'key', style: { background: `var(--series-${i + 1})` } }),
-        h('b', {}, fmtVal(y)), h('span', { class: 'muted' }, sr.name)));
+        h('b', {}, yVal(y)), h('span', { class: 'muted' }, sr.name)));
     });
     tip.hidden = false;
     const rect = svg.getBoundingClientRect();
@@ -164,7 +201,8 @@ export function lineChart(section) {
     onpointermove: (e) => {
       const rect = svg.getBoundingClientRect();
       const sx = ((e.clientX - rect.left) / rect.width) * W;
-      const x = xmin + ((sx - m.l) / iw) * (xmax - xmin);
+      const at = xmin + ((sx - m.l) / iw) * (xmax - xmin);
+      const x = isLog ? 10 ** at : at;
       if (ordered) { show(nearestIndex(base, x)); return; }
       const sy = ((e.clientY - rect.top) / rect.height) * H;
       let best = -1, dist = Infinity;
@@ -191,7 +229,7 @@ export function lineChart(section) {
       for (let k = 0; k < base.length; k += step) {
         const x = base[k];
         rows.push(h('tr', {}, h('td', {}, isRes ? (x > 0 ? (1 / x).toFixed(2) : '∞') : x),
-          series.map((sr) => h('td', {}, fmtVal(sr.y[nearestIndex(sr.x, x)])))));
+          series.map((sr) => h('td', {}, yVal(sr.y[nearestIndex(sr.x, x)])))));
       }
       tableBox.appendChild(h('table', { class: 'data' },
         h('thead', {}, h('tr', {}, h('th', {}, isRes ? 'Resolution (Å)' : (section.x_label || 'x')), series.map((sr) => h('th', {}, sr.name)))),

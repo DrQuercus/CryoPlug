@@ -2,6 +2,7 @@
 (local refinement, signal subtraction, focused classification, post-processing, reconstruction) with a fake RELION."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,11 @@ def _run(manager, puid, jtype, params, inputs=None, ok=True):
     if ok:
         assert done["status"] == "completed", f"{done['error']}\n{log_of(manager, puid, job['uid'])}"
     return done
+
+
+def _sections(manager, puid, job, kind):
+    report = json.loads((manager.project_dir(puid) / job["uid"] / "report.json").read_text())
+    return [sec for sec in report.get("sections", []) if sec["kind"] == kind]
 
 
 def _outs(job):
@@ -220,6 +226,37 @@ def test_relion_postprocess_and_reconstruct(manager, relion_project):
                {"particles": {"job": parts["uid"], "output": "particles"}})
     assert {"map", "half_maps", "fsc"} <= set(_outs(rec))
     assert "random half sets" in log_of(manager, puid, rec["uid"])
+
+
+def test_reslog_analysis(manager, relion_project):
+    """Half maps of nested random subsets (relion_reconstruct), their masked FSC resolution, the B-factor of the fit."""
+    from cryoplug.jobs.relion import reslog_fit, reslog_sizes
+    assert reslog_sizes(1000, 6, 100) == [1000, 500, 250, 125] and reslog_sizes(1000, 2, 10) == [1000, 500]
+    sizes = [1000, 2000, 4000, 8000]
+    res = [1 / np.sqrt(0.01 + (2 / 80) * np.log(n)) for n in sizes]  # B = 80 Å²
+    assert abs(reslog_fit(sizes, res)["b_factor"] - 80) < 1e-6 and reslog_fit(sizes, res[::-1]) is None
+
+    puid, parts, maps = relion_project
+    ref = {"particles": {"job": parts["uid"], "output": "particles"}, "mask": {"job": maps["uid"], "output": "mask"}}
+    job = _run(manager, puid, "relion_reslog", {"points": 4, "min_particles": 20, "target": 3.0, "mpi": 2}, ref)
+    log = log_of(manager, puid, job["uid"])
+    n = _outs(job)["report"]["meta"]["particles"]
+    assert log.count("relion_reconstruct_mpi") == 8 and "--ctf --sym C1 --subset 2" in log
+    assert f"--i {job['uid']}/subset_{n // 2}.star" in log
+    pdir = manager.project_dir(puid)
+    summary = json.loads((pdir / job["uid"] / "reslog.json").read_text())
+    points = summary["points"]
+    assert [pt["particles"] for pt in points] == [n, n // 2, n // 4, n // 8] and summary["masked"]
+    assert all(a["resolution"] < b["resolution"] for a, b in zip(points, points[1:]))  # more particles, better
+    assert 50 < summary["b_factor"] < 200 and summary["particles_for_target"] > n  # the fake data: B = 100 Å²
+    halves = rl.particle_table(rl.read_star(pdir / job["uid"] / f"subset_{n // 4}.star")).column("rlnRandomSubset")
+    assert len(halves) == n // 4 and abs(halves.count("1") - halves.count("2")) <= 2
+    plot = next(sec for sec in _sections(manager, puid, job, "plot") if sec["title"].startswith("ResLog"))
+    assert plot["x_kind"] == "log" and plot["series"][0]["style"] == "points" and plot["series"][1]["name"].startswith("Fit: B =")
+    hl = {h["label"]: h["value"] for h in job["highlights"]}
+    assert hl["B-factor"].endswith("Å²") and "Particles for 3 Å" in hl
+    few = _run(manager, puid, "relion_reslog", {"min_particles": 10 ** 6}, ref, ok=False)
+    assert few["status"] == "failed" and "three at least" in few["error"]
 
 
 def test_relion_resources_and_validation():

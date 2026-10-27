@@ -479,6 +479,15 @@ conique rapportée à celle sous la meilleure, < 0,5 = orientation préférentie
 du raffinement, le **SCF** de leurs directions de vue (Baldwin & Lyumkis 2019 : 1 pour des vues uniformes, 0,81 pour
 des vues de côté seules) avec la carte de l'échantillonnage de Fourier, qui montre un éventuel cône manquant.
 
+**ResLog analysis (RELION)** répond à « combien de particules pour gagner en résolution ? », comme le *ResLog* de
+CryoSPARC : à partir des particules raffinées (et du masque du raffinement), il reconstruit les demi-cartes de
+sous-ensembles aléatoires emboîtés (toutes les particules, la moitié, le quart… avec les poses du raffinement,
+`relion_reconstruct`), mesure leur résolution FSC = 0,143 masquée et ajuste 1/d² = (2/B)·ln N + c (Rosenthal &
+Henderson 2003). Il donne le **facteur B** des données (plus il est petit, plus chaque particule apporte), la résolution
+attendue avec deux fois plus de particules et, avec une *Target resolution*, le nombre de particules qu'elle
+demanderait. Les points à Nyquist sont exclus de l'ajustement ; une droite plate signale une résolution limitée par
+autre chose que le nombre de particules (hétérogénéité, poses, CTF).
+
 ### 4.2 Choisir une méthode d'amélioration
 
 | Situation | Recommandé | Alternatives / remarques |

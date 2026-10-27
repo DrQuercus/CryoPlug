@@ -2379,6 +2379,31 @@ Géométrie seule : clashs, Ramachandran, rotamères, déviations Cβ, CaBLAM (M
 
 **Étapes suivantes** : Coot session, ISOLDE session
 
+### ResLog analysis (RELION)
+
+`relion_reslog` — logiciel : `relion`
+
+Résolution en fonction du nombre de particules, comme le ResLog de CryoSPARC : demi-cartes de sous-ensembles aléatoires emboîtés (toutes, la moitié, le quart…) reconstruites avec les poses du raffinement, leur résolution FSC masquée, et le facteur B de l'ajustement 1/d² = (2/B)·ln N + c (Rosenthal & Henderson 2003).
+
+**Quand l'utiliser**
+
+- Décider s'il vaut la peine de collecter ou de garder plus de particules : résolution attendue avec deux fois plus, nombre de particules pour une résolution cible.
+- Comparer deux jeux de données, deux nettoyages ou deux traitements (le plus petit facteur B l'emporte).
+
+**À éviter / pièges**
+
+- Des particules sans demi-jeux du raffinement : tirés au hasard ici, les résolutions sont optimistes.
+- Moins de quelques milliers de particules : trop peu de points au-dessus de Nyquist pour un ajustement fiable.
+
+**Entrées conseillées** : Les particules d'un raffinement (poses et demi-jeux) ; le masque du raffinement pour la FSC masquée.
+
+**Conseils**
+
+- Une droite plate (pas de facteur B) : la résolution est limitée par autre chose que le nombre de particules (hétérogénéité, précision des poses, CTF) ; essayer CTF refinement, polishing ou une classification.
+- Chaque taille demande deux reconstructions : les processus MPI accélèrent les plus grandes.
+
+**Étapes suivantes** : CTF refinement (RELION), Bayesian polishing (RELION), RELION 3D classification (focused)
+
 ### Sequence register check (checkMySequence)
 
 `checkmysequence` — logiciel : `checkmysequence`

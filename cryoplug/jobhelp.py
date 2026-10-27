@@ -227,6 +227,28 @@ HELP: dict[str, dict[str, Any]] = {
         "tips": ["Les demi-jeux de CryoSPARC (alignments3D/split) sont repris quand ils existent."],
         "next": ["relion_local_refine", "map_fsc", "locscale"],
     },
+    "relion_reslog": {
+        "purpose": "Résolution en fonction du nombre de particules, comme le ResLog de CryoSPARC : demi-cartes de "
+                   "sous-ensembles aléatoires emboîtés (toutes, la moitié, le quart…) reconstruites avec les poses du "
+                   "raffinement, leur résolution FSC masquée, et le facteur B de l'ajustement 1/d² = (2/B)·ln N + c "
+                   "(Rosenthal & Henderson 2003).",
+        "when": [
+            "Décider s'il vaut la peine de collecter ou de garder plus de particules : résolution attendue avec deux fois "
+            "plus, nombre de particules pour une résolution cible.",
+            "Comparer deux jeux de données, deux nettoyages ou deux traitements (le plus petit facteur B l'emporte).",
+        ],
+        "avoid": [
+            "Des particules sans demi-jeux du raffinement : tirés au hasard ici, les résolutions sont optimistes.",
+            "Moins de quelques milliers de particules : trop peu de points au-dessus de Nyquist pour un ajustement fiable.",
+        ],
+        "inputs": "Les particules d'un raffinement (poses et demi-jeux) ; le masque du raffinement pour la FSC masquée.",
+        "tips": [
+            "Une droite plate (pas de facteur B) : la résolution est limitée par autre chose que le nombre de particules "
+            "(hétérogénéité, précision des poses, CTF) ; essayer CTF refinement, polishing ou une classification.",
+            "Chaque taille demande deux reconstructions : les processus MPI accélèrent les plus grandes.",
+        ],
+        "next": ["relion_ctf_refine", "relion_polish", "relion_class3d"],
+    },
     # ------------------------------------------------- RELION : des films à la carte
     "import_coordinates": {
         "purpose": "Importe les positions de particules choisies par un autre logiciel et les associe aux micrographies du "

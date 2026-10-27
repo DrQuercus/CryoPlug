@@ -897,3 +897,154 @@ class RelionReconstruct(RelionJob):
         ctx.add_output("half_maps", "half_maps", [made["half1"], made["half2"]], "Half maps", meta=meta)
         ctx.add_highlight("Resolution", f"{res:.2f} Å")
         ctx.add_highlight("Particles", f"{parts['n']:,}")
+
+
+# ------------------------------------------------------------------ ResLog
+def reslog_sizes(n: int, points: int, smallest: int) -> list[int]:
+    """Subset sizes for ResLog: all the particles, then half of them, a quarter… while at least ``smallest``."""
+    sizes = []
+    size = n
+    while len(sizes) < points and size >= smallest:
+        sizes.append(size)
+        size //= 2
+    return sizes
+
+
+def reslog_fit(sizes: list[int], resolutions: list[float], max_b: float = 5000.0) -> dict[str, float] | None:
+    """Rosenthal & Henderson (2003): 1/d² grows as ln N with slope 2/B. None without a clear positive slope (a
+    B-factor above ``max_b``: the resolution hardly depends on the number of particles)."""
+    x = np.log(np.asarray(sizes, dtype=float))
+    y = 1.0 / np.asarray(resolutions, dtype=float) ** 2
+    if len(x) < 2 or float(np.ptp(x)) == 0:
+        return None
+    slope, intercept = np.polyfit(x, y, 1)
+    if slope <= 0 or 2.0 / slope > max_b:
+        return None
+    return {"slope": float(slope), "intercept": float(intercept), "b_factor": float(2.0 / slope)}
+
+
+@register
+class RelionResLog(RelionJob):
+    name = "relion_reslog"
+    title = "ResLog analysis (RELION)"
+    category = "Validation"
+    description = ("Resolution against the number of particles, as CryoSPARC's ResLog: half maps of random subsets of "
+                   "growing size reconstructed with the poses of the refinement (relion_reconstruct), their masked FSC "
+                   "resolution, and the B-factor of the fit 1/d² = (2/B)·ln N + c (Rosenthal & Henderson 2003): how many "
+                   "particles a better map would take, and a measure to compare data sets and processing.")
+    gpu_param = ""
+    cpu_param = "mpi"
+    inputs = [Slot("particles", ("particles",), "Particles", prefer=("particles",),
+                   help="Refined particles: their poses and half sets (those of the refinement)."),
+              Slot("mask", ("mask",), "Mask", required=False, help="For the masked FSC (the mask of the refinement).")]
+    params = [
+        symmetry_param(),
+        Param("points", "int", 6, label="Subset sizes", min=3, max=12,
+              help="All the particles, then half of them, a quarter… (each size reconstructs two half maps)."),
+        Param("min_particles", "int", 500, label="Smallest subset", min=20, max=10000000,
+              help="Fewest particles (both halves together) in a subset."),
+        Param("target", "float", 0.0, label="Target resolution", unit="Å", min=0.0,
+              help="The particles it would take, from the fit (0: none)."),
+        Param("maxres", "float", 0.0, label="Maximum resolution", unit="Å", min=0.0, advanced=True, help="0 = Nyquist."),
+        mpi_param(1, 1, help="relion_reconstruct_mpi with more than 1."),
+        extra_args_param(),
+    ]
+    outputs = [OutputDef("report", "report", "ResLog analysis")]
+
+    def run(self, ctx: JobContext) -> None:
+        from cryoplug.mrc import half_map_fsc
+        p = ctx.params
+        parts = prepare_particles(ctx, ctx.require("particles"), subsets=True)
+        if parts["info"].get("random_halves"):
+            ctx.warn("The half sets were drawn at random here, not those of the refinement that gave the poses: the "
+                     "resolutions are optimistic (the two halves were aligned together)")
+        sym = inherited_symmetry(ctx, parts)
+        tables = rl.read_star(parts["star"])
+        ptab = rl.particle_table(tables)
+        halves = np.asarray(ptab.column("rlnRandomSubset"), dtype=str)
+        rng = np.random.default_rng(0)
+        order = {h: rng.permutation(np.flatnonzero(halves == h)) for h in ("1", "2")}
+        n = len(order["1"]) + len(order["2"])
+        if not len(order["1"]) or not len(order["2"]):
+            raise JobError("The particles are all in one half set (rlnRandomSubset): two half sets are needed")
+        sizes = reslog_sizes(n, p["points"], p["min_particles"])
+        if len(sizes) < 3:
+            raise JobError(f"{n:,} particles give {len(sizes)} subset size(s) of at least {p['min_particles']:,} particles: "
+                           "three at least are needed (lower 'Smallest subset')")
+        mask = None
+        if ctx.input("mask"):
+            path, _ = map_on_grid(ctx, ctx.require("mask"), parts, "mask.mrc", mask=True)
+            mask = MapVolume.read(path)
+        else:
+            ctx.warn("No mask: unmasked FSC resolutions (the B-factor is larger than with the mask of the refinement)")
+        nyquist = 2 * parts["pixel_size"]
+        rows, used, results = [], [], []
+        for i, size in enumerate(sizes):
+            k1 = int(round(size * len(order["1"]) / n))
+            keep = np.sort(np.concatenate([order["1"][:k1], order["2"][:size - k1]]))  # nested subsets: smaller in larger
+            sel = ptab.select(keep.tolist())
+            star = rl.write_star(ctx.path(f"subset_{size}.star"), [sel if t is ptab else t for t in tables.values()],
+                                 comment=f"ResLog: {size:,} of {n:,} particles")
+            halfmaps = []
+            for half in ("1", "2"):
+                out = ctx.path(f"subset_{size}_half{half}.mrc")
+                args = [*relion_command(ctx, "relion_reconstruct", p["mpi"]), "--i", ctx.rel(star), "--o", ctx.rel(out),
+                        "--ctf", "--sym", sym, "--subset", half]
+                if p["maxres"] > 0:
+                    args += ["--maxres", f"{p['maxres']:g}"]
+                args += ctx.split_extra()
+                ctx.progress(0.03 + 0.92 * (2 * i + int(half) - 1) / (2 * len(sizes)), f"{size:,} particles: half {half}")
+                run_relion(ctx, args)
+                if not out.exists():
+                    raise JobError(f"relion_reconstruct did not write {out.name} (see the log)")
+                halfmaps.append(MapVolume.read(out))
+            fsc_res = half_map_fsc(halfmaps[0], halfmaps[1], mask)["resolution"]
+            res = float(fsc_res.get("corrected") or fsc_res.get("masked") or fsc_res["unmasked"])
+            saturated = res <= nyquist * 1.02
+            ctx.log(f"{size:,} particles: {res:.2f} Å" + (" (Nyquist: left out of the fit)" if saturated else ""))
+            results.append({"particles": size, "resolution": round(res, 3), "saturated": saturated})
+            rows.append([f"{size:,}", f"{res:.2f}", f"{1 / res ** 2:.5f}", "no (Nyquist)" if saturated else "yes"])
+            if not saturated:
+                used.append((size, res))
+        fit = reslog_fit([u[0] for u in used], [u[1] for u in used]) if len(used) >= 2 else None
+        series = [{"name": "Measured", "x": [r["particles"] for r in results],
+                   "y": [round(1 / r["resolution"] ** 2, 6) for r in results], "style": "points"}]
+        summary = {"particles": n, "points": results, "symmetry": sym, "masked": mask is not None}
+        need = None
+        if fit:
+            summary.update(fit)
+            ctx.add_highlight("B-factor", f"{fit['b_factor']:.0f} Å²")
+            top = sizes[0]
+            if p["target"] > 0:
+                need = float(np.exp((1 / p["target"] ** 2 - fit["intercept"]) / fit["slope"]))
+                summary["particles_for_target"] = need
+                top = min(max(top, need), 1000 * top)  # the line drawn up to the target (within reason)
+            xs = np.geomspace(sizes[-1], top, 24)
+            series.append({"name": f"Fit: B = {fit['b_factor']:.0f} Å²", "x": [round(float(x)) for x in xs],
+                           "y": [round(fit["slope"] * float(np.log(x)) + fit["intercept"], 6) for x in xs]})
+            gain = 1 / np.sqrt(1 / results[0]["resolution"] ** 2 + fit["slope"] * np.log(2))
+            ctx.add_metrics("Fit", [
+                {"label": "B-factor", "value": f"{fit['b_factor']:.0f} Å²"},
+                {"label": "Twice as many particles", "value": f"{gain:.2f} Å (now {results[0]['resolution']:.2f} Å)"},
+                *([{"label": f"Particles for {p['target']:g} Å", "value": f"{need:,.0f}"}] if need else []),
+            ])
+            if need:
+                ctx.add_highlight(f"Particles for {p['target']:g} Å", f"{need:,.0f}")
+        else:
+            ctx.warn("No B-factor: the resolution does not improve with more particles here (too few points below "
+                     "Nyquist, or a resolution limited by something else than the number of particles)")
+        ctx.add_highlight("Resolution", f"{results[0]['resolution']:.2f} Å ({n:,} particles)")
+        ctx.add_plot("ResLog: resolution against the number of particles", series, x_label="Particles",
+                     y_label="Resolution (Å, 1/d² scale)", x_kind="log", y_kind="inv_d2",
+                     note="Each point: the FSC = 0.143 resolution of the half maps of a random subset"
+                                        + (" (masked, corrected)" if mask is not None else " (unmasked)")
+                                        + "; the slope of the line is 2/B.")
+        ctx.add_table("Subsets", ["Particles", "Resolution (Å)", "1/d² (Å⁻²)", "In the fit"], rows)
+        report = ctx.path("reslog.json")
+        report.write_text(json.dumps(summary, indent=1))
+        csv = ctx.path("reslog.csv")
+        csv.write_text("particles,resolution_A,inv_d2,in_fit\n" + "".join(
+            f"{r['particles']},{r['resolution']},{1 / r['resolution'] ** 2:.6f},{int(not r['saturated'])}\n" for r in results))
+        ctx.add_output("report", "report", [report, csv], "ResLog analysis",
+                       meta={"b_factor": round(fit["b_factor"], 1) if fit else None, "particles": n,
+                             "resolution": results[0]["resolution"]})

@@ -800,10 +800,13 @@ class JobContext:
     def add_plot(self, title: str, series: list[dict[str, Any]], x_label: str = "", y_label: str = "",
                  x_kind: str = "linear", hlines: list[dict[str, Any]] | None = None, y_range: list[float] | None = None,
                  key: str | None = None, note: str = "", style: str = "line",
-                 vlines: list[dict[str, Any]] | None = None) -> None:
-        """series: [{name, x: [...], y: [...]}]; x_kind 'resolution' labels 1/A axes in A; style 'bars' draws a
-        histogram (x: bin centres); vlines: thresholds across the x axis [{x, label}]."""
+                 vlines: list[dict[str, Any]] | None = None, y_kind: str = "linear") -> None:
+        """series: [{name, x: [...], y: [...]}] (a series with "style": "points" is drawn as dots); x_kind
+        'resolution' labels 1/A axes in A, 'log' draws x on a log scale; y_kind 'inv_d2' labels a 1/A² axis in A;
+        style 'bars' draws a histogram (x: bin centres); vlines: thresholds across the x axis [{x, label}]."""
         extra: dict[str, Any] = {}
+        if y_kind != "linear":
+            extra["y_kind"] = y_kind
         if note:
             extra["note"] = note
         if style != "line":

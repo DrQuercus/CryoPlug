@@ -567,6 +567,12 @@ Phenix. In: model: model. Out: report: report.
 All-atom contacts, Ramachandran, rotamers and covalent geometry (phenix.molprobity).
 Usually followed by: `coot_session`, `isolde_session`.
 
+### `relion_reslog` — ResLog analysis (RELION)
+RELION. In: particles: particles, mask?: mask. Out: report: report.
+
+Resolution against the number of particles, as CryoSPARC's ResLog: half maps of random subsets of growing size reconstructed with the poses of the refinement (relion_reconstruct), their masked FSC resolution, and the B-factor of the fit 1/d² = (2/B)·ln N + c (Rosenthal & Henderson 2003): how many particles a better map would take, and a measure to compare data sets and processing.
+Usually followed by: `relion_ctf_refine`, `relion_polish`, `relion_class3d`.
+
 ### `checkmysequence` — Sequence register check (checkMySequence)
 checkMySequence. In: model: model, map: map, sequence: sequence. Out: report: report.
 

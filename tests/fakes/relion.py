@@ -25,6 +25,7 @@ REFINE_OPTS = relion_spa.OPTIONS["relion_refine"]
 POST_OPTS = relion_spa.OPTIONS["relion_postprocess"]
 SUBTRACT_OPTS = relion_spa.OPTIONS["relion_particle_subtract"]
 RECON_OPTS = relion_spa.OPTIONS["relion_reconstruct"]
+FAKE_B_FACTOR = 100.0  # Å²: what a ResLog analysis of the fake reconstructions finds
 EXPAND_OPTS = relion_spa.OPTIONS["relion_particle_symmetry_expand"]
 
 
@@ -407,8 +408,17 @@ def reconstruct(argv):
         if str(subset) not in parts.column("rlnRandomSubset"):
             die(f"no particle in subset {subset}")
     z, y, x = np.indices((box, box, box)) - box // 2
-    data = np.exp(-(x ** 2 + y ** 2 + z ** 2) / (box / 4.0) ** 2).astype(np.float32)
-    data += np.random.default_rng(subset + 2).normal(0, 0.02, data.shape).astype(np.float32)
+    blob = np.exp(-(x ** 2 + y ** 2 + z ** 2) / (box / 4.0) ** 2)
+    # high-resolution detail fading with the B-factor of the fake data (the same in every reconstruction), and the noise
+    # of an average of n images: the FSC of two halves reaches further with more particles (Rosenthal & Henderson)
+    n = len(parts) if subset not in (1, 2) else parts.column("rlnRandomSubset").count(str(subset))
+    k = np.fft.fftfreq(box, d=apix)
+    k2 = k[:, None, None] ** 2 + k[None, :, None] ** 2 + k[None, None, :] ** 2
+    shape = (box, box, box)
+    rng, noise_rng = np.random.default_rng(7), np.random.default_rng(subset + 2)
+    detail = (rng.normal(size=shape) + 1j * rng.normal(size=shape)) * np.exp(-FAKE_B_FACTOR * k2 / 4)
+    noise = (noise_rng.normal(size=shape) + 1j * noise_rng.normal(size=shape)) * (9.0 / np.sqrt(max(n, 1)))
+    data = (blob + 0.2 * np.fft.ifftn(detail + noise).real * box ** 1.5).astype(np.float32)
     MapVolume(data=data, voxel=np.full(3, apix)).write(a["--o"])
 
 
