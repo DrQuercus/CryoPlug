@@ -351,6 +351,12 @@ particules gardées.
 - Plus court : dans la galerie d'une classification terminée, cliquez des classes puis **Select these classes** : la
   sélection est créée et lancée.
 - Mode *Automatic* : le class ranker de RELION garde les classes de score ≥ 0,5 (réglable).
+- Mode *Automatic (correlation with a reference map)*, le *Reference Based Auto Select 2D* de CryoSPARC : branchez une
+  carte de la particule (raffinement précédent, carte d'un modèle) sur l'entrée *Reference map*. Chaque classe est
+  comparée, à 15 Å, aux projections de la carte (directions couvrant la sphère, rotations et décalages dans le plan) ;
+  celles qui corrèlent à au moins 0,8 (réglable) sont gardées. Le rapport donne la corrélation de chaque classe
+  (histogramme, galerie) et une planche place chaque classe à côté de la projection qui lui ressemble le plus. La main
+  de la carte n'a pas d'importance : une projection ne distingue pas les deux mains.
 - **By thresholds…** dans la galerie coche d'un coup les classes d'au moins N particules, de résolution donnée ou
   meilleure (et de score du class ranker donné), comme les seuils de Select 2D de CryoSPARC.
 - En 3D, la classification et le **Heterogeneous refinement** montrent une galerie des cartes de classes (projections
@@ -428,6 +434,12 @@ une par ligne) et le mode *cluster* sépare les particules en groupes d'une stat
 - Une carte raffinée en C1 qui montre une symétrie : **Align to symmetry axes (RELION)** (relion_align_symmetry) la
   tourne et la recentre sur les axes du groupe ponctuel (convention de RELION, axe principal selon z), avec la
   symétrie imposée si besoin ; elle sert ensuite de référence à un 3D auto-refine lancé avec cette symétrie.
+- Symétrie inconnue : **Symmetry search (RELION)**, l'équivalent du *Symmetry Search Utility* de CryoSPARC, essaie une
+  liste de groupes (C2–C12, D2–D8, T, O, I par défaut). Pour chacun, relion_align_symmetry tourne la carte sur les axes
+  du groupe, puis la carte est comparée à sa copie symétrisée ; le plus grand groupe dont la corrélation atteint le
+  seuil (0,9) est proposé, avec la carte alignée, prête pour un 3D auto-refine avec ce groupe. Les sous-groupes d'un
+  groupe respecté le sont aussi (C2 pour une carte C4) ; une pseudo-symétrie (sous-unités presque identiques) donne aussi
+  une forte corrélation : regardez la carte avant d'imposer le groupe.
 - Travaillez à pixel réduit pour la 2D, l'ab initio et la 3D ; avant le raffinement final, ré-extrayez à pleine
   échelle (entrée *Particles to re-extract* de l'extraction, recentrée sur les positions raffinées).
 - Itérez : 2D → sélection → Topaz entraîné sur les bonnes particules (**Topaz training**) → repicking → 2D.

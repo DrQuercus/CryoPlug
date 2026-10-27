@@ -660,13 +660,14 @@ Répartit les particules entre plusieurs cartes de référence tout en les raffi
 
 `relion_select2d` — logiciel : `relion`
 
-Garde les particules des bonnes classes 2D. Comme dans CryoSPARC, le job affiche les moyennes et attend : cliquez les bonnes classes (triées par taille ou résolution), puis Done. Sélection aussi par liste ou automatique (class ranker de RELION). Donne les particules gardées, les rejetées et les moyennes sélectionnées (modèles de picking).
+Garde les particules des bonnes classes 2D. Comme dans CryoSPARC, le job affiche les moyennes et attend : cliquez les bonnes classes (triées par taille ou résolution), puis Done. Sélection aussi par liste, automatique (class ranker de RELION) ou par corrélation avec les projections d'une carte de référence (le « Reference Based Auto Select 2D » de CryoSPARC). Donne les particules gardées, les rejetées et les moyennes sélectionnées (modèles de picking).
 
 **Quand l'utiliser**
 
 - Après chaque classification 2D.
 - Préparer des modèles 2D pour le picking par correspondance de modèles (option de recentrage).
 - Sélection automatique dans une chaîne de traitement (score minimum du class ranker).
+- Une carte de la particule existe déjà (raffinement précédent, carte d'un modèle) : sélection par référence, qui garde les classes ressemblant à une de ses vues.
 
 **À éviter / pièges**
 
@@ -680,6 +681,7 @@ Garde les particules des bonnes classes 2D. Comme dans CryoSPARC, le job affiche
 - « Au plus N particules par classe » équilibre les vues avant un modèle initial.
 - Class ranker : score de 0 à 1 (0,5 par défaut) ; il demande l'environnement Python de RELION 5.
 - « By thresholds… » coche d'un coup les classes d'au moins N particules, à résolution donnée ou meilleure (et score du class ranker).
+- Par référence : chaque classe est comparée, à 15 Å, aux projections de la carte (directions couvrant la sphère, rotations et décalages dans le plan) ; la corrélation de chaque classe s'affiche sur la galerie, avec les classes à côté de la projection qui leur ressemble le plus. Une carte de l'autre main donne les mêmes corrélations (les projections couvrent les deux mains).
 
 **Étapes suivantes** : 3D initial model (RELION), 2D classification (RELION), 3D classification (RELION), 3D auto-refine (RELION), Topaz training (RELION), Auto-picking (RELION)
 
@@ -1826,6 +1828,32 @@ Masque dessiné à la main sur une carte dans le visualiseur 3D, comme dans Chim
 - Un job créé dans un workflow attend le dessin : « Draw in 3D » sur ce job, puis « Save as job » le lance.
 
 **Étapes suivantes** : RELION signal subtraction, RELION local refinement, RELION 3D classification (focused), Half-map FSC, LocScale 2
+
+### Symmetry search (RELION)
+
+`relion_symmetry_search` — logiciel : `relion`
+
+Trouve le groupe ponctuel d'une carte raffinée en C1, comme le « Symmetry Search Utility » de CryoSPARC : pour chaque groupe essayé (Cn, Dn, T, O, I), relion_align_symmetry tourne la carte sur les axes de RELION de ce groupe, puis la carte est comparée à sa copie symétrisée par les rotations du groupe (corrélation à la résolution choisie). Propose le plus grand groupe que la carte respecte, avec la carte alignée sur ses axes.
+
+**Quand l'utiliser**
+
+- Une carte C1 (modèle initial, premier raffinement) dont la symétrie est inconnue ou douteuse.
+- Vérifier une symétrie supposée avant de l'imposer au raffinement.
+
+**À éviter / pièges**
+
+- Une carte très bruitée ou à basse résolution : la corrélation des groupes faux monte aussi ; comparez à une résolution plus grossière et regardez l'écart entre groupes.
+- Imposer le groupe proposé sans regarder la carte : une pseudo-symétrie (sous-unités presque identiques) donne aussi une forte corrélation.
+
+**Entrées conseillées** : Une carte raffinée en C1, de préférence non affûtée.
+
+**Conseils**
+
+- Les sous-groupes d'un groupe respecté le sont aussi (C2 pour une carte C4) : le plus grand groupe au-dessus du seuil est proposé ; le tableau et le graphique (corrélation contre n pour Cn et Dn) montrent tous les groupes.
+- Résolution de comparaison : environ deux fois la résolution de la carte (8 Å par défaut).
+- Les opérateurs sont ceux de RELION (src/symmetries.cpp : Cn selon z, Dn avec un axe 2 selon x, I = I2) : la carte alignée sert directement de référence à un 3D auto-refine avec ce groupe.
+
+**Étapes suivantes** : 3D auto-refine (RELION), Align to symmetry axes (RELION), Symmetry expansion (RELION)
 
 ## Hétérogénéité (variabilité 3D)
 

@@ -244,6 +244,24 @@ def test_relion_pipeline_movies_to_map(manager, spa):
     vol = MapVolume.read(pdir / io["map"]["path"])
     assert vol.shape_xyz == (32, 32, 32) and vol.pixel_size == pytest.approx(2.0) and io["map"]["meta"]["relion_map"]
 
+    # selection by reference (CryoSPARC's Reference Based Auto Select 2D): the classes against projections of a map
+    nomap = manager.create_job(puid, "relion_select2d", {"mode": "reference"}, {"classes": _ref(c2d, "classes")})
+    with pytest.raises(Exception, match="Connect the reference map"):
+        manager.queue_job(puid, nomap["uid"])
+    byref = _run(manager, puid, "relion_select2d", {"mode": "reference", "min_correlation": 0.5, "angular_step": 15},
+                 {"classes": _ref(c2d, "classes"), "reference": _ref(ini, "map")})
+    gallery = _sections(manager, puid, byref, "classes2d")[-1]
+    scores = {r["class"]: r["score"] for r in gallery["classes"]}
+    assert len(scores) == 4 and all(0 <= v <= 1 for v in scores.values())
+    kept = sorted(c for c, v in scores.items() if v >= 0.5)
+    assert kept and gallery["selected"] == kept
+    assert _outs(byref)["particles"]["meta"]["n_particles"] == sum(r["particles"] for r in records if r["class"] in kept)
+    assert "Correlation of the classes with the reference" in {s["title"] for s in _sections(manager, puid, byref, "plot")}
+    assert (pdir / byref["uid"] / "reference_matches.png").exists()
+    strict = _run(manager, puid, "relion_select2d", {"mode": "reference", "min_correlation": 0.9999, "angular_step": 15},
+                  {"classes": _ref(c2d, "classes"), "reference": _ref(ini, "map")}, ok=False)
+    assert strict["status"] == "failed" and "No class correlates at least 0.9999" in strict["error"]
+
     # 3D classification with global searches
     c3d = _run(manager, puid, "relion_class3d_global", {"classes": 2, "iterations": 3, "threads": 2, "gpus": 0},
                {"particles": _ref(sel, "particles"), "map": _ref(ini, "map")})
@@ -1411,3 +1429,35 @@ def test_simulate_particles(manager, spa):
     job = manager.create_job(puid, "relion_simulate", {"mode": "particles"}, {"map": ref})
     with pytest.raises(Exception, match="Connect the particles"):
         manager.queue_job(puid, job["uid"])
+
+
+def test_symmetry_search(manager, tmp_path):
+    """Symmetry search (CryoSPARC's Symmetry Search Utility): relion_align_symmetry for every group tried, then the map
+    against its symmetrised copy; the highest group obeyed is proposed with the map on its axes. A map without symmetry
+    gives C1 and no map."""
+    p = manager.create_project("Symmetry search")
+    puid = p["uid"]
+    n = 48
+    z, y, x = np.indices((n, n, n)) - n // 2
+
+    def blob(cx, cy, cz, s=2.5):
+        return np.exp(-((x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2) / (2 * s * s))
+    c4 = sum(blob(9 * np.cos(a), 9 * np.sin(a), 5) for a in np.radians([20, 110, 200, 290])) + 1.2 * blob(0, 0, -7)
+    MapVolume(data=c4.astype(np.float32), voxel=np.full(3, 2.0)).write(tmp_path / "c4.mrc")
+    imp = _run(manager, puid, "import_maps", {"map": str(tmp_path / "c4.mrc"), "compute_fsc": False})
+    bad = manager.create_job(puid, "relion_symmetry_search", {"groups": "C2, Q7"}, {"map": _ref(imp, "map")})
+    with pytest.raises(Exception, match="not a point group"):
+        manager.queue_job(puid, bad["uid"])
+    job = _run(manager, puid, "relion_symmetry_search", {"groups": "C2-C6, D2-D4, T, O, I"}, {"map": _ref(imp, "map")})
+    log = _command(manager, puid, job)
+    assert log.count("relion_align_symmetry") >= 11 and "--sym C4" in log and "--sym I" in log
+    out = _outs(job)["map"]
+    assert out["meta"]["symmetry"] == "C4" and out["meta"]["symmetry_cc"] > 0.95
+    rows = {r[0]: r for r in _sections(manager, puid, job, "table")[0]["rows"]}
+    assert rows["C4"][4] == "proposed" and rows["C2"][3] == "yes" and rows["C3"][3] == "–" and rows["D4"][3] == "–"
+    assert rows["T"][1] == 12 and rows["O"][1] == 24 and rows["I"][1] == 60
+    lone = blob(6, 0, 0) + 0.8 * blob(-3, 7, 2) + 0.5 * blob(-2, -6, -5)
+    MapVolume(data=lone.astype(np.float32), voxel=np.full(3, 2.0)).write(tmp_path / "c1.mrc")
+    imp1 = _run(manager, puid, "import_maps", {"map": str(tmp_path / "c1.mrc"), "compute_fsc": False})
+    none = _run(manager, puid, "relion_symmetry_search", {"groups": "C2-C4, D2"}, {"map": _ref(imp1, "map")})
+    assert "map" not in _outs(none) and "No group tried reaches" in log_of(manager, puid, none["uid"])

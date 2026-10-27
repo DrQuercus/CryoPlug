@@ -16,8 +16,8 @@ from cryoplug.jobs.relion import Progress, absolute_greyscale, map_on_grid
 from cryoplug.jobs.tomo_common import is_tomo, particle_args, tomo_output
 from cryoplug.jobs.relion_common import (
     SAMPLINGS, RelionJob, compute_params, continuation, continue_args, gpus, healpix, helical_check, helical_class2d_args, helical_class3d_args,
-    helical_params, mask_diameter, mpi, particles_out_meta, refine_compute_params, refinement_diagnostics, relion_command,
-    relion_particles, run_relion, threads,
+    helical_params, histogram, mask_diameter, mpi, particles_out_meta, refine_compute_params, refinement_diagnostics,
+    relion_command, relion_particles, run_relion, threads,
 )
 from cryoplug.mrc import MapVolume
 
@@ -268,19 +268,32 @@ class RelionSelect2D(RelionJob):
     interactive = True
     description = ("Keeps the particles of the good 2D classes. As in CryoSPARC, the job shows the class averages and "
                    "waits: click the good classes (sorted by size or resolution), then Done. The classes can also be "
-                   "listed, or chosen automatically by RELION's class ranker. Gives the selected particles, the "
+                   "listed, chosen automatically by RELION's class ranker, or by their correlation with projections "
+                   "of a reference map (CryoSPARC's Reference Based Auto Select 2D). Gives the selected particles, the "
                    "rejected ones, and the selected class averages (templates for picking).")
     gpu_param = ""
     cpu_param = ""
-    inputs = [Slot("classes", ("class_averages",), "2D classes", help="The class averages of a 2D classification.")]
+    inputs = [Slot("classes", ("class_averages",), "2D classes", help="The class averages of a 2D classification."),
+              Slot("reference", ("map",), "Reference map", required=False,
+                   help="For the selection by reference: a map of the particle (an earlier refinement, a model map); "
+                        "its projections are compared with every class average.")]
     params = [
-        Param("mode", "choice", "interactive", choices=["interactive", "list", "auto"], label="Selection",
+        Param("mode", "choice", "interactive", choices=["interactive", "list", "auto", "reference"], label="Selection",
               labels={"interactive": "Click the classes (the job waits for you)", "list": "The classes listed below",
-                      "auto": "Automatic (RELION class ranker)"}),
-        Param("classes", "str", "", label="Classes", placeholder="1, 4, 7-9",
+                      "auto": "Automatic (RELION class ranker)",
+                      "reference": "Automatic (correlation with a reference map)"}),
+        Param("classes", "str", "", label="Classes", placeholder="1, 4, 7-9", show_if="mode=list",
               help="Class numbers for 'listed' (ranges allowed)."),
-        Param("min_score", "float", 0.5, label="Minimum score", min=0, max=1,
+        Param("min_score", "float", 0.5, label="Minimum score", min=0, max=1, show_if="mode=auto",
               help="Class ranker: classes predicted at least this good are selected."),
+        Param("min_correlation", "float", 0.8, label="Minimum correlation", min=0, max=1, show_if="mode=reference",
+              help="Classes whose best match with a projection of the reference correlates at least this well are kept "
+                   "(the job lists the correlation of every class: rerun with another value, or list the classes)."),
+        Param("match_resolution", "float", 15.0, label="Resolution of the comparison", unit="Å", min=4, max=60,
+              show_if="mode=reference", advanced=True,
+              help="Classes and projections low-pass filtered to it (the shape matters, not the fine detail)."),
+        Param("angular_step", "float", 10.0, label="Angular step", unit="°", min=3, max=30, show_if="mode=reference",
+              advanced=True, help="Between the projection directions and the in-plane rotations tried."),
         Param("min_particles", "int", 0, label="Select at least this many particles", min=0, advanced=True,
               help="Class ranker: the best classes are added until this many particles (0 = no minimum)."),
         Param("min_classes", "int", 0, label="Or at least this many classes", min=0, advanced=True),
@@ -301,6 +314,8 @@ class RelionSelect2D(RelionJob):
                     return ["List the classes to keep (e.g. 1, 4, 7-9)"]
             except ValueError as exc:
                 return [str(exc)]
+        if params.get("mode") == "reference" and "reference" not in connected:
+            return ["Connect the reference map (selection by reference)"]
         return []
 
     @staticmethod
@@ -326,6 +341,9 @@ class RelionSelect2D(RelionJob):
             return True
         if p["mode"] == "auto":
             self.rank(ctx, files, records)
+            return True
+        if p["mode"] == "reference":
+            self.by_reference(ctx, files, records)
             return True
         total = sum(r["particles"] for r in records)
         class_section(ctx, records, 0, files, selectable=True, waiting=True)
@@ -424,6 +442,65 @@ class RelionSelect2D(RelionJob):
             table.set_column("rlnReferenceImage", [f"{i + 1:06d}@{ctx.rel(stack_path)}" for i in range(len(chosen))])
             ctx.log(f"{len(chosen)} class averages re-centred on their centre of mass")
         return rl.write_star(ctx.path("class_averages.star"), [table], comment="Selected class averages")
+
+    def by_reference(self, ctx: JobContext, files: dict[str, Path], records: list[dict[str, Any]]) -> None:
+        """Automatic selection by the correlation of each class average with the best-matching projection of a
+        reference map (CryoSPARC's Reference Based Auto Select 2D)."""
+        import mrcfile
+        from scipy import ndimage
+
+        from cryoplug import classmatch as cm
+        from cryoplug.imaging import write_png
+        from cryoplug.micrographs import class_tile, tile_sheet
+        p = ctx.params
+        ref_in = ctx.require("reference")
+        with mrcfile.open(str(files["classes"]), permissive=True) as m:
+            stack = np.asarray(m.data, dtype=np.float32)
+            voxel = float(m.voxel_size.x)
+        if stack.ndim == 2:
+            stack = stack[np.newaxis]
+        _, apix = rl.grid_from_star(rl.read_star(files["data"]))
+        apix = apix or voxel
+        if not apix:
+            raise JobError("The pixel size of the class averages is unknown")
+        n = stack.shape[-1]
+        vol = MapVolume.read(ref_in.path)
+        res = float(p["match_resolution"])
+        box = int(min(n, max(32, int(np.ceil(2.5 * n * apix / res)) // 2 * 2)))
+        ctx.progress(0.15, f"Projections of {ref_in.label or ref_in.source}")
+        ref_small, small_apix = cm.shrink_map(rl.to_grid(vol.data, vol.pixel_size, n, apix), apix, box, res)
+        projs = cm.project(ref_small, cm.directions(float(p["angular_step"])))
+        cls_small, _ = cm.shrink_images(stack[[r["class"] - 1 for r in records]], apix, box, res)
+        ctx.progress(0.3, f"Comparing {len(records)} classes with {len(projs)} projections of the reference")
+        found = cm.match(cls_small, projs, float(p["angular_step"]))
+        scores = {r["class"]: f["cc"] for r, f in zip(records, found)}
+        thr = float(p["min_correlation"])
+        chosen = sorted(c for c, v in scores.items() if v >= thr)
+        ctx.log(f"Correlation with the reference ({box} px at {small_apix:.2f} Å/px, {len(projs)} directions): "
+                + ", ".join(f"{c}: {v:.2f}" for c, v in sorted(scores.items())))
+        values = np.array(list(scores.values()))
+        ctx.add_plot("Correlation of the classes with the reference", [{"name": "Classes", **histogram(values, 20, 0.0, 1.0)}],
+            x_label="Correlation with the best projection", y_label="Classes", style="bars",
+            vlines=[{"x": thr, "label": f"≥ {thr:g}"}])
+        # each class next to the projection it matches best (the best and the worst classes)
+        order = sorted(range(len(records)), key=lambda i: -found[i]["cc"])
+        shown = order[:8] + [i for i in order[-4:] if i not in order[:8]]
+        tiles = []
+        for i in shown:
+            f = found[i]
+            if f["projection"] is None:
+                continue
+            img = ndimage.rotate(cls_small[i], f["angle"], reshape=False, order=1)
+            tiles += [class_tile(img, 96), class_tile(projs[f["projection"]], 96)]
+        if tiles:
+            png = write_png(ctx.path("reference_matches.png"), tile_sheet(tiles, per_row=8, gap=3))
+            ctx.add_image("Classes (left) and their best-matching projections of the reference (right), best first", png)
+        if not chosen:
+            best = max(scores.items(), key=lambda kv: kv[1])
+            raise JobError(f"No class correlates at least {thr:g} with the reference (best: class {best[0]}, "
+                           f"{best[1]:.2f}): lower the minimum correlation, or check the reference (same particle, "
+                           "pixel size of its header)")
+        self.select(ctx, chosen, f"correlation ≥ {thr:g} with the reference", scores=scores)
 
     def rank(self, ctx: JobContext, files: dict[str, Path], records: list[dict[str, Any]]) -> None:
         """Automatic selection with relion_class_ranker (as RELION's Subset selection job does)."""

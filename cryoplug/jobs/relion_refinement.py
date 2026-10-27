@@ -26,6 +26,7 @@ from cryoplug.jobs.relion_common import (
     threads,
 )
 from cryoplug.mrc import MapVolume
+from cryoplug.symmetry import normalise as point_group
 
 FIT_CHOICES = ["no", "micrograph", "particle"]
 FIT_LABELS = {"no": "No", "micrograph": "Per micrograph", "particle": "Per particle"}
@@ -109,6 +110,12 @@ class RelionRefine3D(RelionJob):
         mask_in = ctx.input("mask")
         mask, mask_data = map_on_grid(ctx, mask_in, parts, "mask.mrc", mask=True) if mask_in else (None, None)
         sym = (str(p["symmetry"]).strip() or "C1").upper()
+        try:  # a map from Symmetry search / Align to symmetry axes (Align 3D maps puts a job name there)
+            axes = point_group(str(ref_in.meta.get("aligned_to") or "C1"))
+        except ValueError:
+            axes = "C1"
+        if sym == "C1" and axes != "C1":
+            ctx.log(f"The reference is aligned on the {axes} axes: set Symmetry to {axes} to impose that group")
         cont = continuation(ctx)
         if cont:  # a failed or killed run goes on from its last iteration
             opt, it, root = cont
@@ -284,6 +291,92 @@ class RelionAlignSymmetry(JobType):
         meta = {**ctx.inherited_meta("map"), "symmetry": sym if p["apply_sym"] else "C1", "aligned_to": sym}
         ctx.add_output("map", "map", out, f"Aligned to the {sym} axes" + (" (symmetrised)" if p["apply_sym"] else ""), meta=meta)
         ctx.add_highlight("Symmetry axes", sym)
+
+
+@register
+class RelionSymmetrySearch(JobType):
+    name = "relion_symmetry_search"
+    title = "Symmetry search (RELION)"
+    category = "Map processing"
+    tool = "relion"
+    software = ["RELION"]
+    description = ("Finds the point group of a map refined in C1, as CryoSPARC's Symmetry Search Utility: for each group "
+                   "tried (Cn, Dn, T, O, I), relion_align_symmetry turns the map onto RELION's axes of that group, then "
+                   "the map is compared with its copy symmetrised by the rotations of the group (correlation at the "
+                   "resolution chosen). Proposes the highest group the map obeys, with the map aligned on its axes.")
+    inputs = [Slot("map", ("map",), "Map", help="A map refined without symmetry (C1), best unsharpened.")]
+    params = [
+        Param("groups", "str", "C2-C12, D2-D8, T, O, I", label="Point groups tried",
+              help="Ranges (C2-C12) and groups separated by commas; I is RELION's default setting (I2), I1-I4 the others."),
+        Param("resolution", "float", 8.0, label="Resolution of the comparison", unit="Å", min=2, max=60,
+              help="Both maps low-pass filtered to it: about twice the resolution of the map (noise lowers the "
+                   "correlation of the right group, fine detail separates the groups)."),
+        Param("threshold", "float", 0.9, label="Correlation of a symmetry obeyed", min=0.5, max=0.999,
+              help="A group whose symmetrised map correlates at least this well with the map is obeyed."),
+        Param("keep_centre", "bool", False, label="Keep the centre", help="Do not re-centre the map first (--keep_centre)."),
+        Param("box_size", "int", 64, label="Working box", unit="px", min=32, max=512, advanced=True,
+              help="Box of relion_align_symmetry's search (Nyquist about 20 Å is usually enough)."),
+        Param("nr_uniform", "int", 400, label="Orientations tried", min=10, max=100000, advanced=True),
+        extra_args_param(),
+    ]
+    outputs = [OutputDef("map", "map", "Map on the axes found")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        from cryoplug import symmetry as sym
+        try:
+            sym.parse_groups(params.get("groups") or "")
+        except ValueError as exc:
+            return [str(exc)]
+        return []
+
+    def run(self, ctx: JobContext) -> None:
+        from cryoplug import symmetry as sym
+        p = ctx.params
+        inp = ctx.require("map")
+        groups = sym.parse_groups(p["groups"])
+        apix = float(MapVolume.read(inp.path, header_only=True).voxel[0])
+        results = []
+        for k, group in enumerate(groups):
+            out = ctx.path(f"aligned_{group}.mrc")
+            args = [ctx.program("relion", "relion_align_symmetry"), "--i", ctx.rel(inp.path), "--o", ctx.rel(out),
+                    "--sym", group, "--angpix", f"{apix:g}", "--box_size", str(p["box_size"]), "--nr_uniform",
+                    str(p["nr_uniform"])]
+            if p["keep_centre"]:
+                args.append("--keep_centre")
+            ctx.progress(0.03 + 0.9 * k / len(groups), f"relion_align_symmetry ({group}, {k + 1}/{len(groups)})")
+            run_relion(ctx, args + ctx.split_extra())
+            if not out.exists():
+                raise JobError(f"relion_align_symmetry wrote no aligned map for {group} (see the log)")
+            small, _ = sym.prepare(MapVolume.read(out).data, apix, float(p["resolution"]))
+            cc = sym.symmetry_cc(small, sym.operators(group))
+            results.append({"group": group, "order": sym.order(group), "cc": cc, "path": out})
+            ctx.log(f"{group}: correlation with the symmetrised map {cc:.3f}")
+        thr = float(p["threshold"])
+        obeyed = [r for r in results if r["cc"] >= thr]
+        best = max(obeyed, key=lambda r: (r["order"], r["cc"])) if obeyed else None
+        rows = [[r["group"], r["order"], f"{r['cc']:.3f}", "yes" if r["cc"] >= thr else "–",
+                 "proposed" if best is r else ""] for r in sorted(results, key=lambda r: (r["order"], r["group"]))]
+        ctx.add_table("Point groups", ["Group", "Order", "Correlation", "Obeyed", ""], rows)
+        families = []
+        for fam in ("C", "D"):
+            pts = sorted((int(r["group"][1:]), r["cc"]) for r in results if r["group"][0] == fam and r["group"][1:].isdigit())
+            if pts:
+                families.append({"name": f"{fam}n", "x": [n for n, _ in pts], "y": [round(c, 4) for _, c in pts]})
+        if families:
+            ctx.add_plot("Correlation with the symmetrised map", families, x_label="n (order of the main axis)",
+                         y_label="Correlation", hlines=[{"y": thr, "label": f"obeyed ≥ {thr:g}"}])
+        if best is None:
+            top = max(results, key=lambda r: r["cc"])
+            ctx.add_highlight("Symmetry", "C1", "warn")
+            ctx.warn(f"No group tried reaches a correlation of {thr:g} (best: {top['group']}, {top['cc']:.3f}): the map "
+                     "has no symmetry among them, or the comparison resolution is too fine for its quality")
+            return
+        ctx.add_highlight("Symmetry", best["group"], "good")
+        ctx.add_highlight("Correlation", f"{best['cc']:.3f}")
+        meta = {**ctx.inherited_meta("map"), "symmetry": best["group"], "aligned_to": best["group"],
+                "symmetry_cc": round(best["cc"], 4)}
+        ctx.add_output("map", "map", best["path"], f"Aligned to the {best['group']} axes (not symmetrised)", meta=meta)
 
 
 # ------------------------------------------------------------------ helical symmetry tools

@@ -21,11 +21,12 @@ DynaMight): confirm with the person first.
 | 5. Picking | `relion_autopick` | `method=log`, `diameter_min`/`diameter_max` around the particle | picks drawn on micrographs, particles per micrograph |
 | 6. Extraction | `relion_extract` | `box` ≈ 2 × diameter (even), `rescale` to 64–128 px for 2D/3D | particle count, box, pixel size |
 | 7. 2D | `relion_class2d` | `algorithm=vdam`, `classes` 50–200, `vdam_batches` 200 | class gallery |
-| 8. Selection | `relion_select2d` | `mode=list` with `classes` (e.g. "1, 4, 7-9") as an agent; `interactive` waits for a person's clicks; `auto` uses RELION's class ranker | kept / rejected particles |
+| 8. Selection | `relion_select2d` | `mode=list` with `classes` (e.g. "1, 4, 7-9") as an agent; `interactive` waits for a person's clicks; `auto` uses RELION's class ranker; `reference` keeps the classes that correlate (`min_correlation` 0.8) with projections of a map connected as `reference` | kept / rejected particles |
 | 9. Initial model | `relion_initial_model` | `symmetry` (made in C1, symmetry applied after), `iterations` 200 | map |
 | 10. 3D classes (optional) | `relion_class3d_global` | `classes` 4–8, `iterations` 25, `alignment=global` | class maps, shares over the iterations, views per class |
 | 10b. Heterogeneous refinement (optional) | `relion_hetero_refine` | `ref_1`, `ref_2`… one map per class (good map + decoys, or the classes of an initial model), `ini_high` 40 | class shares, particles per class |
 | 11. Refinement | `relion_refine3d` | `mpi` ≥ 3, `symmetry`, `ini_high` 40–60 Å from an initial model | FSC, resolution |
+| 11b. Unknown symmetry (optional) | `relion_symmetry_search` on a C1 map | `groups` "C2-C12, D2-D8, T, O, I", `resolution` ≈ 2 × the map's, `threshold` 0.9 | correlation per group; proposed group and the map aligned on its axes |
 | 12. Mask | `relion_mask_create` | `lowpass` 15 Å, `extend` 3, `soft_edge` 6 (threshold 0 = automatic) | mask statistics; look at it on the map |
 | 13. Post-processing | `relion_postprocess`, `relion_locres` | automatic B-factor | corrected FSC, B-factor, local resolution |
 | 14. Polishing loop | `relion_ctf_refine` (`mode=complete`) → `relion_polish` (`mode=train` once, then polish) → `relion_refine3d` | | resolution gain after each round |
@@ -58,7 +59,11 @@ whose classes (`classes` output) go to `relion_select2d`.
 - 2D: VDAM runs without MPI (threads only); EM accepts MPI. `highres_limit` 7–12 Å against over-fitting of small
   particles; `tau2_fudge` 2.
 - Selection: `max_per_class` evens out the views before an initial model; keep borderline classes rather than
-  losing rare views, and run a second 2D round instead.
+  losing rare views, and run a second 2D round instead. With a map of the particle already at hand, `mode=reference`
+  scores every class against its projections (both hands; the scores are in the log and on the gallery).
+- Symmetry: `relion_symmetry_search` proposes the largest group whose correlation reaches `threshold`; its subgroups
+  pass too, and pseudo-symmetry (near-identical subunits) scores high as well, so look at the map and the table
+  before refining with that `symmetry` (its `map` output, aligned on the axes of the group, is the reference).
 - Work down-scaled until the final refinement, then re-extract at full scale: `relion_extract` with `particles`
   (instead of coordinates) and `recentre=recentre`.
 - Refinement: `absolute_greyscale=auto` skips `--firstiter_cc` for maps made by RELION; masks only after a first

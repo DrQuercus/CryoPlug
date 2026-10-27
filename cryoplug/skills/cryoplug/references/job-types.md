@@ -158,9 +158,9 @@ Sorts the particles among several reference maps while refining all of them, as 
 Usually followed by: `relion_refine3d`, `relion_class3d_global`.
 
 ### `relion_select2d` — Select 2D classes
-RELION · interactive: a person works in it. In: classes: class_averages. Out: particles: particles, rejected: particles, class_averages: class_averages.
+RELION · interactive: a person works in it. In: classes: class_averages, reference?: map. Out: particles: particles, rejected: particles, class_averages: class_averages.
 
-Keeps the particles of the good 2D classes. As in CryoSPARC, the job shows the class averages and waits: click the good classes (sorted by size or resolution), then Done. The classes can also be listed, or chosen automatically by RELION's class ranker. Gives the selected particles, the rejected ones, and the selected class averages (templates for picking).
+Keeps the particles of the good 2D classes. As in CryoSPARC, the job shows the class averages and waits: click the good classes (sorted by size or resolution), then Done. The classes can also be listed, chosen automatically by RELION's class ranker, or by their correlation with projections of a reference map (CryoSPARC's Reference Based Auto Select 2D). Gives the selected particles, the rejected ones, and the selected class averages (templates for picking).
 Usually followed by: `relion_initial_model`, `relion_class2d`, `relion_class3d_global`, `relion_refine3d`, `relion_topaz_train`, `relion_autopick`.
 
 ### `relion_select3d` — Select 3D classes
@@ -432,6 +432,12 @@ built-in. In: map: map, model?: model. Out: mask: mask.
 
 Mask drawn by hand on a map in the 3D viewer, as in Chimera: spheres, boxes and cylinders placed with the mouse, connected regions of density picked at the contour level, zones around chains, the density simulated from chains of a model (molmap), the density above a level or an existing mask, added, erased or intersected; then dilated and given a soft edge. Computed here on the full grid of the map, with its centre of mass and the box to re-centre particles on it (signal subtraction).
 Usually followed by: `relion_subtract`, `relion_local_refine`, `relion_class3d`, `map_fsc`, `locscale`.
+
+### `relion_symmetry_search` — Symmetry search (RELION)
+RELION. In: map: map. Out: map: map.
+
+Finds the point group of a map refined in C1, as CryoSPARC's Symmetry Search Utility: for each group tried (Cn, Dn, T, O, I), relion_align_symmetry turns the map onto RELION's axes of that group, then the map is compared with its copy symmetrised by the rotations of the group (correlation at the resolution chosen). Proposes the highest group the map obeys, with the map aligned on its axes.
+Usually followed by: `relion_refine3d`, `relion_align_symmetry`, `relion_symmetry_expand`.
 
 ## Heterogeneity
 
