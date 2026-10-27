@@ -456,6 +456,18 @@ def _tomo_pick(pr: Processing, job: dict[str, Any], p: dict[str, Any]) -> None:
     pr.say((f"{_count(n)} particles were" if n else "Particles were") + " picked in the tomograms.")
 
 
+def _template_match(pr: Processing, job: dict[str, Any], p: dict[str, Any]) -> None:
+    n = output_meta(job, "particles").get("n_particles")
+    how = [f"angular step {_num(p['angular_step']):g}°" if _num(p.get("angular_step")) else "angular sampling from the "
+           "particle diameter (Crowther criterion)",
+           "template weighted per tilt image with its tilt angle, defocus and dose" if p.get("per_tilt", True) else "",
+           "random-phase correction" if p.get("random_phase", True) else "",
+           "tophat filtering of the score maps" if p.get("tophat", True) else ""]
+    how = [h for h in how if h]
+    pr.say((f"{_count(n)} particles were" if n else "Particles were") + " located by template matching with "
+           f"pytom-match-pick ({', '.join(how)}).")
+
+
 def _tomo_import_coords(pr: Processing, job: dict[str, Any], p: dict[str, Any]) -> None:
     n = output_meta(job, "particles").get("n_particles")
     pr.say((f"The coordinates of {_count(n)} particles were" if n else "Particle coordinates were") + " imported.")
@@ -504,6 +516,7 @@ BUILDERS: dict[str, Callable[[Processing, dict[str, Any], dict[str, Any]], None]
     "relion_tomo_import": _tomo_import, "relion_tomo_motioncorr": _tomo_motioncorr, "relion_tomo_ctffind": _tomo_ctffind,
     "relion_tomo_exclude": _tomo_exclude, "relion_tomo_align": _tomo_align, "relion_tomo_reconstruct": _tomo_reconstruct,
     "relion_tomo_denoise": _tomo_denoise, "relion_tomo_pick": _tomo_pick, "relion_tomo_import_coords": _tomo_import_coords,
+    "pytom_template_match": _template_match,
     "relion_tomo_extract": _tomo_extract,
     "relion_tomo_initial_model": _initial_model, "relion_tomo_class3d": _class3d,
     "relion_tomo_refine3d": lambda pr, job, p: _refine(pr, job, p, "subtomogram auto-refinement"),

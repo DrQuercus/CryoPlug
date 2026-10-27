@@ -529,6 +529,12 @@ exit 0
                  "relion_tomo_reconstruct_particle", "relion_tomo_reconstruct_particle_mpi", "relion_tomo_refine_ctf",
                  "relion_tomo_refine_ctf_mpi", "relion_tomo_align", "relion_tomo_align_mpi"):
         (d / prog).symlink_to(relion)
+    # pytom-match-pick 0.14 (python fake dispatched on the program name)
+    pytom = d / "pytom_fake.py"
+    pytom.write_text(f"#!{sys.executable}\n" + (ROOT / "tests" / "fakes" / "pytom.py").read_text())
+    pytom.chmod(pytom.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    for prog in ("pytom_create_template.py", "pytom_create_mask.py", "pytom_match_template.py", "pytom_extract_candidates.py"):
+        (d / prog).symlink_to(pytom)
     # programs RELION calls (the fake RELION only checks that they can be run)
     for prog in ("ctffind", "MotionCor2", "AreTomo2", "batchruntomo", "cryoCARE_train.py", "cryoCARE_extract_train_data.py",
                  "cryoCARE_predict.py"):
@@ -595,7 +601,7 @@ def manager(tmp_path, fakebin) -> Manager:
         tools={k: ToolConfig(name=k, bin_dir=str(fakebin))
                for k in ("modelangelo", "phenix", "locscale", "cryoatom", "boltz", "spisonet", "checkmysequence", "onedep",
                          "cryodrgn", "relion", "colabfold", "servalcat", "deepemhancer", "ctffind", "motioncor", "aretomo",
-                         "imod", "cryocare")},
+                         "imod", "cryocare", "pytom")},
     )
     m = Manager(cfg)
     m.check_tools()

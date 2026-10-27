@@ -69,6 +69,12 @@ TOOLS: dict[str, ToolDef] = {
                 "5's denoising job.",
                 "https://github.com/juglab/cryoCARE_pip",
                 "Buchholz T.-O. et al. (2019) IEEE ISBI, 502-506."),
+        ToolDef("pytom", "pytom-match-pick", ["pytom_match_template.py"],
+                "GPU template matching in tomograms (pytom_match_template.py, pytom_extract_candidates.py): particles "
+                "of a known structure located and oriented with the tilt series of RELION 5.",
+                "https://github.com/SBC-Utrecht/pytom-match-pick",
+                "Chaillet M.L. et al. (2023) Int. J. Mol. Sci. 24, 13375; Chaillet M.L. et al. (2025) J. Struct. Biol. X "
+                "11, 100125."),
         ToolDef("modelangelo", "ModelAngelo", ["model_angelo"],
                 "Automated de novo model building with graph neural networks.",
                 "https://github.com/3dem/model-angelo",

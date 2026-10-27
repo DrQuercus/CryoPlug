@@ -22,7 +22,7 @@ denoising. Long GPU jobs (AreTomo2, cryoCARE, refinements): confirm with the per
 | 5. Alignment | `relion_tomo_align` | `method=imod_fiducials` (gold beads, `fiducial_diameter`), `imod_patch` or `aretomo` (GPU); `thickness` in nm | IMOD residual error or AreTomo2 tilt-axis score per tilt series |
 | 6. Tomograms | `relion_tomo_reconstruct` | `binned_pixel` 5–10 Å; `split=true` with `fourier=false` for denoising | projections, tomograms |
 | 7. Denoising (optional) | `relion_tomo_denoise` | `mode=both`, `training` 2–3 tomograms spanning the defocus range | denoised tomograms |
-| 8. Picking | `relion_tomo_pick` (people only: waits for clicks) or `relion_tomo_import_coords` | `mode` particles / spheres / filaments, `diameter`, `spacing` | particles per tomogram |
+| 8. Picking | `relion_tomo_pick` (people only: waits for clicks), `pytom_template_match` (known structure: `template` map, `particle_diameter`, `false_positives` or `cut_off`) or `relion_tomo_import_coords` | `mode` particles / spheres / filaments, `diameter`, `spacing` | particles per tomogram; for template matching the score histogram and the score-map slice |
 | 9. Extraction | `relion_tomo_extract` | `box_A` ≈ 1.5–2 × the particle, `binned_px` (binned first, 4–6 Å/px), `format=stack2d` | subtomogram count, box, pixel size |
 | 10. Average | `relion_tomo_reconstruct_particle` | `box`, `binning` | the map (half maps and FSC once the particles have half sets) |
 | 11. Initial model | `relion_tomo_initial_model` | `symmetry`; `sigma_tilt` 5–10° for particles picked on spheres or filaments | map |
@@ -49,6 +49,10 @@ CryoPlug (masks, post-processing, local resolution, LocScale, model building).
   frame with `dose_per_frame=true`).
 - Exclude tilt images before the alignment: one bad image spoils the alignment of its tilt series.
 - Particles picked on spheres or filaments carry tilt and psi priors: `sigma_tilt` keeps the searches near them.
+- `pytom_template_match` (GPU, tool `pytom`): tomograms binned 6-8× (10-20 Å/voxel), raw rather than denoised;
+  `invert=true` (protein dark in tomograms, white in maps); the score cut-off follows `false_positives` per tomogram
+  unless `cut_off` is set; check the score histogram (true particles separate from the noise) and the picks in
+  `relion_tomo_pick` (input `particles`) before long refinements.
 - Particles need half sets (a refinement) before `relion_tomo_reconstruct_particle` gives half maps and an FSC.
 - `relion_tomo_ctf_refine`: defocus (±`defocus_range`), contrast scale per tilt image or per tomogram (not both).
 - `relion_tomo_frame_align` with `motion=true` writes particle trajectories that the next reconstruction and

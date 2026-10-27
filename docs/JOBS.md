@@ -1300,7 +1300,37 @@ Reconstruit un tomogramme binné de chaque série alignée (relion_tomo_reconstr
 - « Only this tomogram » : RELION n'écrit pas de jeu de tomogrammes pour un seul tomogramme ; CryoPlug l'écrit.
 - Visionneuse : molette ou ↑ ↓ pour la coupe, une tranche de plusieurs coupes moyennées, un filtre passe-bas.
 
-**Étapes suivantes** : Denoise tomograms (cryoCARE), Pick particles in tomograms, Import tomogram coordinates
+**Étapes suivantes** : Denoise tomograms (cryoCARE), Pick particles in tomograms, Template matching (pytom-match-pick), Import tomogram coordinates
+
+### Template matching (pytom-match-pick)
+
+`pytom_template_match` — logiciel : `pytom`
+
+Trouve les particules d'une structure connue dans les tomogrammes par template matching (pytom-match-pick, sur GPU) : le modèle, une carte de la particule, est corrélé à chaque tomogramme dans toutes les orientations, pondéré image par image avec les angles, défocus et doses des séries RELION ; les meilleurs pics deviennent un jeu de particules RELION 5 (positions, angles, scores). Le pointage automatique qui manque au pipeline de RELION 5.
+
+**Quand l'utiliser**
+
+- Une particule de structure connue (ribosome, protéasome, complexe déjà résolu) dans des tomogrammes in situ.
+- Remplacer ou compléter le pointage à la main sur beaucoup de tomogrammes.
+
+**À éviter / pièges**
+
+- Des tomogrammes à pleine résolution : binnez 6-8 fois (10-20 Å par voxel), sinon c'est très long.
+- Un modèle de contraste opposé : la protéine est sombre dans les tomogrammes, blanche dans les cartes (« Invert the template contrast », coché par défaut).
+- Des tomogrammes débruités : le bruit sur lequel on juge les scores change ; gardez les tomogrammes bruts.
+
+**Entrées conseillées** : Les tomogrammes reconstruits (avec leurs séries et la CTF), une carte de la particule ; un masque en option (sinon une sphère 15 % plus large que la particule).
+
+**Conseils**
+
+- Le diamètre de la particule fixe le masque, l'échantillonnage angulaire (critère de Crowther) et la distance minimale entre deux pics ; le modèle est mis à la taille de voxel des tomogrammes (pytom_create_template.py).
+- La coupure sur le score vient du nombre de faux positifs admis par tomogramme (1 par défaut) ; ou donnez une coupure fixe (LCCmax). Le filtre tophat ne garde que les pics nets (moins de membranes et de bords).
+- Tomogrammes de RELION reconstruits par inversion de Fourier : déjà corrigés de la CTF, la CTF du modèle est alors retournée en phase (--tomogram-ctf-model phase-flip, détecté tout seul).
+- Symétrie Cn d'axe z (convention de relion_align_symmetry) : n fois moins de rotations à essayer.
+- Le rapport montre une coupe du tomogramme et de la carte des scores, et l'histogramme des scores : une séparation nette entre les vraies particules et le bruit est bon signe.
+- Les particules gardent les angles du meilleur modèle ; extrayez-les, puis modèle initial ou raffinement.
+
+**Étapes suivantes** : Extract subtomograms (RELION), Pick particles in tomograms, Reconstruct particle (RELION)
 
 ## Traitement de carte
 

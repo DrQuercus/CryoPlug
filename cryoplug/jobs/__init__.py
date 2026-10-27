@@ -55,6 +55,7 @@ def _load() -> None:
         maptools,
         masking,
         placement,
+        pytom,
         refinement,
         relion,
         relion_classify,

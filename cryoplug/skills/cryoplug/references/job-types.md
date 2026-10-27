@@ -309,7 +309,13 @@ Usually followed by: `relion_tomo_refine3d`, `relion_mask_create`, `relion_postp
 RELION. In: tiltseries: tiltseries. Out: tomograms: tomograms.
 
 Reconstructs a binned tomogram of every aligned tilt series (relion_tomo_reconstruct_tomogram), CTF-corrected by Fourier inversion with a Wiener filter, for looking at the data and picking particles (subtomogram averaging goes back to the tilt images). Optionally the tomograms of the even and odd frames, for denoising, and a 2D projection of a slab of each tomogram.
-Usually followed by: `relion_tomo_denoise`, `relion_tomo_pick`, `relion_tomo_import_coords`.
+Usually followed by: `relion_tomo_denoise`, `relion_tomo_pick`, `pytom_template_match`, `relion_tomo_import_coords`.
+
+### `pytom_template_match` — Template matching (pytom-match-pick)
+pytom-match-pick · GPU. In: tomograms: tomograms, template: map, mask?: mask. Out: particles: tomo_particles.
+
+Finds the particles of a known structure in the tomograms by template matching (pytom-match-pick, GPU): the template, a map of the particle, is correlated with every tomogram over all rotations, weighted per tilt image with the tilt angles, defoci and doses of the RELION tilt series; the highest peaks become a RELION 5 particle set with positions, angles and scores.
+Usually followed by: `relion_tomo_extract`, `relion_tomo_pick`, `relion_tomo_reconstruct_particle`.
 
 ## Map processing
 

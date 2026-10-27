@@ -2307,7 +2307,7 @@ HELP: dict[str, dict[str, Any]] = {
             "« Only this tomogram » : RELION n'écrit pas de jeu de tomogrammes pour un seul tomogramme ; CryoPlug l'écrit.",
             "Visionneuse : molette ou ↑ ↓ pour la coupe, une tranche de plusieurs coupes moyennées, un filtre passe-bas.",
         ],
-        "next": ["relion_tomo_denoise", "relion_tomo_pick", "relion_tomo_import_coords"],
+        "next": ["relion_tomo_denoise", "relion_tomo_pick", "pytom_template_match", "relion_tomo_import_coords"],
     },
     "relion_tomo_denoise": {
         "purpose": "Débruite les tomogrammes avec cryoCARE (relion_python_tomo_denoise) : un réseau apprend, sur les "
@@ -2352,6 +2352,38 @@ HELP: dict[str, dict[str, Any]] = {
             "Le travail est sauvegardé pendant que le job attend ; « Done » écrit des fichiers lisibles aussi par RELION.",
         ],
         "next": ["relion_tomo_extract", "relion_tomo_reconstruct_particle"],
+    },
+    "pytom_template_match": {
+        "purpose": "Trouve les particules d'une structure connue dans les tomogrammes par template matching "
+                   "(pytom-match-pick, sur GPU) : le modèle, une carte de la particule, est corrélé à chaque tomogramme "
+                   "dans toutes les orientations, pondéré image par image avec les angles, défocus et doses des séries "
+                   "RELION ; les meilleurs pics deviennent un jeu de particules RELION 5 (positions, angles, scores). Le "
+                   "pointage automatique qui manque au pipeline de RELION 5.",
+        "when": [
+            "Une particule de structure connue (ribosome, protéasome, complexe déjà résolu) dans des tomogrammes in situ.",
+            "Remplacer ou compléter le pointage à la main sur beaucoup de tomogrammes.",
+        ],
+        "avoid": [
+            "Des tomogrammes à pleine résolution : binnez 6-8 fois (10-20 Å par voxel), sinon c'est très long.",
+            "Un modèle de contraste opposé : la protéine est sombre dans les tomogrammes, blanche dans les cartes "
+            "(« Invert the template contrast », coché par défaut).",
+            "Des tomogrammes débruités : le bruit sur lequel on juge les scores change ; gardez les tomogrammes bruts.",
+        ],
+        "inputs": "Les tomogrammes reconstruits (avec leurs séries et la CTF), une carte de la particule ; un masque en option "
+                  "(sinon une sphère 15 % plus large que la particule).",
+        "tips": [
+            "Le diamètre de la particule fixe le masque, l'échantillonnage angulaire (critère de Crowther) et la distance "
+            "minimale entre deux pics ; le modèle est mis à la taille de voxel des tomogrammes (pytom_create_template.py).",
+            "La coupure sur le score vient du nombre de faux positifs admis par tomogramme (1 par défaut) ; ou donnez "
+            "une coupure fixe (LCCmax). Le filtre tophat ne garde que les pics nets (moins de membranes et de bords).",
+            "Tomogrammes de RELION reconstruits par inversion de Fourier : déjà corrigés de la CTF, la CTF du modèle est "
+            "alors retournée en phase (--tomogram-ctf-model phase-flip, détecté tout seul).",
+            "Symétrie Cn d'axe z (convention de relion_align_symmetry) : n fois moins de rotations à essayer.",
+            "Le rapport montre une coupe du tomogramme et de la carte des scores, et l'histogramme des scores : une "
+            "séparation nette entre les vraies particules et le bruit est bon signe.",
+            "Les particules gardent les angles du meilleur modèle ; extrayez-les, puis modèle initial ou raffinement.",
+        ],
+        "next": ["relion_tomo_extract", "relion_tomo_pick", "relion_tomo_reconstruct_particle"],
     },
     "relion_tomo_import_coords": {
         "purpose": "Importe des positions de particules pointées ailleurs (crYOLO, PyTom, Dynamo, template matching, "

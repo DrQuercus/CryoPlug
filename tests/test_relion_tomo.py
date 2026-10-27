@@ -369,6 +369,73 @@ def test_picking_to_subtomogram_average(manager, tomograms):
     assert proc.stats["initial_particles"] == 24 and proc.stats["final_particles"] == 24 and proc.stats["n_tilt_series"] == 2
 
 
+
+def test_template_matching(manager, tomograms, tmp_path):
+    """Template matching with pytom-match-pick: the template made from a map at the voxel size of the tomograms (contrast
+    inverted), a sphere as mask, each tomogram matched with the tilt angles, defoci and doses of its tilt series (the
+    RELION set copied as pytom reads it), the peaks extracted and turned into a RELION 5 particle set that extraction
+    takes."""
+    from tomo_data import PARTICLE_SIGMA, particle_positions
+    puid, rec = tomograms["puid"], tomograms["reconstruct"]
+    pdir = manager.project_dir(puid)
+    n = 32
+    z, y, x = np.indices((n, n, n)) - n // 2
+    blob = np.exp(-(x ** 2 + y ** 2 + z ** 2) / (2 * (PARTICLE_SIGMA / 2.0) ** 2))  # white protein, as in a map
+    MapVolume(data=blob.astype(np.float32), voxel=np.full(3, 2.0)).write(tmp_path / "template.mrc")
+    imp = _run(manager, puid, "import_maps", {"map": str(tmp_path / "template.mrc"), "compute_fsc": False})
+    inputs = {"tomograms": _ref(rec, "tomograms"), "template": _ref(imp, "map")}
+    for params, error in (({}, "Give the particle diameter"),
+                          ({"particle_diameter": 40, "volume_split": "2 2"}, "three whole numbers"),
+                          ({"particle_diameter": 40, "non_spherical_mask": True}, "needs the mask input")):
+        bad = manager.create_job(puid, "pytom_template_match", params, inputs)
+        with pytest.raises(Exception, match=error):
+            manager.queue_job(puid, bad["uid"])
+
+    job = _run(manager, puid, "pytom_template_match", {"particle_diameter": 40, "n_particles": 20}, inputs)
+    log = log_of(manager, puid, job["uid"])
+    work = f"{job['uid']}/pytom"
+    assert "pytom_create_template.py -i" in log and "--output-voxel-size-angstrom 8 -b 16 --invert" in log
+    assert "pytom_create_mask.py -b 16 -r 2.88 -s 1 --voxel-size 8" in log
+    for ts in ("TS_01", "TS_02"):
+        assert f"-v {pdir / work}/tomograms/rec_{ts}.mrc" in log
+        assert (pdir / work / "tomograms" / f"rec_{ts}.mrc").is_symlink() and (pdir / work / "tilt_series" / f"{ts}.star").exists()
+    assert f"-g 0 --particle-diameter 40 --relion5-tomograms-star {pdir / work}/tomograms.star --per-tilt-weighting" in log
+    assert "--tomogram-ctf-model phase-flip --random-phase-correction" in log  # RELION's Fourier inversion corrects the CTF
+    assert "-n 20 --number-of-false-positives 1 --particle-diameter 40 --tophat-filter" in log
+    out = _outs(job)["particles"]
+    assert out["type"] == "tomo_particles" and out["meta"]["n_particles"] > 0
+    files = tm.read_optimisation_set(pdir / out["path"])
+    assert files["tomograms"] == _outs(rec)["tomograms"]["path"]
+    parts = rl.read_star(pdir / files["particles"])["particles"]
+    assert parts.labels[:4] == ["rlnTomoName", "rlnCenteredCoordinateXAngst", "rlnCenteredCoordinateYAngst",
+                                "rlnCenteredCoordinateZAngst"] and parts.has("rlnLCCmax") and parts.has("rlnAngleRot")
+    xyz, names = tm.centered_positions(parts), parts.column("rlnTomoName")
+    for ts in ("TS_01", "TS_02"):  # picks where the particles of the synthetic tomograms are (8 Å voxels)
+        mine = xyz[[i for i, nm in enumerate(names) if nm == ts]]
+        true = particle_positions(ts)
+        right = sum(float(np.min(np.linalg.norm(true - q, axis=1))) < 12.0 for q in mine)
+        assert 3 <= len(mine) <= 20 and right >= 0.8 * len(mine), (ts, len(mine), right)
+    rows = {r[0]: r for r in _sections(manager, puid, job, "table")[1]["rows"]}
+    assert set(rows) == {"TS_01", "TS_02"} and all(int(r[1]) > 0 for r in rows.values())
+    assert "Scores of the particles (LCCmax)" in {s["title"] for s in _sections(manager, puid, job, "plot")}
+    assert (pdir / job["uid"] / "scores.png").exists()
+
+    # the particles go on to extraction, as RELION's picks
+    ex = _run(manager, puid, "relion_tomo_extract", {"box_A": 64.0, "binned_px": 16, "threads": 1},
+              {"particles": _ref(job, "particles")})
+    assert _outs(ex)["particles"]["meta"]["n_particles"] == out["meta"]["n_particles"]
+
+    # one tomogram, a fixed cut-off, without the tilt-series weighting: no CTF metadata asked for
+    one = _run(manager, puid, "pytom_template_match", {"particle_diameter": 40, "n_particles": 5, "tomo_name": "TS_02",
+                                                       "per_tilt": False, "cut_off": 0.2, "ctf_corrected": "no",
+                                                       "symmetry": 4, "angular_step": 12, "tophat": False}, inputs)
+    log = log_of(manager, puid, one["uid"])
+    assert "rec_TS_01" not in log and "--relion5-tomograms-star" not in log and "--tomogram-ctf-model" not in log
+    assert "--angular-search 12 --z-axis-rotational-symmetry 4" in log and "--particle-diameter 40 --cut-off 0.2" in log
+    assert set(rl.read_star(pdir / one["uid"] / "particles.star")["particles"].column("rlnTomoName")) == {"TS_02"}
+    nothing = _run(manager, puid, "pytom_template_match", {"particle_diameter": 40, "cut_off": 0.999}, inputs, ok=False)
+    assert nothing["status"] == "failed" and "No particle above the cut-off" in nothing["error"]
+
 def test_tilt_series_to_average_workflow(manager, tilt_series):
     """The workflow template: the chain runs to the exclusion of tilt images and waits, then to the picking (with
     cryoCARE before it) and waits, then on to the post-processed map."""

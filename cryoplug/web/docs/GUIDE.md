@@ -470,6 +470,7 @@ job, qui écrivent les mêmes fichiers.
 | Reconstruction | Reconstruct tomograms (RELION) | 5–10 Å par voxel, *Tomograms for denoising* | projections, tomogrammes coupe par coupe |
 | Débruitage | Denoise tomograms (cryoCARE) | entraînement sur 2–3 tomogrammes | tomogrammes débruités |
 | Pointage | Pick particles in tomograms | particules, sphères ou filaments ; diamètre, espacement | particules par tomogramme |
+| ou template matching | Template matching (pytom-match-pick) | carte de la particule, diamètre, faux positifs admis | coupe des scores, histogramme des scores, particules par tomogramme |
 | Extraction | Extract subtomograms (RELION) | boîte en Å, boîte binnée, piles 2D | vignettes des sous-tomogrammes |
 | Moyenne | Reconstruct particle (RELION) | boîte et binning des images | la moyenne ; avec des demi-jeux, la FSC |
 | Ab initio | 3D initial model (subtomograms) | C1, a priori de tilt pour les sphères et filaments | carte initiale |
@@ -483,8 +484,20 @@ post-traitement ; la CTF refinement, l'alignement des trames et un dernier raffi
 
 **Configurer.** Page **Tools** : **RELION** (son dossier `bin`, avec les programmes Python `relion_python_tomo_*`),
 **CTFFIND**, et selon l'alignement **AreTomo2** ou **IMOD** (`batchruntomo`) ; **cryoCARE** pour le débruitage (le
-dossier de `cryoCARE_train.py`, `cryoCARE_extract_train_data.py` et `cryoCARE_predict.py`). Un outil non configuré est
-cherché dans le PATH de RELION.
+dossier de `cryoCARE_train.py`, `cryoCARE_extract_train_data.py` et `cryoCARE_predict.py`) ; **pytom-match-pick**
+pour le template matching (le dossier de `pytom_match_template.py`, installé avec cupy sur une machine à GPU). Un outil
+non configuré est cherché dans le PATH de RELION.
+
+**Pointer automatiquement : le template matching.** Quand la structure de la particule est connue (carte EMDB, moyenne
+précédente, carte d'un modèle), **Template matching (pytom-match-pick)** la cherche dans chaque tomogramme dans toutes
+les orientations. Le modèle est mis à la taille de voxel des tomogrammes (binnez 6-8 fois : 10-20 Å par voxel), son
+contraste inversé (protéine sombre dans les tomogrammes) et, avec les séries RELION, pondéré image par image par l'angle,
+la défocalisation et la dose ; les tomogrammes reconstruits par inversion de Fourier étant corrigés de la CTF, la CTF du
+modèle est retournée en phase. Les pics au-dessus d'une coupure (estimée d'après le nombre de faux positifs admis par
+tomogramme, ou fixée) et distants d'au moins un rayon deviennent un jeu de particules RELION 5, avec les angles du
+meilleur modèle et le score (`rlnLCCmax`), prêt pour l'extraction. Le rapport montre une coupe du tomogramme à côté de la
+carte des scores et l'histogramme des scores. Vérifiez les particules dans le pointeur (entrée *Particles to edit*)
+avant de lancer de longs calculs.
 
 **Les outils du panneau.**
 
