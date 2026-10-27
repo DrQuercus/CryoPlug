@@ -6,6 +6,9 @@ drives a running CryoPlug server through the Model Context Protocol, guided by a
   answering compact text written for language models, small local ones included;
 * :mod:`cryoplug.agent.mcp` — the MCP server: ``cryoplug mcp`` over stdio, and ``/mcp`` on the CryoPlug server
   itself (Streamable HTTP) for clients that connect to a URL;
+* :mod:`cryoplug.agent.openapi` — the same tools as an OpenAPI tool server, ``/openapi`` on the CryoPlug server, for
+  chat assistants that call tools described by OpenAPI (Open WebUI's tool servers), with the descriptions in English
+  or in French (:mod:`cryoplug.agent.tools_fr`);
 * :mod:`cryoplug.agent.skills` — the agent skills (``SKILL.md`` folders in ``cryoplug/skills``) that teach an agent
   the cryo-EM work done with CryoPlug, installable with ``cryoplug ai skills --install``.
 

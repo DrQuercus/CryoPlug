@@ -49,6 +49,7 @@ class Reply:
     text: str
     images: list[tuple[str, bytes]] = field(default_factory=list)  # (MIME type, data)
     error: bool = False
+    status: int = 0  # of an error: 400 for a request to correct, else the status the server answered
 
 
 @dataclass
@@ -208,10 +209,11 @@ class Session:
     ``local_files``: the tools run on the agent's computer (``cryoplug mcp``, ``cryoplug ai call``), so that its files
     can be uploaded; never inside the server (``/mcp``), where they would be the server's files."""
 
-    def __init__(self, client: Any, allow_commands: bool = False, local_files: bool = False):
+    def __init__(self, client: Any, allow_commands: bool = False, local_files: bool = False, link_base: str = ""):
         self.client = client
         self.allow_commands = allow_commands
         self.local_files = local_files
+        self.link_base = link_base.rstrip("/")  # the address people open CryoPlug at: links to projects and jobs
         self._jobtypes: dict[str, dict[str, Any]] | None = None
         self._programs: dict[str, dict[str, Any]] | None = None
 
@@ -292,6 +294,12 @@ class Session:
             if exc.status == 404:
                 raise ToolError(f"{puid} has no job {uid} (get_project lists its jobs)") from None
             raise
+
+    def link(self, puid: str, juid: str = "") -> str:
+        """The page of a project or job in the web interface, as a last line (none without link_base)."""
+        if not self.link_base:
+            return ""
+        return f"Page: {self.link_base}/#/p/{puid}" + (f"/{juid}" if juid else "")
 
     def program_label(self, key: str | None) -> str:
         if not key:
@@ -754,6 +762,8 @@ def get_project(s: Session, a: Args) -> str:
         lines.append("Empty project: import data first (list_job_types category Import).")
     else:
         lines.append("get_job gives a job's results and report; find_outputs lists what can feed a new job.")
+    if s.link_base:
+        lines.append(s.link(p["uid"]))
     return "\n".join(lines)
 
 
@@ -1179,6 +1189,8 @@ def get_job(s: Session, a: Args) -> str:
     if job.get("dependents"):
         lines.append(f"Used by: {', '.join(job['dependents'])}")
     lines.append(f"Folder: {job.get('job_dir', '')}")
+    if s.link_base:
+        lines.append(s.link(p["uid"], job["uid"]))
     return "\n".join(lines)
 
 
@@ -1793,16 +1805,17 @@ def call(session: Session, name: str, arguments: dict[str, Any] | None = None, *
     """Run a tool; mistakes and server errors become error replies the agent can read."""
     t = TOOLS.get(name)
     if t is None:
-        return Reply(f"Unknown tool '{name}'. Tools: {', '.join(TOOLS)}", error=True)
+        return Reply(f"Unknown tool '{name}'. Tools: {', '.join(TOOLS)}", error=True, status=404)
     args = Args(arguments if isinstance(arguments, dict) else {}, **hooks)
     try:
         result = t.run(session, args)
     except ApiError as exc:
         if exc.status == 401:  # the message says which credential to give
-            return Reply(str(exc), error=True)
-        return Reply(f"CryoPlug refused: {exc}" if exc.status < 500 else f"CryoPlug server error: {exc}", error=True)
+            return Reply(str(exc), error=True, status=401)
+        return Reply(f"CryoPlug refused: {exc}" if exc.status < 500 else f"CryoPlug server error: {exc}", error=True,
+                     status=exc.status)
     except AgentError as exc:
-        return Reply(str(exc), error=True)
+        return Reply(str(exc), error=True, status=400)
     reply = result if isinstance(result, Reply) else Reply(str(result))
     unknown = [k for k in args.raw if k not in args.used]
     if unknown:

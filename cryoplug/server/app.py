@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 
 from cryoplug import __version__
 from cryoplug.agent.http import install as install_mcp
+from cryoplug.agent.openapi import install as install_openapi
 from cryoplug.config import MOLSTAR_VERSION, Config
 from cryoplug.jobs import CATEGORIES, DATA_TYPES, all_job_types, get_job_type
 from cryoplug.config import LaneConfig
@@ -71,6 +72,7 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     app.state.auth = auth
     install_accounts(app, manager, auth)
     install_mcp(app)  # POST /mcp: the MCP server for AI clients that connect to a URL
+    install_openapi(app, config)  # /openapi: the same tools as an OpenAPI tool server (Open WebUI tool servers...)
 
     @app.exception_handler(NotFound)
     async def not_found(request: Request, exc: NotFound):

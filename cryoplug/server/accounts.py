@@ -61,6 +61,8 @@ def install(app: FastAPI, manager: Manager, auth: Auth) -> None:
         info["projects_folder"] = str(users.projects_dir(user))
         roots = users.roots(user)
         info["folders"] = [str(r) for r in roots] if roots is not None else None
+        if user.get("external"):  # logged in with the session of another application ([external_login])
+            info["external"] = user["external"]
         return info
 
     def account(request: Request) -> dict[str, Any]:

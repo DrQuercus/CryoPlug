@@ -10,7 +10,9 @@ CryoPlug is protected in one of three ways:
   ``cryoplug url``) prints links that log in directly.
 
 Scripts and AI agents send ``Authorization: Bearer`` with the shared password, the access token or, with user
-accounts, an API token of their account (see :mod:`cryoplug.users`); ``curl -u name:password`` also works.
+accounts, an API token of their account (see :mod:`cryoplug.users`); ``curl -u name:password`` also works.  With
+user accounts, ``[external_login]`` also accepts the session of another web application of the server (Open WebUI...)
+as the account with the same e-mail address (see :mod:`cryoplug.server.external`).
 
 Without any of them the server only answers on localhost.  Requests that change something must come from
 the CryoPlug page itself (Origin check), and without a login only loopback host names are accepted, so that a
@@ -41,6 +43,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from starlette.concurrency import run_in_threadpool
 
 from cryoplug.config import Config
+from cryoplug.server.external import ExternalLogin
 from cryoplug.users import Users, normalize_username
 
 SESSION_DAYS = 30  # shared password / access token sessions (accounts: Settings › Access)
@@ -171,6 +174,8 @@ class Auth:
         self.config = config
         self.users = users
         self.cookie_name = f"cryoplug_session_{config.port}"
+        self.public_paths = set(PUBLIC_PATHS)  # answered without a login (the OpenAPI specification adds itself)
+        self.external = ExternalLogin(config.external_login, users, config.port) if config.external_login else None
         self._token = access_token(config) if self.mode == "token" else ""
         self._key: tuple[str, bytes] | None = None
         # Scripts using Basic authentication: a right password is remembered for a few minutes (keyed by a hash
@@ -235,6 +240,8 @@ class Auth:
                 user = self.users.session_user(value.strip())
             if user is None and scheme == "basic":  # scripts: curl -u name:password
                 user = self._basic_user(request, value)
+            if user is None and self.external is not None:  # the session of another application (Open WebUI)
+                user = self.external.identify(request)
             return user
         if self.valid_session(cookie):
             return OWNER
@@ -302,6 +309,7 @@ LOGIN_PAGE = Template("""<!doctype html>
     <input type="hidden" name="next" value="$next">
     <input type="hidden" name="hash" id="hash" value="$fragment">
     <button class="btn primary" type="submit">Log in</button>
+    $external
     <p class="login-hint">$hint</p>
   </form>
 </main>
@@ -316,7 +324,29 @@ PASSWORD_FIELD = """<div class="field">
     </div>"""
 
 
-def login_page(auth: Auth, target: str, error: str = "", fragment: str = "", username: str = "", mode: str | None = None) -> str:
+def external_block(auth: Auth, session: dict[str, Any] | None) -> str:
+    """The part of the login page about the other application's session, below the password form (whose button stays
+    the one Enter presses): continue with it, why not, or a link to log in there."""
+    ext = auth.external
+    if ext is None:
+        return ""
+    name = html.escape(ext.settings.name)
+    if session and session.get("username"):
+        return ('<div class="login-or"><span>or</span></div>\n    <button class="btn login-external" type="submit" '
+                f'name="external" value="1" formnovalidate>Continue as {html.escape(session["username"])}</button>\n    '
+                f'<p class="login-hint">Logged in to {name} as {html.escape(session["who"])}.</p>')
+    if session:
+        return (f'<div class="alert login-external-note" role="status">Logged in to {name} as {html.escape(session["who"])}, '
+                f'but {html.escape(session.get("reason") or "no CryoPlug account matches")}: ask a CryoPlug '
+                'administrator.</div>')
+    if ext.settings.login_url:
+        return ('<div class="login-or"><span>or</span></div>\n    <a class="btn login-external" '
+                f'href="{html.escape(ext.settings.login_url, quote=True)}">Log in with {name}</a>')
+    return ""
+
+
+def login_page(auth: Auth, target: str, error: str = "", fragment: str = "", username: str = "", mode: str | None = None,
+               external: str = "") -> str:
     mode = mode or auth.mode
     if mode == "users":
         fields = ('<div class="field">\n      <label for="username">User name</label>\n      '
@@ -334,7 +364,8 @@ def login_page(auth: Auth, target: str, error: str = "", fragment: str = "", use
     return LOGIN_PAGE.substitute(
         host=html.escape(socket.gethostname()), fields=fields, hint=hint, next=html.escape(_safe_next(target), quote=True),
         fragment=html.escape(_safe_next("/", fragment)[1:], quote=True),
-        error=f'<div class="alert error" role="alert">{html.escape(error)}</div>' if error else "")
+        error=f'<div class="alert error" role="alert">{html.escape(error)}</div>' if error else "",
+        external=external if mode == "users" else "")
 
 
 def install(app: FastAPI, config: Config, users: Users,
@@ -370,7 +401,7 @@ def install(app: FastAPI, config: Config, users: Users,
                                     status_code=403)
             request.state.user = OWNER
             return await call_next(request)
-        if request.url.path in PUBLIC_PATHS:
+        if request.url.path in auth.public_paths:
             return await call_next(request)
         user, refusal = await run_in_threadpool(authorize, request, mode)
         if user is not None:
@@ -404,11 +435,14 @@ def install(app: FastAPI, config: Config, users: Users,
         response.headers.setdefault("Referrer-Policy", "same-origin")
         return response
 
+    def external_session(request: Request) -> dict[str, Any] | None:
+        return auth.external.browser_session(request) if auth.external is not None and auth.mode == "users" else None
+
     @app.get("/login", include_in_schema=False)
-    def show_login(next: str = "/") -> Response:
+    def show_login(request: Request, next: str = "/") -> Response:
         if not auth.required:
             return RedirectResponse("/", status_code=303)
-        return HTMLResponse(login_page(auth, next))
+        return HTMLResponse(login_page(auth, next, external=external_block(auth, external_session(request))))
 
     @app.post("/login", include_in_schema=False)
     async def login(request: Request) -> Response:
@@ -426,6 +460,16 @@ def install(app: FastAPI, config: Config, users: Users,
             label = "password" if mode == "password" else "access token"
             return HTMLResponse(login_page(auth, raw_next, error=f"Wrong {label}.", fragment=fragment, mode=mode), status_code=401)
 
+        if form.get("external") and auth.external is not None:  # "Continue as ...": the other application's session
+            if await run_in_threadpool(auth.external.identify, request, True) is not None:
+                response = RedirectResponse(target, status_code=303)
+                response.delete_cookie(auth.external.off_cookie, path="/")
+                return response
+            session = await run_in_threadpool(external_session, request)
+            return HTMLResponse(login_page(auth, raw_next, error=f"No valid {auth.external.settings.name} session: log in "
+                                           f"there first.", fragment=fragment, mode=mode,
+                                           external=external_block(auth, session)), status_code=401)
+
         name, ip = normalize_username(form.get("username", "")), client_ip(request)
         wait = users.throttle.begin(ip, name)
         if wait > 0:
@@ -435,7 +479,9 @@ def install(app: FastAPI, config: Config, users: Users,
         if user is None:
             await asyncio.sleep(1)
             return HTMLResponse(login_page(auth, raw_next, error="Wrong user name or password.", fragment=fragment,
-                                           username=name, mode=mode), status_code=401)
+                                           username=name, mode=mode,
+                                           external=external_block(auth, await run_in_threadpool(external_session, request))),
+                                status_code=401)
         users.throttle.success(ip, name)
         token = await run_in_threadpool(users.new_session, user, ip, request.headers.get("user-agent", ""))
         return auth.login_response(request, target, token)
@@ -446,6 +492,10 @@ def install(app: FastAPI, config: Config, users: Users,
             users.end_session(request.cookies.get(auth.cookie_name))
         response = JSONResponse({"ok": True})
         response.delete_cookie(auth.cookie_name, path="/")
+        if auth.external is not None and auth.external.cookie(request):
+            # The other application's session stays: CryoPlug stops using it in this browser until "Continue as".
+            response.set_cookie(auth.external.off_cookie, "1", max_age=SESSION_DAYS * 86400, path="/", httponly=True,
+                                samesite="lax", secure=request.url.scheme == "https")
         return response
 
     return auth

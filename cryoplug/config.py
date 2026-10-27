@@ -178,6 +178,90 @@ class LaneConfig:
 
 
 @dataclass
+class OpenApiConfig:
+    """[openapi]: the agent tools as an OpenAPI tool server, for chat assistants (Open WebUI's tool servers...)."""
+    enabled: bool = True
+    tools: str = "read"          # a profile of cryoplug.agent.tools.select_tools, or tool names separated by commas
+    language: str = "en"         # of the descriptions the assistant reads to choose a tool: "en" or "fr"
+    max_answer_chars: int = 6000  # longer answers are cut (0: never), the model's context being limited
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "OpenApiConfig":
+        unknown = set(data) - {"enabled", "tools", "language", "max_answer_chars"}
+        if unknown:
+            raise ValueError(f"[openapi]: unknown key(s) {', '.join(sorted(unknown))}")
+        tools = data.get("tools", cls.tools)
+        if isinstance(tools, (list, tuple)):
+            tools = ",".join(str(t) for t in tools)
+        out = cls(enabled=bool(data.get("enabled", True)), tools=str(tools).strip() or cls.tools,
+                  language=str(data.get("language", cls.language)).strip().lower(),
+                  max_answer_chars=int(data.get("max_answer_chars", cls.max_answer_chars)))
+        if out.language not in ("en", "fr"):
+            raise ValueError('[openapi] language must be "en" or "fr"')
+        if out.max_answer_chars < 0:
+            raise ValueError("[openapi] max_answer_chars must be 0 (no limit) or more")
+        # Imported here: the agent package imports this module.
+        from cryoplug.agent.tools import select_tools
+        try:
+            select_tools(out.tools, local_files=False)
+        except ValueError as exc:
+            raise ValueError(f"[openapi] tools: {exc}") from None
+        return out
+
+
+@dataclass
+class ExternalLoginConfig:
+    """[external_login]: log in with the session of another web application of the server (e.g. Open WebUI)."""
+    url: str                     # its "who am I" address: 200 and the account (JSON) for a valid session
+    name: str = "Open WebUI"     # shown on the login page
+    cookie: str = ""             # its session cookie, read from the browser ("token" for Open WebUI)
+    bearer: bool = True          # also its tokens in Authorization: Bearer (assistant tools acting for a person)
+    login_url: str = ""          # its login page, linked from CryoPlug's
+    match: str = "email"         # the CryoPlug account to open: same "email" or same "username"
+    user_field: str = "email"    # the field of the answer that holds it ("field" in the file; dotted for nested answers)
+    role_field: str = "role"
+    roles: list[str] = field(default_factory=lambda: ["user", "admin"])  # accepted values of role_field ([]: any)
+    create_accounts: bool = False  # people without a CryoPlug account get one (role user) at their first visit
+    cache_seconds: int = 60      # a session checked is trusted that long before being checked again
+    timeout: float = 5.0
+
+    KEYS = ("url", "name", "cookie", "bearer", "login_url", "match", "field", "role_field", "roles", "create_accounts",
+            "cache_seconds", "timeout")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ExternalLoginConfig":
+        unknown = set(data) - set(cls.KEYS)
+        if unknown:
+            raise ValueError(f"[external_login]: unknown key(s) {', '.join(sorted(unknown))}")
+        url = str(data.get("url", "")).strip()
+        if not re.match(r"https?://[^/\s]+", url):
+            raise ValueError("[external_login] url: the http(s) address the application answers who is logged in at, "
+                             "e.g. http://localhost:8080/api/v1/auths/ for Open WebUI")
+        roles = data.get("roles", ["user", "admin"])
+        if isinstance(roles, str):
+            roles = [roles]
+        out = cls(url=url, name=str(data.get("name", cls.name)).strip() or cls.name,
+                  cookie=str(data.get("cookie", "")).strip(), bearer=bool(data.get("bearer", True)),
+                  login_url=str(data.get("login_url", "")).strip(), match=str(data.get("match", "email")).strip().lower(),
+                  user_field=str(data.get("field", "email")).strip(), role_field=str(data.get("role_field", "role")).strip(),
+                  roles=[str(r) for r in roles], create_accounts=bool(data.get("create_accounts", False)),
+                  cache_seconds=max(0, int(data.get("cache_seconds", 60))), timeout=float(data.get("timeout", 5.0)))
+        if out.match not in ("email", "username"):
+            raise ValueError('[external_login] match must be "email" or "username"')
+        if not out.user_field:
+            raise ValueError("[external_login] field: the field of the answer that names the person (e.g. email)")
+        if out.cookie and not re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+", out.cookie):
+            raise ValueError(f"[external_login] cookie: not a cookie name: {out.cookie!r}")
+        if not out.cookie and not out.bearer:
+            raise ValueError("[external_login]: give the application's cookie, or keep bearer = true")
+        if out.login_url and not re.match(r"https?://", out.login_url):
+            raise ValueError("[external_login] login_url must start with http:// or https://")
+        if out.roles and not out.role_field:
+            raise ValueError("[external_login] roles need role_field (or roles = [] for no check)")
+        return out
+
+
+@dataclass
 class Config:
     host: str = "127.0.0.1"
     port: int = DEFAULT_PORT
@@ -188,12 +272,16 @@ class Config:
     auth: str = "auto"  # "auto": login required when exposed on the network or a password is set; "always"
     ssl_certfile: str = ""
     ssl_keyfile: str = ""
+    public_url: str = ""  # the address people open CryoPlug at (behind a reverse proxy: its address), for links
+    trusted_proxies: list[str] = field(default_factory=list)  # reverse proxies whose X-Forwarded-For/-Proto count
     display: str = ""  # X display used to launch Coot / ChimeraX-ISOLDE on the server
     molstar_js: str = ""
     molstar_css: str = ""
     lanes: list[LaneConfig] = field(default_factory=lambda: [LaneConfig()])
     tools: dict[str, ToolConfig] = field(default_factory=dict)
     nvidia_smi: str = ""  # [monitor] nvidia_smi: path of nvidia-smi if not on PATH
+    openapi: OpenApiConfig = field(default_factory=OpenApiConfig)
+    external_login: ExternalLoginConfig | None = None
     config_path: Path | None = None
 
     @property
@@ -246,6 +334,15 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     for key in ("ssl_certfile", "ssl_keyfile"):
         if server.get(key):
             setattr(cfg, key, str(_path(server[key], Path())))
+    cfg.public_url = str(server.get("public_url", "")).strip().rstrip("/")
+    if cfg.public_url and not re.match(r"https?://[^/\s]+", cfg.public_url):
+        raise ValueError("[server] public_url: the address people open CryoPlug at, e.g. http://myserver:39500")
+    proxies = server.get("trusted_proxies", [])
+    cfg.trusted_proxies = [proxies] if isinstance(proxies, str) else [str(p).strip() for p in proxies if str(p).strip()]
+
+    cfg.openapi = OpenApiConfig.from_dict(dict(data.get("openapi", {})))
+    if data.get("external_login"):
+        cfg.external_login = ExternalLoginConfig.from_dict(dict(data["external_login"]))
 
     cfg.display = str(data.get("interactive", {}).get("display", os.environ.get("DISPLAY", "")))
 
@@ -291,6 +388,34 @@ browse_roots = ["/"]
 # HTTPS (e.g. a self-signed certificate, see the README).
 # ssl_certfile = "~/.cryoplug/cert.pem"
 # ssl_keyfile = "~/.cryoplug/key.pem"
+# The address people open CryoPlug at (behind a reverse proxy: its address), for the links to
+# projects and jobs in the answers of AI assistants.
+# public_url = "http://myserver:{DEFAULT_PORT}"
+# Behind a reverse proxy (nginx...): its address, so that its X-Forwarded-For / X-Forwarded-Proto
+# headers give the real client (login throttling, logs) and scheme.
+# trusted_proxies = ["127.0.0.1"]
+
+# Chat assistants that call tools described by OpenAPI (Open WebUI "tool servers"...): declare the
+# URL http://<this-server>:{DEFAULT_PORT}/openapi there (specification: /openapi/openapi.json), with a
+# CryoPlug API token as Bearer key (see the README).
+# [openapi]
+# enabled = true
+# tools = "read"            # read (look, change nothing), basic, all, or tool names separated by commas
+# language = "en"           # "fr": French descriptions, for assistants working in French
+# max_answer_chars = 6000   # longer answers are cut (the context of local models is small)
+
+# Log in with the session of another web application of this server, e.g. Open WebUI: whoever is
+# logged in there opens the CryoPlug account with the same e-mail address, without a second login
+# (in the browser: its cookie, sent to every port of the same host name; for assistant tools: its
+# token as Bearer). CryoPlug asks the application who owns the session. Needs user accounts.
+# [external_login]
+# url = "http://localhost:8080/api/v1/auths/"   # answers 200 and the account (JSON) for a valid session
+# name = "Open WebUI"
+# cookie = "token"                             # its session cookie
+# login_url = "http://myserver:8080/auth"      # its login page, linked from CryoPlug's
+# match = "email"                              # or "username": the CryoPlug account to open
+# roles = ["user", "admin"]                    # accepted roles (an account awaiting approval is refused)
+# create_accounts = false                      # unknown people get a new account (role user)
 
 [interactive]
 # X display on which Coot and ChimeraX/ISOLDE are opened when launched from the

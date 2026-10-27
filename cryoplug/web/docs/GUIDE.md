@@ -249,6 +249,13 @@ demande votre accord avant les jobs GPU longs ou l'envoi de données hors du ser
 propositions, vérifiez dans le visualiseur 3D ce qu'il ne voit pas, et jugez vous-même les résultats avant de
 conclure ou de déposer. Il cite les jobs (P3/J14) et les chiffres des rapports : vous retrouvez tout dans l'interface.
 
+**L'assistant de discussion du labo.** Dans une interface comme Open WebUI, l'administrateur peut déclarer CryoPlug
+comme « serveur d'outils » (OpenAPI, `http://<serveur>:39500/openapi`) : l'assistant répond alors aux questions sur
+vos projets — « où en est P3 ? », « pourquoi J14 a échoué ? », « montre-moi la courbe FSC de J9 » — en lisant
+CryoPlug, sans rien lancer, et donne le lien vers la page du job. Avec la connexion déléguée, votre session de
+l'assistant ouvre aussi CryoPlug, sans deuxième mot de passe, et l'assistant ne voit que vos projets. Détails : README,
+sections *Se connecter avec une autre application du serveur* et *Open WebUI et les serveurs d'outils OpenAPI*.
+
 ---
 
 ## 2. Étape 0 — Des films à la carte avec RELION

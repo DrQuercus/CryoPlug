@@ -109,9 +109,16 @@ def agent_overview(app: FastAPI) -> dict[str, Any]:
     from cryoplug.agent.skills import all_skills
 
     exe = shutil.which("cryoplug")
+    settings = app.state.manager.config.openapi
+    openapi = None
+    if settings.enabled:
+        names = toolmod.select_tools(settings.tools, local_files=False)
+        openapi = {"path": "/openapi", "spec": "openapi.json", "language": settings.language, "tools": len(names),
+                   "read_only": all(toolmod.TOOLS[n].read_only for n in names)}
     return {
         "auth": app.state.auth.mode,
         "mcp_path": "/mcp",
+        "openapi": openapi,
         "command": ["cryoplug", "mcp"],
         "command_path": str(Path(exe).resolve()) if exe else "",
         "protocol_versions": list(PROTOCOL_VERSIONS),
@@ -143,7 +150,8 @@ def install(app: FastAPI) -> None:
             names = toolmod.select_tools(request.query_params.get("tools"), local_files=False)
         except ValueError as exc:
             return JSONResponse(_error(None, INVALID_REQUEST, str(exc)), status_code=400)
-        server = Server(lambda: toolmod.Session(AsgiClient(app, request)), tools=names)
+        link = app.state.manager.config.public_url
+        server = Server(lambda: toolmod.Session(AsgiClient(app, request), link_base=link), tools=names)
         server.protocol = version or DEFAULT_PROTOCOL
         messages = message if isinstance(message, list) else [message]
         # In a worker thread: the tools call the application back (AsgiClient) and may wait (wait_for_jobs).

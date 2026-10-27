@@ -52,7 +52,8 @@ def cmd_start(args: argparse.Namespace) -> None:
     print(f"CryoPlug {__version__}  (config: {cfg.config_path or 'defaults'})")
     print_access(cfg, app.state.auth.mode, app.state.auth.token)
     uvicorn.run(app, host=cfg.host, port=cfg.port, log_level=args.log_level,
-                ssl_certfile=cfg.ssl_certfile or None, ssl_keyfile=cfg.ssl_keyfile or None)
+                ssl_certfile=cfg.ssl_certfile or None, ssl_keyfile=cfg.ssl_keyfile or None,
+                forwarded_allow_ips=",".join(cfg.trusted_proxies) or None)
 
 
 def _server_config(args: argparse.Namespace):
@@ -80,7 +81,15 @@ def print_access(cfg, mode: str | None, token: str) -> None:
         print("or with `cryoplug user`).")
         if not local and not cfg.ssl_certfile:
             print("Passwords cross the network unencrypted over http: consider HTTPS ([server] ssl_certfile).")
-    elif mode == "password":
+    ext = cfg.external_login
+    if ext is not None:
+        if mode == "users":
+            print(f"People logged in to {ext.name} (checked at {ext.url}) open the CryoPlug account with the same "
+                  f"{'e-mail address' if ext.match == 'email' else 'user name'}.")
+        else:
+            print(f"[external_login] needs user accounts: logging in with {ext.name} starts once one exists "
+                  "(`cryoplug user add NAME --admin`).")
+    if mode == "password":
         print("Log in with the password set in [server] password.")
     elif mode == "token":
         print(f"Access token: {token}  (`cryoplug url` prints these links again)")

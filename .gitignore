@@ -10,3 +10,8 @@ venv/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+# Secrets (tokens, API keys) and personal assistant settings stay out of the repository
+.env
+*.jeton
+CLAUDE.local.md
+.claude/settings.local.json

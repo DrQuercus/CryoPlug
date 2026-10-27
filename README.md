@@ -885,6 +885,57 @@ ssl_keyfile = "~/.cryoplug/key.pem"
 
 L'adresse devient `https://…` ; le navigateur affiche un avertissement la première fois (certificat auto-signé).
 
+### Se connecter avec une autre application du serveur (Open WebUI…)
+
+Si le labo a déjà une application web avec des comptes — par exemple **Open WebUI**, l'interface d'un assistant IA
+local —, CryoPlug peut accepter sa session : qui y est connecté ouvre le compte CryoPlug qui a la **même adresse
+e-mail**, sans deuxième connexion. Le navigateur envoie le cookie de session de l'application à tous les ports de la
+même machine : ouvrez CryoPlug avec le **même nom de serveur** que l'application (`http://<serveur>:39500` et
+`http://<serveur>:8080`, pas l'un par son nom et l'autre par son adresse IP).
+
+```toml
+[external_login]
+url = "http://localhost:8080/api/v1/auths/"   # « qui est connecté ? » d'Open WebUI, vu du serveur CryoPlug
+name = "Open WebUI"                          # affiché sur la page de connexion
+cookie = "token"                             # le cookie de session d'Open WebUI
+login_url = "http://<serveur>:8080/auth"     # sa page de connexion, proposée par celle de CryoPlug
+# match = "email"                            # ou "username"
+# roles = ["user", "admin"]                  # un compte Open WebUI « en attente » est refusé
+# create_accounts = false                    # true : compte CryoPlug (rôle user) créé à la première visite
+```
+
+- Il faut des **comptes CryoPlug** : l'application dit qui est la personne, son compte CryoPlug décide de ce
+  qu'elle peut faire (un administrateur d'Open WebUI n'est pas administrateur de CryoPlug). L'adresse e-mail se
+  règle dans *Settings › Users*.
+- CryoPlug ne voit aucun mot de passe : il transmet la session reçue à l'adresse `url` seulement (directement, sans
+  proxy ni redirection) et garde la réponse 60 s (`cache_seconds`) : se déconnecter de l'application ferme
+  CryoPlug dans la minute. Un compte désactivé dans CryoPlug est refusé tout de suite.
+- Se déconnecter de CryoPlug laisse la session de l'application ouverte : la page de connexion propose alors
+  **Continue as …**, et dit pourquoi une session est refusée (compte en attente, aucun compte CryoPlug avec cette
+  adresse).
+- Les assistants qui transmettent la session de la personne (serveurs d'outils d'Open WebUI en authentification
+  « session », §6) sont acceptés en `Authorization: Bearer`, avec les restrictions d'un jeton API.
+- Avec une autre application : `url` répond 200 et un JSON qui contient l'adresse (`field = "email"`, ou un chemin
+  comme `"user.email"`) pour une session valide, 401 sinon ; `roles = []` si elle n'a pas de rôles.
+
+### Derrière un reverse proxy (nginx)
+
+CryoPlug se sert à la racine d'un port, pas sous un sous-chemin, avec des comptes (ou `auth = "always"`). Le proxy
+garde le nom et le port demandés (contrôle d'origine des requêtes qui modifient quelque chose) et CryoPlug lui fait
+confiance pour l'adresse du client (limitation des essais de mot de passe) :
+
+```toml
+[server]
+host = "127.0.0.1"                 # seul le proxy y accède
+trusted_proxies = ["127.0.0.1"]    # l'adresse du proxy ("172.17.0.1" s'il tourne dans Docker sur la même machine)
+public_url = "https://<serveur>"   # l'adresse que les gens ouvrent (liens donnés par les assistants)
+```
+
+[deploy/nginx-cryoplug.conf](deploy/nginx-cryoplug.conf) donne la configuration nginx (en-têtes, taille des
+envois, délais). Si le proxy protège déjà la page avec le login d'une autre application (`auth_request`), ajoutez
+`[external_login]` pour que CryoPlug sache *qui* est connecté, et laissez les assistants appeler CryoPlug sur son
+propre port (`/mcp`, `/openapi`) plutôt qu'à travers le proxy.
+
 ### Ce qui est protégé
 
 CryoPlug lance des programmes sur le serveur et en parcourt les fichiers. Dès qu'il écoute sur le réseau (ou
@@ -906,6 +957,8 @@ qu'un compte existe), toute requête doit donc être authentifiée :
   noms `localhost` / `127.0.0.1` sont acceptés : une page web malveillante ouverte dans le même navigateur ne
   peut pas piloter CryoPlug. Sur un poste partagé sans comptes, `auth = "always"` impose aussi le jeton en
   local.
+- **Session d'une autre application** (`[external_login]`) : vérifiée auprès d'elle seule, jamais transmise
+  ailleurs ; elle n'ouvre que le compte CryoPlug de même adresse e-mail, avec ses droits.
 
 ## 6. Piloter CryoPlug avec une IA (MCP et skills)
 
@@ -916,8 +969,9 @@ seuils, images) et proposer la suite. Deux briques :
 
 - **le serveur MCP** (*Model Context Protocol*, le standard ouvert qui relie les assistants à des outils) :
   `cryoplug mcp`, lancé par le client (stdio), ou l'adresse `http://<serveur>:39500/mcp` du serveur CryoPlug
-  (*Streamable HTTP*), pour les clients qui se connectent à une URL. 26 outils, des ressources (le guide, les
-  skills) et des prompts prêts à l'emploi ;
+  (*Streamable HTTP*), pour les clients qui se connectent à une URL. 32 outils, des ressources (le guide, les
+  skills) et des prompts prêts à l'emploi ; les mêmes outils sont servis en **OpenAPI** à
+  `http://<serveur>:39500/openapi` pour les assistants qui appellent des « serveurs d'outils » (Open WebUI) ;
 - **les skills** (format ouvert *Agent Skills* : un dossier par skill avec son `SKILL.md`) : la méthode de travail et
   les règles de décision cryo-EM — quelle carte pour quoi, valeurs de référence de validation, protocoles cryoDRGN
   et RELION, dépannage.
@@ -952,8 +1006,54 @@ JSON (les applications de bureau ignorent le PATH du shell : mettez le chemin co
 
 Open WebUI : *Settings › Admin › Integrations › External Tool Servers*, type **MCP (Streamable HTTP)**, URL
 `http://<serveur>:39500/mcp`, authentification **Bearer** avec le jeton (si Open WebUI tourne dans Docker, l'adresse
-doit être joignable depuis le conteneur). Claude Code accepte aussi cette adresse :
-`claude mcp add --transport http cryoplug http://<serveur>:39500/mcp --header "Authorization: Bearer <jeton>"`.
+doit être joignable depuis le conteneur), ou type **OpenAPI** (section suivante). Claude Code accepte aussi cette
+adresse : `claude mcp add --transport http cryoplug http://<serveur>:39500/mcp --header "Authorization: Bearer <jeton>"`.
+
+### Open WebUI et les serveurs d'outils OpenAPI
+
+Open WebUI (comme d'autres assistants) appelle des outils décrits par une spécification **OpenAPI** : CryoPlug sert
+les siens à `http://<serveur>:39500/openapi` (spécification : `/openapi/openapi.json`, publique car elle ne contient
+aucune donnée). Chaque outil devient une fonction `cryoplug_<outil>` (`cryoplug_get_job`…), en **lecture seule** par
+défaut : l'assistant consulte projets, jobs, résultats, journaux et images, sans rien lancer.
+
+Dans Open WebUI : *Admin Settings › Integrations › Manage Tool Servers* (un serveur global, appelé par Open WebUI,
+pas une connexion « directe » appelée par le navigateur de chacun), type **OpenAPI**, URL
+`http://<serveur>:39500/openapi`, spécification `openapi.json`, et l'authentification :
+
+| Authentification dans Open WebUI | Ce que voit l'assistant |
+|---|---|
+| **Bearer** avec un jeton API CryoPlug (*Settings › AI agents*) | les projets du compte de ce jeton, pour tout le monde : prenez un compte dédié, non administrateur, membre des projets à montrer |
+| **Session** (la session de chaque personne), avec `[external_login]` (§5) | les projets de chaque personne, avec ses droits |
+
+Donnez ensuite l'accès au serveur d'outils aux comptes voulus et ajoutez-le au modèle (ou préréglage) de
+l'assistant. Vérifiez avec un compte Open WebUI **non administrateur** : un serveur d'outils sans droit d'accès est
+retiré en silence pour les autres comptes, alors qu'il marche pour l'administrateur.
+
+```toml
+[server]
+public_url = "http://<serveur>:39500"   # les réponses sur un projet ou un job finissent par le lien vers sa page
+
+[openapi]
+tools = "read"            # read (défaut), basic, all, ou une liste : ["server_status", "get_project", "get_job"]
+language = "fr"           # descriptions en français, pour un assistant qui travaille en français
+max_answer_chars = 6000   # au-delà, la réponse est coupée (le contexte des modèles locaux est petit)
+```
+
+- Les **descriptions**, que le modèle lit pour choisir un outil, existent en anglais et en français (une ou deux
+  phrases, chaque argument avec un exemple). Les réponses sont le texte compact des outils ; au-delà de
+  `max_answer_chars`, elles sont coupées avec les filtres qui permettent d'en demander moins. Les images (courbes
+  FSC, vignettes des cartes) s'affichent dans la conversation.
+- Les erreurs sont du JSON `{"error": "…"}` qui dit quoi corriger (« Project P9 not found (cryoplug_list_projects
+  shows your projects) »), pour que le modèle se corrige au lieu de broder.
+- Écrire (`tools = "basic"` ou `"all"`) reste limité par les droits du compte et par ce choix, jamais par une
+  consigne au modèle ; `upload_file` n'est jamais offert ici.
+- Open WebUI lit la spécification quand on enregistre le serveur : après un changement de `[openapi]` (et un
+  redémarrage de CryoPlug), enregistrez-le de nouveau.
+- Open WebUI dans Docker : l'adresse doit être joignable depuis le conteneur (sur la même machine,
+  `http://172.17.0.1:39500/openapi`, CryoPlug écoutant avec `host = "0.0.0.0"`).
+- Une phrase dans le prompt système de l'assistant l'aide à appeler les outils plutôt que de répondre de mémoire,
+  par exemple : « Pour toute question sur les projets, jobs ou résultats cryo-EM de CryoPlug, appelle les outils
+  cryoplug_… (commence par cryoplug_list_projects ou cryoplug_server_status) ; ne réponds jamais de mémoire. »
 
 ### Identité et droits de l'assistant
 
@@ -1031,7 +1131,7 @@ dans Claude Code).
 Pour garder des données non publiées sur place : un modèle qui appelle les outils de façon fiable (par exemple
 Qwen 3, Mistral Small, Llama ou gpt-oss), dans LM Studio, Open WebUI avec Ollama, Goose ou Jan. Les réponses des
 outils sont du texte compact écrit pour des modèles modestes ; prévoyez un contexte d'au moins 32 000 tokens (la
-description des 26 outils en occupe environ 5 500). Pour un petit modèle, `cryoplug mcp --tools basic` n'offre que
+description des 32 outils en occupe environ 7 000 ; celle des 17 outils de lecture, environ 2 500). Pour un petit modèle, `cryoplug mcp --tools basic` n'offre que
 les 12 outils essentiels ; `--tools read` fait un assistant qui consulte sans rien changer (pour `/mcp` :
 `http://<serveur>:39500/mcp?tools=basic`). Protocole : MCP 2025-11-25 et révisions antérieures ; les clients de la
 révision 2026-07-28 reviennent automatiquement à 2025-11-25.

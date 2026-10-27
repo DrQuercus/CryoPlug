@@ -313,7 +313,8 @@ function renderUserBadge() {
   const user = state.info.user;
   badge.hidden = !user || user.builtin;
   if (badge.hidden) return;
-  badge.title = `${user.full_name || user.username} (${user.username}, ${user.role === 'admin' ? 'administrator' : 'user'}): my account`;
+  badge.title = `${user.full_name || user.username} (${user.username}, ${user.role === 'admin' ? 'administrator' : 'user'}`
+    + `${user.external ? `, logged in with ${user.external}` : ''}): my account`;
   badge.setAttribute('aria-label', badge.title);
   clear(badge, avatar(user));
 }

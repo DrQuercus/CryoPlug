@@ -117,8 +117,10 @@ async function renderAccount(body, me) {
   } },
   h('div', { class: 'profile-head' }, avatar(me, 'big'), h('div', {},
     h('div', { class: 'profile-name' }, me.full_name || me.username),
-    h('div', { class: 'muted small' }, `${me.username} · ${ROLE[me.role] || me.role}`))),
-  field('Full name', fullName), field('E-mail', email, 'Optional, for the administrators.'),
+    h('div', { class: 'muted small' }, `${me.username} · ${ROLE[me.role] || me.role}`
+      + (me.external ? ` · logged in with ${me.external}` : '')))),
+  field('Full name', fullName), field('E-mail', email, me.external
+    ? `Your ${me.external} session opens this account when its address is this one.` : 'Optional, for the administrators.'),
   h('div', { class: 'row end' }, h('button', { class: 'btn primary', type: 'submit' }, 'Save')));
 
   const folders = h('div', { class: 'box settings-box' },
@@ -232,6 +234,11 @@ async function renderAgents(body) {
       snippet('Claude Desktop, LM Studio (mcp.json), Cursor, Gemini CLI, Jan, Goose…', JSON.stringify({ mcpServers: { cryoplug: entry } }, null, 2)),
       snippet('Clients that connect to an address (Open WebUI: Settings › Admin › Integrations, type MCP Streamable HTTP)',
         `${location.origin}${info.mcp_path}` + (bearer ? `\nAuthorization: Bearer ${bearer}` : '\n(no authentication)')),
+      info.openapi ? snippet('Chat assistants with OpenAPI tool servers (Open WebUI: Admin Settings › Integrations › Tool servers, type OpenAPI)',
+        `${location.origin}${info.openapi.path}   (specification: ${info.openapi.spec})`
+        + (bearer ? `\nAuthorization: Bearer ${bearer}` : '\n(no authentication)')
+        + `\n${info.openapi.tools} tools${info.openapi.read_only ? ', read only' : ''}, named cryoplug_…; descriptions in `
+        + `${info.openapi.language === 'fr' ? 'French' : 'English'} ([openapi] in the configuration)`) : null,
       snippet('Skills, where the assistant runs (Claude Code; Codex and other Agent Skills clients)',
         'cryoplug ai skills --install claude\ncryoplug ai skills --install agents'),
       h('p', { class: 'muted small', style: { marginBottom: 0 } }, 'On the server, ', h('code', {}, 'cryoplug ai setup'),

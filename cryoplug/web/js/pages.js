@@ -306,6 +306,15 @@ function renderSetup(body) {
       ' (ajout, suppression, mots de passe, dossiers, durée des sessions). Sur le serveur :'),
       h('pre', {}, 'cryoplug user add admin --admin          # premier compte (administrateur)\ncryoplug user add alice --generate --allow /data/alice\ncryoplug user passwd admin               # mot de passe oublié\ncryoplug user list'),
       h('p', { class: 'muted small' }, 'Les jobs tournent sous le compte Unix qui a lancé CryoPlug (comme le compte cryosparc) : pour une séparation stricte des données, utilisez aussi les permissions Unix.')),
+    ...sec('Assistants de discussion (Open WebUI)',
+      h('p', {}, 'Les outils de CryoPlug sont aussi servis en OpenAPI à ', h('code', {}, `${location.origin}/openapi`),
+        ' (spécification openapi.json), en lecture seule par défaut : un administrateur d\'Open WebUI les déclare comme serveur d\'outils '
+        + '(Admin Settings › Integrations, type OpenAPI), avec un jeton API (Settings › AI agents) ou la session de chaque personne. '
+        + 'La session d\'Open WebUI peut aussi ouvrir le compte CryoPlug de même adresse e-mail, sans deuxième connexion :'),
+      h('pre', {}, '[server]\npublic_url = "http://<serveur>:39500"   # liens vers les jobs dans les réponses\n\n[openapi]\ntools = "read"       # lecture seule\n'
+        + 'language = "fr"      # descriptions en français\n\n[external_login]\nurl = "http://localhost:8080/api/v1/auths/"\nname = "Open WebUI"\n'
+        + 'cookie = "token"\nlogin_url = "http://<serveur>:8080/auth"'),
+      h('p', { class: 'muted small' }, 'Détails dans le README (section 5 : connexion avec une autre application, reverse proxy ; section 6 : serveurs d\'outils OpenAPI).')),
     ...sec('Commandes',
       h('pre', {}, 'cryoplug init          # écrit ~/.cryoplug/config.toml\ncryoplug tools         # détecte les logiciels\ncryoplug fetch-viewer  # installe le visualiseur 3D Mol* (hors-ligne)\ncryoplug start         # serveur web + planificateur\ncryoplug url           # adresses à ouvrir (avec le jeton d\'accès)\ncryoplug user …        # comptes utilisateurs (add, passwd, list, set, delete, token)\ncryoplug mcp           # serveur MCP pour un assistant IA (lancé par le client)\ncryoplug ai …          # assistants IA : setup, skills --install, check, call, tools\ncryoplug status        # lanes et jobs actifs\ncryoplug jobtypes      # liste des jobs\ncryoplug docs-jobs     # régénère docs/JOBS.md\ncryoplug demo-data DIR # jeu de données synthétique\ncryoplug service       # fichier systemd')),
     h('p', { class: 'muted small' }, `CryoPlug ${state.info.version}`)));
