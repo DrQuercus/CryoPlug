@@ -303,6 +303,41 @@ WORKFLOWS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "relion_tomo_tm",
+        "title": "Tilt series to subtomogram average, picked by template matching",
+        "description": ("RELION 5's subtomogram averaging for a known structure, picked automatically: tilt series "
+                        "imported → motion correction → CTF estimation → tilt images excluded on limits (tilt angle, CTF "
+                        "fit) → alignment → tomograms binned for template matching (10-15 Å/voxel) → the template (a map "
+                        "of the particle) matched in every tomogram with pytom-match-pick → subtomograms extracted → 3D "
+                        "auto-refine from the template → mask → post-processing. Runs without stopping; check the scores "
+                        "and the picks of the template matching before trusting the average."),
+        "nodes": [
+            {"id": "import", "type": "relion_tomo_import", "title": "Import tilt series",
+             "ask": ["movies", "mdocs", "pixel_size", "voltage", "cs", "dose", "tilt_axis", "flip_hand"]},
+            {"id": "motion", "type": "relion_tomo_motioncorr", "inputs": {"tiltseries": ["import", "tiltseries"]},
+             "ask": ["threads"]},
+            {"id": "ctf", "type": "relion_tomo_ctffind", "inputs": {"tiltseries": ["motion", "tiltseries"]}, "ask": ["mpi"]},
+            {"id": "exclude", "type": "relion_tomo_exclude", "params": {"mode": "limits", "max_ctf_res": 20.0},
+             "inputs": {"tiltseries": ["ctf", "tiltseries"]}, "ask": ["max_tilt", "max_ctf_res"]},
+            {"id": "align", "type": "relion_tomo_align", "inputs": {"tiltseries": ["exclude", "tiltseries"]},
+             "ask": ["method", "thickness", "fiducial_diameter"]},
+            {"id": "reconstruct", "type": "relion_tomo_reconstruct", "title": "Reconstruct tomograms for template matching",
+             "params": {"binned_pixel": 12.0}, "inputs": {"tiltseries": ["align", "tiltseries"]},
+             "ask": ["binned_pixel", "thickness"]},
+            {"id": "template", "type": "import_maps", "title": "Template (map of the particle)",
+             "params": {"compute_fsc": False}, "ask": ["map"]},
+            {"id": "match", "type": "pytom_template_match",
+             "inputs": {"tomograms": ["reconstruct", "tomograms"], "template": ["template", "map"]},
+             "ask": ["particle_diameter", "n_particles", "false_positives", "symmetry", "gpus"]},
+            {"id": "extract", "type": "relion_tomo_extract", "inputs": {"particles": ["match", "particles"]},
+             "ask": ["box_A", "binned_px"]},
+            {"id": "refine", "type": "relion_tomo_refine3d", "params": {"ini_high": 40.0},
+             "inputs": {"particles": ["extract", "particles"], "map": ["template", "map"]}, "ask": ["symmetry", "mpi", "gpus"]},
+            {"id": "mask", "type": "relion_mask_create", "inputs": {"map": ["refine", "map"]}, "ask": ["lowpass", "extend", "soft_edge"]},
+            {"id": "post", "type": "relion_postprocess", "inputs": {"half_maps": ["refine", "half_maps"], "mask": ["mask", "mask"]}},
+        ],
+    },
+    {
         "id": "relion_clean_3d",
         "title": "Clean particles in 3D (decoys, heterogeneous refinement)",
         "description": ("CryoSPARC's junk removal in RELION: particles (those of a 2D selection, a RELION .star file or a "

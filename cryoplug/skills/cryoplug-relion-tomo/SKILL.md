@@ -30,10 +30,12 @@ denoising. Long GPU jobs (AreTomo2, cryoCARE, refinements): confirm with the per
 | 13. Mask and post-processing | `relion_mask_create`, `relion_postprocess` | as in single particle | corrected FSC |
 | 14. Polishing loop | `relion_tomo_ctf_refine` → `relion_tomo_frame_align` (`motion=true`) → `relion_tomo_refine3d` | half maps, mask and the post-processed map of the last refinement | resolution gain after each round |
 
+Workflow `relion_tomo_tm` runs the whole chain for a known structure without waiting (exclusion on limits, tomograms
+at 12 Å/voxel, `pytom_template_match` with the map given to its `template` step, refinement from that map).
 Workflow `relion_tomo` creates steps 1–13 (denoising on; CTF refinement, frame alignment and a last refinement
 optional). Its exclusion and picking jobs wait for a person. As an agent, use `relion_tomo_exclude` with
 `mode=limits` after showing the person the defocus and CTF-fit plots, and `relion_tomo_import_coords` for positions
-found elsewhere (template matching, crYOLO): one STAR or text file (X Y Z, or six columns with the subtomogram angles)
+found elsewhere (crYOLO, other template matching; `pytom_template_match` does template matching itself): one STAR or text file (X Y Z, or six columns with the subtomogram angles)
 per tomogram, named after it (`remove` strips a suffix such as `_coords`); `scale` brings binned coordinates to
 unbinned tilt-series pixels.
 

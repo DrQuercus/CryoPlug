@@ -473,6 +473,36 @@ def test_tilt_series_to_average_workflow(manager, tilt_series):
     assert post["map_sharp"]["meta"]["resolution"] > 0
 
 
+
+def test_template_matching_workflow(manager, tilt_series, tmp_path):
+    """The automatic workflow: tilt images excluded on limits, tomograms binned, the template matched (pytom-match-pick),
+    the subtomograms refined from the template: from the movies to the post-processed map without stopping."""
+    from tomo_data import PARTICLE_SIGMA
+    n = 32
+    z, y, x = np.indices((n, n, n)) - n // 2
+    blob = np.exp(-(x ** 2 + y ** 2 + z ** 2) / (2 * (PARTICLE_SIGMA / 2.0) ** 2)).astype(np.float32)
+    MapVolume(data=blob, voxel=np.full(3, 2.0)).write(tmp_path / "template.mrc")
+    p = manager.create_project("Template matching workflow")
+    puid = p["uid"]
+    ts = tilt_series
+    res = manager.instantiate_workflow(puid, "relion_tomo_tm", queue=True, overrides={
+        "import": {"movies": str(ts["frames"] / "*.mrc"), "mdocs": str(ts["mdoc"] / "*.mdoc"), "pixel_size": ts["pixel"],
+                   "dose": ts["dose"]},
+        "motion": {"threads": 2}, "ctf": {"mpi": 1}, "align": {"method": "imod_patch"},
+        "reconstruct": {"binned_pixel": 8.0, "thickness": 64}, "template": {"map": str(tmp_path / "template.mrc")},
+        "match": {"particle_diameter": 40.0, "n_particles": 20}, "extract": {"box_A": 128.0, "binned_px": 64, "threads": 2},
+        "refine": {"threads": 1, "gpus": 0}, "mask": {"lowpass": 10, "extend": 2, "soft_edge": 3, "threads": 1}})
+    assert not res["problems"], res["problems"]
+    by_type = {j["type"]: j for j in res["jobs"]}
+    assert by_type["relion_tomo_refine3d"]["inputs"]["map"]["job"] == by_type["import_maps"]["uid"]
+    uids = [j["uid"] for j in res["jobs"]]
+    run_until_done(manager, puid, uids, timeout=400)
+    states = {j["type"] + j["uid"]: manager.job(puid, j["uid"])["status"] for j in res["jobs"]}
+    assert all(s == "completed" for s in states.values()), states
+    match = _outs(manager.job(puid, by_type["pytom_template_match"]["uid"]))
+    assert match["particles"]["meta"]["n_particles"] > 0
+    assert _outs(manager.job(puid, by_type["relion_postprocess"]["uid"]))["map_sharp"]["meta"]["resolution"] > 0
+
 def test_import_prefix_and_checks(manager, tilt_series, tmp_path):
     """The prefix added after relion_python_tomo_import (RELION 5.1.1 finds no tilt series with --prefix); an mdoc file
     naming no tilt image among the files refused (RELION would pair the others with the wrong mdoc files); images

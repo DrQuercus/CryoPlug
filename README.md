@@ -490,7 +490,7 @@ débruitage) → **CTF estimation (tilt series)** → **Exclude tilt images** �
 (pytom-match-pick)**, ou **Import tomogram coordinates**) → **Extract subtomograms** → **Reconstruct particle** → **3D initial model**, **3D classification** et
 **3D auto-refine (subtomograms)** (`relion_refine --ios`) → masque et post-traitement, puis **CTF refinement
 (tomography)** et **Frame alignment / polishing (tomography)**. Le workflow *Tilt series to subtomogram average
-(RELION 5)* crée la chaîne.
+(RELION 5)* crée la chaîne ; *… picked by template matching* la fait tourner sans arrêt pour une structure connue.
 
 - Les commandes sont celles de l'interface de RELION 5.1 ; les fichiers (jeux de séries, `tomograms.star`, jeux de
   particules et `optimisation_set.star`) sont ceux de RELION et se relisent dans RELION.

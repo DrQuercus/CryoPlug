@@ -489,7 +489,10 @@ job, qui écrivent les mêmes fichiers.
 
 Le workflow **Tilt series to subtomogram average (RELION 5)** crée toute la chaîne : elle tourne jusqu'à l'exclusion
 des images, qui attend votre tri, puis (après cryoCARE) jusqu'au pointage, qui attend vos clics, puis va seule jusqu'au
-post-traitement ; la CTF refinement, l'alignement des trames et un dernier raffinement sont proposés en option.
+post-traitement ; la CTF refinement, l'alignement des trames et un dernier raffinement sont proposés en option. Pour une
+structure connue, le workflow **Tilt series to subtomogram average, picked by template matching** tourne sans arrêt :
+images exclues sur des limites, tomogrammes binnés (12 Å par voxel), template matching avec la carte donnée, extraction,
+raffinement depuis cette carte, masque et post-traitement.
 
 **Configurer.** Page **Tools** : **RELION** (son dossier `bin`, avec les programmes Python `relion_python_tomo_*`),
 **CTFFIND**, et selon l'alignement **AreTomo2** ou **IMOD** (`batchruntomo`) ; **cryoCARE** pour le débruitage (le
