@@ -648,7 +648,8 @@ def server_status(s: Session, a: Args) -> str:
     lines.append(f"Active jobs: {len(active) or 'none'}")
     for j in active[:15]:
         where = "another user's job" if j.get("hidden") else f"{j['project_uid']}/{j['uid']}"
-        lines.append(f"  {where} {j['status']} {j['type']}" + (f" — {short(j.get('message'), 100)}" if j.get("message") else ""))
+        place = f" #{j['position']} on {j.get('lane')}" if j.get("position") else ""
+        lines.append(f"  {where} {j['status']}{place} {j['type']}" + (f" — {short(j.get('message'), 100)}" if j.get("message") else ""))
     if len(active) > 15:
         lines.append(f"  … {len(active) - 15} more")
     found, missing, off = [], [], []
@@ -1273,6 +1274,20 @@ def kill_job(s: Session, a: Args) -> str:
         return f"{job['uid']} is {job['status']}: nothing to stop."
     after = s.post(f"/api/projects/{p['uid']}/jobs/{job['uid']}/kill")
     return f"{p['uid']}/{job['uid']}: {job['status']} → {after['status']}" + (f" ({after['message']})" if after.get("message") else "")
+
+
+@tool("prioritize_job", "Move a job to the front of the queue", """
+Move a queued job to the front of the queue of its lane: it launches before the other queued jobs, and the jobs behind
+it on that lane wait while it waits for a slot or GPUs. Moving it ahead of other people's jobs takes an administrator.""",
+      {"project": PROJECT, "job": JOB}, ("project", "job"), read_only=False, idempotent=True)
+def prioritize_job(s: Session, a: Args) -> str:
+    p, job = project_and_job(s, a)
+    if job["status"] != "queued":
+        return f"{job['uid']} is {job['status']}: only queued jobs wait in the queue (queue_job queues a job in building state)."
+    s.post(f"/api/projects/{p['uid']}/jobs/{job['uid']}/prioritize")
+    detail = s.job(p["uid"], job["uid"])
+    place = detail.get("queue_position")
+    return f"{p['uid']}/{job['uid']} is " + (f"number {place} in the queue of lane {detail.get('lane')}" if place else "queued") + "."
 
 
 @tool("control_job", "Steer a running live job", """

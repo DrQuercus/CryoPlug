@@ -200,6 +200,21 @@ instant, les dernières valeurs restent affichées sous un bandeau d'erreur (et 
 plus laisse les cartes GPU, grisées, avec la raison).
 Les administrateurs règlent les lanes dans **Settings › Compute**.
 
+**Ordre de la file.** Les jobs en attente partent dans l'ordre où ils ont été mis en file ; *Queue* montre la
+place de chacun dans la file de sa lane (#1 : le prochain). **To front** (ou *Move to the front of the queue* dans
+le menu ⋯ du job et dans ses détails) fait passer un job en tête de sa lane : il part avant les autres, et tant
+qu'il attend un slot ou un GPU, les jobs derrière lui sur cette lane attendent aussi (« Waiting behind P1/J12 »),
+pour qu'un job à 4 GPU ne soit pas doublé sans fin par des jobs plus petits. Le dernier job passé en tête passe
+devant les précédents ; retiré de la file (*Dequeue*) puis remis, un job reprend sa place à la fin. Avec des
+comptes, chacun réordonne ses propres jobs ; passer devant les jobs des autres demande un administrateur.
+
+**Notifications.** La cloche en bas de la barre latérale active les notifications : quand un job se termine,
+échoue, est arrêté ou attend une action de votre part (tri de micrographies, sélection de classes…), une
+notification du bureau s'affiche si l'onglet est en arrière-plan (un clic ouvre le job), un bandeau dans la page
+sinon, et le titre de l'onglet compte ce qui s'est passé pendant votre absence (« (2) CryoPlug »). Seuls les jobs
+des projets où vous travaillez sont annoncés. Les navigateurs n'autorisent les notifications du bureau qu'en HTTPS
+ou sur `localhost` (un tunnel SSH convient) : ailleurs, bandeaux et titre de l'onglet seulement.
+
 ### Ouvrir CryoPlug depuis votre portable
 
 Par défaut, l'interface ne s'ouvre que sur le serveur lui-même (`http://localhost:39500`). Pour l'utiliser
@@ -1328,6 +1343,7 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | « Resolution is unknown » | Pas de FSC à l'import | Renseignez le paramètre *Resolution* |
 | Job bloqué en `queued` | Parent pas fini, slot ou GPU occupé, parent en échec | Lisez le message de la carte (« Waiting for J3 », « Blocked: J3 failed ») et **Resources › Queue** |
 | « Waiting for GPU 1 (used by P2/J5) » | Le GPU choisi pour ce job est pris par un autre job | Attendre, ou *Dequeue* puis *Edit* : GPU *Automatic* ou un autre GPU |
+| « Waiting behind P1/J12 (moved to the front of the queue) » | Un job passé en tête de la lane attend ses ressources : les suivants le laissent passer | Attendre, ou *Dequeue* ce job-là |
 | Aucun GPU dans **Resources** | `nvidia-smi` absent du PATH du serveur, ou pilote NVIDIA en panne (message affiché) | Indiquer son chemin : `[monitor] nvidia_smi = "/usr/bin/nvidia-smi"` dans la configuration, puis redémarrer |
 | Lane SLURM : *Test* répond « sinfo: command not found » | Les commandes SLURM ne sont pas accessibles au service CryoPlug | Installer les clients SLURM sur le serveur (ou lancer CryoPlug sur un nœud de connexion du cluster), avec le même PATH que le service |
 | Job SLURM qui reste en attente | Partition pleine, durée ou mémoire demandées trop grandes | Onglet **Cluster** de *Resources* ; demander moins, ou une autre partition dans *Compute* |

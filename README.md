@@ -658,7 +658,13 @@ défaut ; rien n'est à choisir pour lancer un job, mais tout peut l'être.
   mémoire GPU ; filtre *CryoPlug jobs only*). Graphes des 5 dernières minutes avec valeurs au survol ;
   mesures toutes les 2 s, seulement pendant que quelqu'un regarde la page. Les rafraîchissements gardent la
   position de la page ; une réponse manquée laisse les dernières valeurs sous un bandeau d'erreur.
-- **Queue** : chaque lane (jobs en cours / en file, GPU occupés et par quel job) et la liste des jobs actifs.
+- **Queue** : chaque lane (jobs en cours / en file, GPU occupés et par quel job) et la liste des jobs actifs,
+  ceux en attente dans l'ordre où ils partiront (#1, #2… par lane). **To front** fait passer un job en tête de
+  sa lane : les suivants le laissent passer tant qu'il attend un slot ou un GPU (passer devant les jobs des
+  autres : administrateurs).
+- **Notifications** : la cloche de la barre latérale annonce les jobs terminés, en échec, arrêtés ou qui
+  attendent une action (notification du bureau si l'onglet est en arrière-plan — HTTPS ou `localhost` —,
+  bandeau dans la page sinon, compteur dans le titre de l'onglet).
 - **Cluster** (s'il y a une lane SLURM) : partitions (nœuds par état, CPU utilisés, GPU, mémoire par nœud,
   limite de temps), jobs en cours et en attente.
 - Avec des comptes, tout le monde voit l'occupation de la machine, mais pas les commandes ni les jobs des
@@ -932,6 +938,7 @@ Un jeton se révoque dans *Settings › AI agents* ou avec `cryoplug user token 
 | `find_outputs`, `create_job`, `update_job`, `queue_job`, `clone_job` | brancher les sorties (`"J3.map_sharp"`, ou `"J3"` : la bonne sortie est choisie), créer, modifier, mettre en file |
 | `get_job`, `get_job_log`, `get_job_images`, `wait_for_jobs` | résultats (métriques, tableaux, courbes résumées et seuils franchis), journal, images, attente avec progression |
 | `kill_job`, `clear_job` | arrêter un job ; remettre en préparation un job en échec |
+| `prioritize_job` | faire passer un job en attente en tête de la file de sa lane |
 | `control_job` | piloter un job « live » : arrêt après le cycle en cours (avec ses sorties), pause, reprise, nouvelles limites d'acceptation |
 | `resume_job`, `mark_job_complete` | relancer une classification, un modèle initial ou un raffinement RELION en échec depuis sa dernière itération (Continue de RELION), ou le terminer avec les sorties de cette itération (Mark as complete de CryoSPARC) |
 | `clone_jobs`, `create_workspace` | copier une chaîne de jobs (les copies reliées entre elles) ; ranger des jobs dans un workspace (`get_project workspace=W1`, étiquettes avec `update_job tags=`) |

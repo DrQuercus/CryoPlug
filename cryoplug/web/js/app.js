@@ -3,6 +3,7 @@ import { api } from './api.js';
 import { closeBuilder, openBuilder, refreshBuilderInputs, renderBuilder } from './builder.js';
 import { closeDetail, detailIsLive, detailMode, detailUid, openDetail, refreshDetail } from './detail.js';
 import { installFileDrop } from './importer.js';
+import { checkNotifications, installNotifications } from './notify.js';
 import { renderHelp, renderProjects, renderTools } from './pages.js';
 import { clearSelection, renderJobs, renderProject, selectAllShown } from './project.js';
 import { currentWorkspace, leaveWorkspaces, loadWorkspaces } from './workspaces.js';
@@ -299,6 +300,7 @@ async function poll() {
       const badge = document.getElementById('queue-badge');
       badge.hidden = n === 0;
       badge.textContent = String(n);
+      await checkNotifications(q);
     }
   } catch (e) {
     console.warn('poll failed', e);
@@ -337,11 +339,13 @@ async function start() {
   renderUserBadge();
   if (!ready) {
     document.querySelectorAll('.nav-link').forEach((a) => { a.hidden = true; });
+    document.getElementById('notify-toggle').hidden = true;
     renderPasswordChange(content);
     return;
   }
   window.addEventListener('hashchange', () => { route().catch((e) => guard(Promise.reject(e))); });
   installFileDrop(); // files dragged from the computer onto a project: import them
+  installNotifications(); // the bell: notified when jobs finish
   await route();
   restoreScroll();
   setInterval(poll, 2500);

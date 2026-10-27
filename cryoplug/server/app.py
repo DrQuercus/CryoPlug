@@ -6,6 +6,7 @@ import re
 import socket
 import stat
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -157,8 +158,25 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
                 "hidden": True, "project_uid": "", "uid": "", "project_title": "", "message": "", "type": j["type"],
                 "title": _type_title(j["type"]), "status": j["status"], "lane": j.get("lane"), "gpus": j.get("gpus") or [],
                 "owner": j.get("owner") or "", "created_at": j.get("created_at"), "queued_at": j.get("queued_at"),
-                "started_at": j.get("started_at"), "ended_at": j.get("ended_at")} for j in overview["jobs"]]
+                "started_at": j.get("started_at"), "ended_at": j.get("ended_at"), "position": j.get("position")}
+                for j in overview["jobs"]]
         return overview
+
+    @app.get("/api/notifications")
+    def notifications(request: Request, since: float = Query(0.0)) -> dict[str, Any]:
+        """The jobs (of the projects one works in) that completed, failed or were killed after ``since``, for desktop
+        notifications; ``now`` is the next ``since``. Without ``since``, none: only what ends from now on."""
+        user = current_user(request)
+        now = time.time()
+        if since <= 0:
+            return {"now": now, "jobs": []}
+        projects = {p["uid"]: p for p in manager.db.list_projects(include_archived=True)}
+        jobs = [j for j in manager.db.jobs_ended_since(max(since, now - 86400))
+                if j["project_uid"] in projects and can_access(user, projects[j["project_uid"]])]
+        return {"now": now, "jobs": [{
+            "project_uid": j["project_uid"], "uid": j["uid"], "title": j["title"], "type": j["type"], "status": j["status"],
+            "ended_at": j["ended_at"], "error": (j.get("error") or "")[:200], "message": j.get("message") or "",
+            "project_title": projects[j["project_uid"]].get("title", "")} for j in jobs[-50:]]}
 
     def _type_title(name: str) -> str:
         try:
@@ -402,6 +420,18 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     @app.post("/api/projects/{puid}/jobs/{juid}/kill")
     def kill_job(puid: str, juid: str) -> dict[str, Any]:
         return manager.kill_job(puid, juid)
+
+    @app.post("/api/projects/{puid}/jobs/{juid}/prioritize")
+    def prioritize_job(puid: str, juid: str, request: Request) -> dict[str, Any]:
+        """A queued job moved to the front of the queue of its lane (ahead of other people's jobs: administrators)."""
+        user = current_user(request)
+        if is_admin(user):
+            return manager.prioritize_job(puid, juid)
+
+        def may_overtake(job: dict[str, Any]) -> bool:
+            project = manager.db.get_project(job["project_uid"])
+            return project is not None and can_access(user, project)
+        return manager.prioritize_job(puid, juid, may_overtake)
 
     @app.post("/api/projects/{puid}/jobs/{juid}/control")
     def control_job(puid: str, juid: str, body: dict = Body(...)) -> dict[str, Any]:

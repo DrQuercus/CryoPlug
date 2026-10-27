@@ -128,6 +128,9 @@ const ICONS = {
   film: 'M4 4h16v16H4zM8 4v16M16 4v16M4 8h4M4 12h4M4 16h4M16 8h4M16 12h4M16 16h4',
   picks: 'M7.5 10a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM16.5 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM10 19.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 3h3M3 3v3M21 21h-3M21 21v-3',
   tag: 'M3 12V4h8l10 10-8 8zM7.5 7.5h.01',
+  up: 'M12 19V5M6 11l6-6 6 6',
+  bell: 'M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0',
+  'bell-off': 'M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0M3 3l18 18',
   workspace: 'M3 7h7l2 2h9v10H3zM3 7V5h6l2 2',
   blank: 'M0 0', // draws nothing: keeps menu labels aligned
 };

@@ -93,6 +93,8 @@ export const api = {
   updateJob: (p, j, body) => request('PATCH', `/api/projects/${p}/jobs/${j}`, body),
   queueJob: (p, j, lane) => request('POST', `/api/projects/${p}/jobs/${j}/queue`, lane ? { lane } : {}),
   killJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/kill`),
+  prioritizeJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/prioritize`),
+  notifications: (since) => request('GET', `/api/notifications?since=${since || 0}`),
   clearJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/clear`),
   resumeJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/continue`, {}),
   completeJob: (p, j) => request('POST', `/api/projects/${p}/jobs/${j}/complete`, {}),

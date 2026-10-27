@@ -256,6 +256,9 @@ def test_agent_tools_end_to_end(app_client, manager, synthetic):
     resumed = call(s, "resume_job", project="P1", job="J2")  # completed: nothing to resume
     assert resumed.error and "failed or killed" in resumed.text
     call(s, "queue_job", project="P1", job="J3")
+    assert "is number 1 in the queue of lane" in call(s, "prioritize_job", project="P1", job="J3").text
+    assert "only queued jobs" in call(s, "prioritize_job", project="P1", job="J2").text
+    assert "P1/J3 queued #1 on" in call(s, "server_status").text
     killed = call(s, "kill_job", project="P1", job="J3")
     assert "queued → building" in killed.text
 

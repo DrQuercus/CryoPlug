@@ -94,7 +94,7 @@ export async function refreshDetail(force = false) {
     if (D.uid !== uid || state.project?.uid !== puid) return; // another job was opened meanwhile
     const changed = force || !D.job || D.job.status !== job.status || JSON.stringify(D.job.outputs) !== JSON.stringify(job.outputs)
       || D.job.progress !== job.progress || D.job.message !== job.message || JSON.stringify(D.job.candidates) !== JSON.stringify(job.candidates)
-      || D.job.title !== job.title;
+      || D.job.title !== job.title || D.job.queue_position !== job.queue_position;
     D.job = job;
     // newer than the job list (the status changed in between): bring the cards and the summary up to date now
     if (state.jobsByUid[uid] && state.jobsByUid[uid].status !== job.status) refreshJobs().catch(() => {});
@@ -214,6 +214,7 @@ const dependentsOf = (job) => job.dependents || state.jobs.filter((j) => Object.
 
 const jobOps = {
   queue: (job) => act(api.queueJob(state.project.uid, job.uid), 'Queued'),
+  front: (job) => act(api.prioritizeJob(state.project.uid, job.uid), 'Moved to the front of the queue'),
   edit: (job) => { openBuilder({ editing: job }); navigate(`#/p/${state.project.uid}/edit/${job.uid}`); },
   async stop(job) {
     if (job.status !== 'queued' && !(await confirmDialog('Stop job', `Stop ${job.uid} (${job.title})?`, 'Stop', true))) return;
@@ -264,6 +265,7 @@ export function jobMenuItems(job, anchor, { withOpen = false } = {}) {
     items.push({ key: 'edit', label: 'Edit parameters', ic: 'edit', action: () => jobOps.edit(job) });
   }
   if (ACTIVE.includes(job.status) || job.status === 'waiting') items.push({ key: 'stop', label: stopLabel(job), ic: 'stop', action: () => jobOps.stop(job) });
+  if (job.status === 'queued') items.push({ key: 'front', label: 'Move to the front of the queue', ic: 'up', action: () => jobOps.front(job) });
   if (['completed', 'running', 'queued'].includes(job.status)) {
     items.push({ key: 'continue', label: 'Continue with…', ic: 'next', action: () => continueMenu(anchor, job) });
   }
@@ -424,7 +426,12 @@ function renderOverview(body) {
   const puid = state.project.uid;
   if (job.error) body.appendChild(h('div', { class: 'alert error' }, job.error));
   if (ACTIVE.includes(job.status)) {
-    body.appendChild(h('div', { class: 'alert info' }, job.message || job.status,
+    const place = job.status === 'queued' && job.queue_position
+      ? h('div', { class: 'small row', style: { marginTop: '6px', gap: '8px' } },
+        job.queue_position === 1 ? `Next on lane ${job.lane}` : `Number ${job.queue_position} in the queue of lane ${job.lane}`,
+        job.queue_position > 1 ? btn('Move to the front', () => jobOps.front(job), { cls: 'small', ic: 'up' }) : null)
+      : null;
+    body.appendChild(h('div', { class: 'alert info' }, job.message || job.status, place,
       job.status === 'running' ? h('div', { class: 'progress', style: { marginTop: '6px' } }, h('i', { style: { width: `${Math.round((job.progress || 0) * 100)}%` } })) : null));
   }
   if (job.status === 'building' && job.problems && job.problems.length) {

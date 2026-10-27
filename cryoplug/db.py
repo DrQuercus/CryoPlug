@@ -107,6 +107,7 @@ MIGRATIONS = (
     ("jobs", "workspaces", "TEXT DEFAULT '[]'"),
     ("jobs", "tags", "TEXT DEFAULT '[]'"),
     ("jobs", "disk_bytes", "INTEGER"),  # size of the job folder when it last changed (None: not measured)
+    ("jobs", "priority", "INTEGER DEFAULT 0"),  # queued jobs launch by priority (highest first), then in queue order
 )
 
 JSON_FIELDS = {"params", "inputs", "outputs", "resources", "highlights", "gpus", "requested", "workspaces", "tags"}
@@ -125,7 +126,7 @@ JOB_COLUMNS = (
     "project_uid", "uid", "num", "type", "title", "status", "params", "inputs", "outputs", "lane",
     "resources", "highlights", "notes", "progress", "message", "error", "pid", "cluster_job_id",
     "gpus", "created_at", "queued_at", "started_at", "ended_at", "created_by", "requested", "workspaces", "tags",
-    "disk_bytes",
+    "disk_bytes", "priority",
 )
 PROJECT_COLUMNS = ("uid", "num", "title", "description", "dir", "created_at", "updated_at", "archived", "job_counter",
                    "owner", "members")
@@ -322,6 +323,11 @@ class Database:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY project_uid, num"
         return [self._job_from_row(r) for r in self._all(sql, args)]
+
+    def jobs_ended_since(self, since: float) -> list[dict[str, Any]]:
+        """Jobs that completed, failed or were killed after ``since`` (oldest first)."""
+        return [self._job_from_row(r) for r in self._all(
+            "SELECT * FROM jobs WHERE ended_at > ? AND status IN ('completed', 'failed', 'killed') ORDER BY ended_at", (since,))]
 
     def update_job(self, project_uid: str, uid: str, **fields: Any) -> None:
         allowed = {}

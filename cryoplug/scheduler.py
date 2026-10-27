@@ -75,11 +75,16 @@ class Scheduler:
 
     def launch_ready(self) -> None:
         m = self.manager
-        queued = sorted(m.db.list_jobs(statuses=["queued"]), key=lambda j: j.get("queued_at") or 0)
+        queued = m.queue_order(m.db.list_jobs(statuses=["queued"]))
         if not queued:
             return
         active = m.db.list_jobs(statuses=["launched", "running"])
+        held: dict[str, dict[str, Any]] = {}  # lane -> the job moved to the front that waits for its resources
         for job in queued:
+            first = held.get(job.get("lane") or "")
+            if first is not None and (job.get("priority") or 0) < (first.get("priority") or 0):
+                self._message(job, f"Waiting behind {first['project_uid']}/{first['uid']} (moved to the front of the queue)")
+                continue
             inputs, waiting, broken = m.resolve_inputs(job)
             if broken:
                 self._message(job, "Blocked: " + "; ".join(broken))
@@ -95,6 +100,7 @@ class Scheduler:
             on_lane = [j for j in active if j.get("lane") == lane_cfg.name]
             if len(on_lane) >= lane_cfg.max_jobs:
                 self._message(job, f"Waiting for a free slot on lane '{lane_cfg.name}'")
+                self._hold(held, job)
                 continue
             resources = job.get("resources") or {}
             need = int(resources.get("num_gpus", 0))
@@ -106,6 +112,7 @@ class Scheduler:
                     taken = [g for g in wanted if g in busy]
                     if taken:
                         self._message(job, "Waiting for " + ", ".join(f"GPU {g} (used by {busy[g]})" for g in taken))
+                        self._hold(held, job)
                         continue
                     gpus = wanted
                 else:  # automatic: the free GPUs with the least memory in use (other programs count too)
@@ -114,6 +121,7 @@ class Scheduler:
                         detail = ", ".join(f"GPU {g}: {busy[g]}" for g in lane_cfg.gpus if g in busy)
                         self._message(job, f"Waiting for {need} free GPU{'s' if need > 1 else ''} on lane '{lane_cfg.name}'"
                                       + (f" ({detail})" if detail else ""))
+                        self._hold(held, job)
                         continue
                     load = m.gpu_load()
                     gpus = sorted(free, key=lambda g: (load.get(g, 0.0), g))[:need]
@@ -121,6 +129,12 @@ class Scheduler:
             job = m.job(job["project_uid"], job["uid"])
             if job["status"] == "launched":
                 active.append(job)
+
+    @staticmethod
+    def _hold(held: dict[str, dict[str, Any]], job: dict[str, Any]) -> None:
+        """A job moved to the front keeps its lane: the jobs behind it wait until it has its resources."""
+        if (job.get("priority") or 0) > 0:
+            held.setdefault(job.get("lane") or "", job)
 
     def _busy_gpus(self, active: list[dict[str, Any]]) -> dict[int, str]:
         """GPUs held by running jobs of local lanes (two local lanes may share GPUs) -> "P1/J5"."""

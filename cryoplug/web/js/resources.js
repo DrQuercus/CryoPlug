@@ -429,14 +429,19 @@ function drawQueue(body, q, refresh) {
     h('td', {}, j.hidden ? h('span', { class: 'muted' }, '—') : h('a', { href: `#/p/${j.project_uid}/${j.uid}` }, `${j.project_uid} / ${j.uid}`)),
     h('td', {}, j.title, h('div', { class: 'muted small' }, j.hidden ? `job of ${j.owner || 'another user'}`
       : [j.project_title, accounts() && j.owner && j.owner !== me().username ? j.owner : null].filter(Boolean).join(' · '))),
-    h('td', {}, statusChip(j.status)),
+    h('td', {}, statusChip(j.status), j.position ? h('span', { class: 'queue-pos', title: `Place in the queue of lane ${j.lane}` }, `#${j.position}`) : null),
     h('td', { class: 'small' }, j.message || ''),
     h('td', {}, j.lane || ''), h('td', {}, (j.gpus || []).join(', ')), h('td', {}, jobDuration(j)),
-    h('td', {}, j.hidden ? null : btn(j.status === 'queued' ? 'Dequeue' : 'Stop', async () => {
-      if (j.status !== 'queued' && !(await confirmDialog('Stop job', `Stop ${j.project_uid}/${j.uid}?`, 'Stop', true))) return;
-      try { await guard(api.killJob(j.project_uid, j.uid), 'Stopped'); } catch { return; }
-      refresh();
-    }, { cls: 'small danger' }))));
+    h('td', { class: 'row-actions' }, j.hidden ? null : [
+      j.position > 1 ? btn('To front', async () => {
+        try { await guard(api.prioritizeJob(j.project_uid, j.uid), `${j.uid} moved to the front of the queue`); } catch { return; }
+        refresh();
+      }, { cls: 'small', ic: 'up', title: 'Launch it before the other queued jobs of its lane' }) : null,
+      btn(j.status === 'queued' ? 'Dequeue' : 'Stop', async () => {
+        if (j.status !== 'queued' && !(await confirmDialog('Stop job', `Stop ${j.project_uid}/${j.uid}?`, 'Stop', true))) return;
+        try { await guard(api.killJob(j.project_uid, j.uid), 'Stopped'); } catch { return; }
+        refresh();
+      }, { cls: 'small danger' })])));
   clear(body,
     h('div', { class: 'lane-cards' }, q.lanes.map((l, i) => laneCard(l, i === 0, holders))),
     h('div', { class: 'section', dataset: { anchor: 'jobs' } }, h('h4', {}, 'Active and queued jobs'),

@@ -230,6 +230,104 @@ def test_scheduler_gives_the_chosen_or_least_loaded_gpu(manager):
     assert (manager.job_dir(puid, auto["uid"]) / "gpus.txt").read_text().strip() == "1"
 
 
+def test_move_to_front_of_queue(manager):
+    """A queued job moved to the front launches first; the jobs behind it on its lane wait while it waits for GPUs."""
+    puid = manager.create_project("Queue order")["uid"]
+    busy = [gpu_job(manager, puid) for _ in range(2)]
+    for g, j in enumerate(busy):
+        manager.db.update_job(puid, j["uid"], status="running", lane="local", gpus=[g], started_at=time.time())
+    a, b, c = (gpu_job(manager, puid) for _ in range(3))
+    cpu = manager.create_job(puid, "custom_command", {"command": "true"})
+    for j in (a, b, c, cpu):
+        manager.queue_job(puid, j["uid"])
+
+    def order():
+        queued = [j for j in manager.queue_overview()["jobs"] if j["status"] == "queued"]
+        assert [j["position"] for j in queued] == list(range(1, len(queued) + 1))
+        return [j["uid"] for j in queued]
+    assert order() == [a["uid"], b["uid"], c["uid"], cpu["uid"]]
+    moved = manager.prioritize_job(puid, c["uid"])
+    assert moved["priority"] == 1 and moved["message"] == "Moved to the front of the queue"
+    assert order() == [c["uid"], a["uid"], b["uid"], cpu["uid"]] and manager.job_detail(puid, a["uid"])["queue_position"] == 2
+    manager.prioritize_job(puid, b["uid"])  # the latest moved goes first
+    assert order() == [b["uid"], c["uid"], a["uid"], cpu["uid"]]
+    assert manager.prioritize_job(puid, b["uid"])["priority"] == 2  # already first: unchanged
+
+    # both GPUs busy: b waits for one and keeps the lane, the jobs behind it wait for b (the CPU job too)
+    Scheduler(manager).launch_ready()
+    assert manager.job(puid, b["uid"])["message"].startswith("Waiting for 1 free GPU")
+    for j in (c, a, cpu):
+        assert manager.job(puid, j["uid"])["message"] == f"Waiting behind {puid}/{b['uid']} (moved to the front of the queue)"
+    # a GPU frees up: b gets it; c (moved too) is next and keeps the lane in turn
+    manager.db.update_job(puid, busy[0]["uid"], status="completed", gpus=[])
+    Scheduler(manager).launch_ready()
+    launched = manager.job(puid, b["uid"])
+    assert launched["status"] == "launched" and launched["gpus"] == [0]
+    assert manager.job(puid, c["uid"])["message"].startswith("Waiting for 1 free GPU")
+    assert manager.job(puid, a["uid"])["message"] == f"Waiting behind {puid}/{c['uid']} (moved to the front of the queue)"
+
+    # out of the queue and back: at the end, nothing held, the CPU job runs while a waits for a GPU
+    manager.kill_job(puid, c["uid"])
+    assert manager.job(puid, c["uid"])["priority"] == 0
+    manager.queue_job(puid, c["uid"])
+    assert order() == [a["uid"], cpu["uid"], c["uid"]]
+    Scheduler(manager).launch_ready()
+    assert manager.job(puid, a["uid"])["message"].startswith("Waiting for 1 free GPU")
+    assert manager.job(puid, cpu["uid"])["status"] == "launched"
+    with pytest.raises(ManagerError, match="Only queued jobs"):
+        manager.prioritize_job(puid, cpu["uid"])
+    with pytest.raises(ManagerError, match="administrator"):
+        manager.prioritize_job(puid, c["uid"], may_overtake=lambda job: False)
+    for j in (a, c):
+        manager.kill_job(puid, j["uid"])
+    manager.db.update_job(puid, busy[1]["uid"], status="killed", gpus=[])
+    run_until_done(manager, puid, [b["uid"], cpu["uid"]])
+    assert manager.job(puid, b["uid"])["status"] == manager.job(puid, cpu["uid"])["status"] == "completed"
+
+
+def test_queue_order_and_notifications_over_the_api(manager, synthetic, tmp_path):
+    """People reorder their own queued jobs (administrators anyone's); notifications list the jobs that ended in the
+    projects one works in."""
+    admin, _ = setup_accounts(manager, tmp_path, synthetic)
+    try:
+        with make_client(manager) as bob:
+            login(bob, "bob")
+            mine = bob.post("/api/projects", json={"title": "Bob's"}).json()["uid"]
+            theirs = admin.post("/api/projects", json={"title": "Admin's"}).json()["uid"]
+            assert bob.get("/api/notifications").json()["jobs"] == []
+            since = bob.get("/api/notifications").json()["now"]
+
+            def queued(puid):
+                j = manager.create_job(puid, "custom_command", {"command": "true"})
+                manager.queue_job(puid, j["uid"])
+                return puid, j["uid"]
+
+            def order(client):
+                return [(j["project_uid"], j["uid"], j["position"]) for j in client.get("/api/queue").json()["jobs"]]
+            b1, b2 = queued(mine), queued(mine)
+            r = bob.post(f"/api/projects/{mine}/jobs/{b2[1]}/prioritize")
+            assert r.status_code == 200 and r.json()["priority"] == 1
+            a1, b3 = queued(theirs), queued(mine)
+            assert order(bob) == [(*b2, 1), (*b1, 2), ("", "", 3), (*b3, 4)]  # the administrator's job: hidden, in its place
+            r = bob.post(f"/api/projects/{mine}/jobs/{b3[1]}/prioritize")
+            assert r.status_code == 400 and "Only an administrator" in r.json()["detail"] and f"{theirs}/{a1[1]}" in r.json()["detail"]
+            assert bob.post(f"/api/projects/{theirs}/jobs/{a1[1]}/prioritize").status_code == 404  # not his project
+            assert admin.post(f"/api/projects/{theirs}/jobs/{a1[1]}/prioritize").status_code == 200
+            assert order(admin) == [(*a1, 1), (*b2, 2), (*b1, 3), (*b3, 4)]
+
+            for puid, juid in (a1, b1):
+                manager.db.update_job(puid, juid, status="completed", ended_at=time.time())
+            manager.db.update_job(*b2, status="failed", ended_at=time.time(), error="Exit code 1")
+            got = bob.get("/api/notifications", params={"since": since}).json()
+            assert [(j["project_uid"], j["uid"], j["status"]) for j in got["jobs"]] == [(*b1, "completed"), (*b2, "failed")]
+            assert got["jobs"][1]["error"] == "Exit code 1" and got["jobs"][0]["project_title"] == "Bob's" and got["now"] > since
+            seen = {(j["project_uid"], j["uid"]) for j in admin.get("/api/notifications", params={"since": since}).json()["jobs"]}
+            assert seen == {a1, b1, b2}
+            assert bob.get("/api/notifications", params={"since": got["now"]}).json()["jobs"] == []
+    finally:
+        admin.__exit__(None, None, None)
+
+
 def test_cpu_threads_only_when_chosen(manager):
     p = manager.create_project("Threads")
     job = manager.create_job(p["uid"], "custom_command", {"command": "printenv OMP_NUM_THREADS > threads.txt || echo none > threads.txt"})

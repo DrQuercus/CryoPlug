@@ -280,7 +280,7 @@ class Manager:
     # Every job folder keeps a copy of the job's record (cryoplug_job.json) and the project folder its description and
     # workspaces (cryoplug_project.json): a folder detached from one CryoPlug can be attached to another (or after the
     # database is lost), as CryoSPARC's detach / attach.
-    VOLATILE = ("pid", "cluster_job_id", "gpus")
+    VOLATILE = ("pid", "cluster_job_id", "gpus", "priority")
 
     def _snapshot_job(self, puid: str, juid: str) -> None:
         job = self.db.get_job(puid, juid)
@@ -668,14 +668,40 @@ class Manager:
             self._check_user_params(jt, job["params"], roots, authoring=False)  # folders again: the job may be someone else's
             chosen = self.clean_requested(jt, job["params"], lane_name, job.get("requested"), lenient=True)
             self.db.update_job(puid, juid, status="queued", lane=lane_name, queued_at=time.time(), message="Queued",
-                               error="", progress=0.0, requested=chosen, resources=self.job_resources(jt, job["params"], chosen))
+                               error="", progress=0.0, requested=chosen, resources=self.job_resources(jt, job["params"], chosen),
+                               priority=0)
+            return self.job(puid, juid)
+
+    @staticmethod
+    def queue_order(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Queued jobs in the order they launch: those moved to the front first (the latest moved first), then in the
+        order they were queued."""
+        return sorted(jobs, key=lambda j: (-(j.get("priority") or 0), j.get("queued_at") or 0))
+
+    def prioritize_job(self, puid: str, juid: str, may_overtake: Any = None) -> dict[str, Any]:
+        """A queued job moved to the front of the queue of its lane: it launches before the others, and later jobs of
+        the lane wait for it while it waits for resources. ``may_overtake(job)`` vetoes overtaking someone's job."""
+        with self.lock:
+            job = self.job(puid, juid)
+            if job["status"] != "queued":
+                raise ManagerError(f"Only queued jobs can be moved in the queue (status: {job['status']})")
+            ahead = [j for j in self.queue_order(self.db.list_jobs(statuses=["queued"])) if j.get("lane") == job.get("lane")]
+            ahead = ahead[:next(i for i, j in enumerate(ahead) if j["project_uid"] == puid and j["uid"] == juid)]
+            if not ahead:
+                return job
+            refused = [f"{j['project_uid']}/{j['uid']}" for j in ahead if may_overtake is not None and not may_overtake(j)]
+            if refused:
+                raise ManagerError("Only an administrator can move a job ahead of other people's jobs ("
+                                   + ", ".join(refused[:5]) + (" …" if len(refused) > 5 else "") + ")")
+            top = max(int(j.get("priority") or 0) for j in ahead)
+            self.db.update_job(puid, juid, priority=top + 1, message="Moved to the front of the queue")
             return self.job(puid, juid)
 
     def kill_job(self, puid: str, juid: str) -> dict[str, Any]:
         with self.lock:
             job = self.job(puid, juid)
             if job["status"] == "queued":
-                self.db.update_job(puid, juid, status="building", message="Removed from queue", queued_at=None)
+                self.db.update_job(puid, juid, status="building", message="Removed from queue", queued_at=None, priority=0)
                 return self.job(puid, juid)
             if job["status"] == "waiting":
                 self.db.update_job(puid, juid, status="killed", ended_at=time.time(), message="Session cancelled")
@@ -917,6 +943,9 @@ class Manager:
         job["job_dir"] = str(jdir)
         if job["status"] == "building":
             job["problems"] = self.queue_problems(job)
+        if job["status"] == "queued":
+            lane = [j for j in self.queue_order(self.db.list_jobs(statuses=["queued"])) if j.get("lane") == job.get("lane")]
+            job["queue_position"] = next((i + 1 for i, j in enumerate(lane) if j["project_uid"] == puid and j["uid"] == juid), None)
         if job["status"] == "waiting":
             from cryoplug.jobs.interactive import list_candidate_models
             job["candidates"] = list_candidate_models(jdir) if jdir.exists() else []
@@ -1193,7 +1222,14 @@ class Manager:
 
     # ============================================================== queue
     def queue_overview(self) -> dict[str, Any]:
+        """The lanes, and the active jobs (running first) then the queued ones in the order they launch, each with its
+        place in the queue of its lane ("position", 1 = next)."""
         jobs = self.db.list_jobs(statuses=["queued", "launched", "running", "waiting"])
+        queued = self.queue_order([j for j in jobs if j["status"] == "queued"])
+        places: dict[str, int] = {}
+        for j in queued:
+            places[j.get("lane") or ""] = j["position"] = places.get(j.get("lane") or "", 0) + 1
+        jobs = sorted((j for j in jobs if j["status"] != "queued"), key=lambda j: j.get("started_at") or j.get("queued_at") or 0) + queued
         projects = {p["uid"]: p for p in self.db.list_projects(include_archived=True)}
         for j in jobs:
             project = projects.get(j["project_uid"]) or {}
