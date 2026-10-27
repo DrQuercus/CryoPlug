@@ -224,7 +224,11 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "inputs": "Particules avec poses (import CryoSPARC, sélection cryoDRGN, sortie d'un job RELION) ; masque facultatif "
                   "pour la FSC masquée.",
-        "tips": ["Les demi-jeux de CryoSPARC (alignments3D/split) sont repris quand ils existent."],
+        "tips": [
+            "Les demi-jeux de CryoSPARC (alignments3D/split) sont repris quand ils existent.",
+            "« One map per class » : une reconstruction (demi-cartes, carte, FSC) de chaque classe d'une classification 3D, "
+            "comme « Heterogeneous Reconstruction Only » de CryoSPARC ; les FSC des classes sont tracées ensemble.",
+        ],
         "next": ["relion_local_refine", "map_fsc", "locscale"],
     },
     "relion_reslog": {

@@ -280,6 +280,17 @@ def test_relion_pipeline_movies_to_map(manager, spa):
     assert "Particle shifts" in plots
     heat = {s["title"]: s for s in _sections(manager, puid, c3d, "heatmap")}
     assert {"Viewing directions (all particles)", "Viewing directions of class 1", "Viewing directions of class 2"} <= set(heat)
+    # each class reconstructed from its particles (CryoSPARC's Heterogeneous Reconstruction Only)
+    classes = [c for c in (1, 2) if f"class_{c}" in o3]
+    het = _run(manager, puid, "relion_reconstruct", {"per_class": True}, {"particles": _ref(c3d, "particles")})
+    log = _command(manager, puid, het)
+    assert all(f"--class {c} --subset 1" in log and f"--class {c} --subset 2" in log for c in classes)
+    oh = _outs(het)
+    assert {f"map_{c}" for c in classes} | {f"half_maps_{c}" for c in classes} <= set(oh) and "map" not in oh
+    for c in classes:
+        assert oh[f"map_{c}"]["meta"]["n_particles"] == o3[f"class_{c}"]["meta"]["n_particles"]
+        assert oh[f"map_{c}"]["meta"]["resolution"] > 0
+    assert [s["name"] for s in _sections(manager, puid, het, "plot")[0]["series"]] == [f"Class {c}" for c in classes]
     assert sum(map(sum, heat["Viewing directions (all particles)"]["values"])) == pytest.approx(100, abs=0.5)
 
     # heterogeneous refinement: a class map and a decoy of another box and pixel size (resampled onto the particles)

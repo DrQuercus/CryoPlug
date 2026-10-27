@@ -402,6 +402,13 @@ def reconstruct(argv):
     tables = rl.read_star(a["--i"])
     parts = check_images(tables)
     box, apix = grid(tables)
+    chosen = int(a.get("--class", -1))
+    if chosen > 0:  # only the particles of that class
+        rows = [i for i, v in enumerate(parts.column("rlnClassNumber") if parts.has("rlnClassNumber") else [])
+                if int(float(v)) == chosen]
+        if not rows:
+            die(f"no particle in class {chosen}")
+        parts = parts.select(rows)
     subset = int(a.get("--subset", -1))
     if subset in (1, 2):
         if not parts.has("rlnRandomSubset"):

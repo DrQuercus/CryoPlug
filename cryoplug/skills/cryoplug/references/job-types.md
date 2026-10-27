@@ -214,7 +214,7 @@ relion_postprocess of two half maps: FSC with the mask corrected by phase random
 Usually followed by: `locscale`, `modelangelo_build`, `deposition_package`.
 
 ### `relion_reconstruct` — RELION reconstruction
-RELION. In: particles: particles, mask?: mask. Out: map: map, half_maps: half_maps, fsc: fsc.
+RELION. In: particles: particles, mask?: mask. Out: map: map, half_maps: half_maps, fsc: fsc, map_1: map, half_maps_1: half_maps.
 
 Reconstructs the two half maps and the full map of particles from their poses, without alignment (relion_reconstruct): a full-resolution map of a particle subset (a cryoDRGN selection, a class), with its gold-standard FSC.
 Usually followed by: `relion_local_refine`, `map_fsc`, `locscale`.

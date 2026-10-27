@@ -919,6 +919,7 @@ Reconstruit les demi-cartes et la carte complète de particules à partir de leu
 **Conseils**
 
 - Les demi-jeux de CryoSPARC (alignments3D/split) sont repris quand ils existent.
+- « One map per class » : une reconstruction (demi-cartes, carte, FSC) de chaque classe d'une classification 3D, comme « Heterogeneous Reconstruction Only » de CryoSPARC ; les FSC des classes sont tracées ensemble.
 
 **Étapes suivantes** : RELION local refinement, Half-map FSC, LocScale 2
 

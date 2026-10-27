@@ -872,15 +872,22 @@ class RelionReconstruct(RelionJob):
     params = [
         symmetry_param(),
         Param("maxres", "float", 0.0, label="Maximum resolution", unit="Å", min=0.0, help="0 = Nyquist."),
+        Param("per_class", "bool", False, label="One map per class",
+              help="A reconstruction (half maps, map, FSC) of each class of the particles (rlnClassNumber of a 3D "
+                   "classification), as CryoSPARC's Heterogeneous Reconstruction Only."),
         mpi_param(1, 1, help="relion_reconstruct_mpi with more than 1."),
         extra_args_param(),
     ]
-    outputs = [OutputDef("map", "map", "Map"), OutputDef("half_maps", "half_maps", "Half maps"), OutputDef("fsc", "fsc", "FSC")]
+    outputs = [OutputDef("map", "map", "Map"), OutputDef("half_maps", "half_maps", "Half maps"), OutputDef("fsc", "fsc", "FSC"),
+               OutputDef("map_1", "map", "Map of class 1"), OutputDef("half_maps_1", "half_maps", "Half maps of class 1")]
 
     def run(self, ctx: JobContext) -> None:
         from cryoplug.jobs.maptools import compute_and_report_fsc
         parts = prepare_particles(ctx, ctx.require("particles"), subsets=True)
         sym = inherited_symmetry(ctx, parts)
+        if ctx.params["per_class"]:
+            self.per_class(ctx, parts, sym)
+            return
         made = {}
         for i, (name, subset) in enumerate((("half1", ["--subset", "1"]), ("half2", ["--subset", "2"]), ("map", []))):
             out = ctx.path(f"reconstruct_{name}.mrc")
@@ -904,6 +911,51 @@ class RelionReconstruct(RelionJob):
         ctx.add_output("half_maps", "half_maps", [made["half1"], made["half2"]], "Half maps", meta=meta)
         ctx.add_highlight("Resolution", f"{res:.2f} Å")
         ctx.add_highlight("Particles", f"{parts['n']:,}")
+
+    def per_class(self, ctx: JobContext, parts: dict[str, Any], sym: str) -> None:
+        """Half maps and map of every class (relion_reconstruct --class), their FSC curves together."""
+        from cryoplug.mrc import fsc, resolution_at
+        ptab = rl.particle_table(rl.read_star(ctx.abs(parts["ref"])))
+        if not ptab.has("rlnClassNumber"):
+            raise JobError("These particles have no classes (rlnClassNumber): use those of a 3D classification")
+        counts: dict[int, int] = {}
+        for v in ptab.column("rlnClassNumber"):
+            counts[int(float(v))] = counts.get(int(float(v)), 0) + 1
+        mask_in = ctx.input("mask")
+        mask = MapVolume.read(mask_in.path).data if mask_in else None
+        rows, series = [], []
+        for k, c in enumerate(sorted(counts)):
+            made = {}
+            for i, (name, subset) in enumerate((("half1", ["--subset", "1"]), ("half2", ["--subset", "2"]), ("map", []))):
+                out = ctx.path(f"class{c:03d}_{name}.mrc")
+                args = [*relion_command(ctx, "relion_reconstruct", ctx.params["mpi"]), "--i", parts["ref"], "--o",
+                        ctx.rel(out), "--ctf", "--sym", sym, "--class", str(c), *subset]
+                if ctx.params["maxres"] > 0:
+                    args += ["--maxres", f"{ctx.params['maxres']:g}"]
+                ctx.progress(0.05 + 0.9 * (3 * k + i) / (3 * len(counts)), f"relion_reconstruct class {c} {name}")
+                run_relion(ctx, args + ctx.split_extra())
+                if not out.exists():
+                    raise JobError(f"relion_reconstruct did not write {out.name} (see the log)")
+                made[name] = to_consensus(ctx, out, parts, f"class{c:03d}_{name}_consensus.mrc" if parts["frame"] else out.name)
+            a, b = MapVolume.read(made["half1"]), MapVolume.read(made["half2"])
+            if mask is not None and mask.shape == a.data.shape:
+                freqs, curve = fsc(a.data * mask, b.data * mask, a.voxel)
+            else:
+                freqs, curve = fsc(a.data, b.data, a.voxel)
+            res = resolution_at(freqs, curve)
+            rows.append([c, f"{counts[c]:,}", f"{res:.2f}"])
+            series.append({"name": f"Class {c}", "x": [round(float(f), 5) for f in freqs], "y": [round(float(v), 4) for v in curve]})
+            meta = {"symmetry": sym, "relion_map": True, "resolution": round(res, 3), "class_number": c,
+                    "n_particles": counts[c]}
+            ctx.add_output(f"map_{c}", "map", made["map"], f"Class {c} ({counts[c]:,} particles, {res:.1f} Å)", meta=meta)
+            ctx.add_output(f"half_maps_{c}", "half_maps", [made["half1"], made["half2"]], f"Half maps of class {c}", meta=meta)
+        ctx.add_table("Classes", ["Class", "Particles", "Resolution (Å, FSC 0.143" + (", masked)" if mask is not None else ")")], rows)
+        ctx.add_plot("FSC of each class", series, x_label="Resolution (1/Å)", y_label="FSC", x_kind="resolution",
+                     hlines=[{"y": 0.143, "label": "0.143"}])
+        ctx.add_highlight("Classes", str(len(rows)))
+        ctx.add_highlight("Particles", f"{parts['n']:,}")
+        if parts["info"].get("random_halves"):
+            ctx.warn("The half sets were drawn at random here: the FSC of each class is optimistic")
 
 
 # ------------------------------------------------------------------ ResLog

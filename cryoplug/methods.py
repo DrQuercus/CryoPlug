@@ -384,6 +384,10 @@ def _dynamight(pr: Processing, job: dict[str, Any], p: dict[str, Any]) -> None:
 
 
 def _reconstruct(pr: Processing, job: dict[str, Any], p: dict[str, Any]) -> None:
+    if p.get("per_class"):
+        n = len([o for o in job.get("outputs") or [] if str(o.get("name", "")).startswith("map_")])
+        pr.say(f"Each of the {n or 'several'} classes was reconstructed from its particles with relion_reconstruct.")
+        return
     res = _num(output_meta(job, "map", "half_maps").get("resolution"))
     pr.say("A map was reconstructed from the particles with relion_reconstruct"
            + (f" ({res:.2f} Å, gold-standard FSC = 0.143)" if res else "") + ".")
