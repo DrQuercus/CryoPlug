@@ -1204,7 +1204,8 @@ class RelionExtract(RelionJob):
             run_relion(ctx, args)
         if not out.exists():
             raise JobError("relion_preprocess wrote no particles.star (see the log)")
-        meta = particles_out_meta(ctx, out, "extract", micrographs=ctx.rel(star))
+        meta = particles_out_meta(ctx, out, "extract", micrographs=ctx.rel(star), extract_box=box,
+                                  reextracted=bool(parts))
         if not meta["n_particles"]:
             raise JobError("No particle was extracted (see the log)")
         thumb = self.montage(ctx, out)

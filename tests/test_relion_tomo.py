@@ -6,7 +6,6 @@ reconstruction, initial model, 3D classification, auto-refinement, CTF refinemen
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -351,6 +350,23 @@ def test_picking_to_subtomogram_average(manager, tomograms):
                 {"particles": _ref(fa, "particles"), "map": _ref(ref, "map")})
     files = tm.read_optimisation_set(pdir / _outs(ref2)["particles"]["path"])
     assert files["trajectories"] == f"{fa['uid']}/motion.star" and files["tomograms"] == f"{fa['uid']}/tomograms.star"
+
+    # the methods paragraph a deposition writes from this history, step by step, with the papers to cite
+    from cryoplug.methods import Processing
+    proc = Processing(manager.ancestors(puid, ref2["uid"]) + [manager.job(puid, ref2["uid"])])
+    text = " ".join(proc.sentences)
+    for phrase in ("2 tilt series (pixel size", "were processed with the tomography pipeline of RELION-5",
+                   "saving even and odd frame sums", "The CTF of every tilt image was estimated with CTFFIND",
+                   "Tilt series were aligned with IMOD (patch tracking)", "Tomograms were reconstructed at 8 Å/voxel",
+                   "24 particles were picked in the tomograms", "24 pseudo-subtomograms were extracted in boxes of 64 pixels",
+                   "Subtomogram auto-refinement of 24 particles", "CTF parameters of the tilt series were refined (defocus, "
+                   "per-tomogram scale)", "and the motion of the particles were refined by Bayesian polishing"):
+        assert phrase in text, phrase
+    assert text.index("aligned") < text.index("reconstructed") < text.index("picked") < text.index("extracted")
+    for ref_ in ("Burt A. et al. (2024) FEBS Open Bio", "IMOD (batchruntomo):", "CTFFIND:", "Zivanov J., Nakane T., "
+                 "Scheres S.H.W. (2019) IUCrJ"):
+        assert any(ref_ in c for c in proc.citations), ref_
+    assert proc.stats["initial_particles"] == 24 and proc.stats["final_particles"] == 24 and proc.stats["n_tilt_series"] == 2
 
 
 def test_tilt_series_to_average_workflow(manager, tilt_series):

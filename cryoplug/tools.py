@@ -41,7 +41,7 @@ TOOLS: dict[str, ToolDef] = {
                 "DynaMight; local (focused) refinement and signal subtraction of particles from CryoSPARC.",
                 "https://relion.readthedocs.io",
                 "Scheres S.H.W. (2012) J. Struct. Biol. 180, 519-530; Kimanius D. et al. (2021) Biochem. J. 478, 4169-4185 "
-                "(RELION 4); Kimanius D. et al. (2024) Nat. Struct. Mol. Biol. 31, 1771-1777 (Blush).",
+                "(RELION 4); Kimanius D. et al. (2024) Nat. Methods 21, 1216-1221 (Blush).",
                 version_args=["--version"]),
         ToolDef("ctffind", "CTFFIND", ["ctffind5", "ctffind"],
                 "CTF estimation of the micrographs (CTFFIND 4.1 or 5), run by RELION's CTF estimation job.",

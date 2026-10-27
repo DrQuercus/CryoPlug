@@ -2126,7 +2126,13 @@ HELP: dict[str, dict[str, Any]] = {
         "avoid": ["Modèle encore en cours d'affinement : refaites le paquet à la fin."],
         "inputs": "Modèle final, carte primaire, demi-cartes, masque, FSC, checklist.",
         "tips": [
-            "Relisez methods_draft.md et table1_draft.md : les cases de collecte de données restent à remplir.",
+            "Si le traitement a été fait dans CryoPlug avec RELION (films → carte, ou séries d'inclinaison → moyenne), "
+            "methods_draft.md décrit chaque étape avec ses réglages et ses résultats (films, mouvement, CTF, picking, "
+            "extraction, classifications, raffinements, CTF refinement, polishing, post-traitement) et les articles à "
+            "citer, et table1_draft.md se remplit : tension, exposition totale, plage de défocus (celle estimée par "
+            "CTFFIND), taille de pixel, particules initiales et finales, facteur B, plage de résolution locale.",
+            "Relisez methods_draft.md et table1_draft.md : le grandissement et ce que CryoPlug n'a pas vu passer restent à "
+            "remplir.",
             "Lancez aussi le job « wwPDB validation report » : le rapport officiel, celui que verront les relecteurs.",
         ],
         "next": [],

@@ -1322,8 +1322,14 @@ de validation, `CHECKLIST.md`, `methods_draft.md` et `table1_draft.md`.
 ### 9.4 Pour l'article
 
 `methods_draft.md` contient un paragraphe *Méthodes* et les citations générés à partir de l'historique
-des jobs ; `table1_draft.md` pré-remplit le tableau de statistiques cryo-EM. Complétez les données de
-collecte (tension, dose, défocus, nombre de particules) et relisez tout.
+des jobs ; `table1_draft.md` pré-remplit le tableau de statistiques cryo-EM. Quand le traitement a été fait
+dans CryoPlug avec RELION, chaque étape y est décrite avec ses réglages et ses résultats (nombre de films,
+correction de mouvement, CTF, picking, extraction, classifications, raffinements, CTF refinement, polishing,
+post-traitement ; ou, en tomographie, import, alignement, reconstruction, extraction, moyenne), avec les
+articles que RELION demande de citer ; le tableau reprend la tension, l'exposition totale, la plage de
+défocus estimée par CTFFIND (pas la plage nominale), la taille de pixel, les particules initiales et finales,
+le facteur B et la plage de résolution locale. Complétez le reste (grandissement, données venues d'ailleurs)
+et relisez tout.
 
 ---
 

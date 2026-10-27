@@ -373,6 +373,41 @@ def test_relion_pipeline_movies_to_map(manager, spa):
     assert "map_sharp" in _outs(ref2) and "--solvent_mask" in _command(manager, puid, ref2)
     assert "--firstiter_cc" in _command(manager, puid, ref2)
 
+    # what a deposition writes from this history: a methods sentence per step, with its citations, and Table 1
+    from cryoplug.jobs.deposition import methods_text, table1
+    from cryoplug.methods import Processing
+    hist = manager.ancestors(puid, ref2["uid"]) + [manager.job(puid, ref2["uid"])]
+    proc = Processing(hist)
+    text, cites = methods_text(hist, proc)
+    assert text.startswith("4 movies (pixel size 1 Å, 300 kV, total exposure 9.0 e⁻/Å² in 6 frames) were processed in "
+                           "RELION-5. Beam-induced motion was corrected with RELION's implementation of the MotionCor2 "
+                           "algorithm (1 × 1 patches, dose weighting).")
+    for phrase in ("estimated with CTFFIND (fitted between 30 and 5 Å", "Micrographs were curated",
+                   "with RELION's Laplacian-of-Gaussian picker (particle diameter 50-70 Å)",
+                   f"{n_parts:,} particles were extracted in boxes of 64 pixels, downscaled to 32 pixels (2 Å/pixel)",
+                   "Reference-free 2D classification into 4 classes used the VDAM algorithm (20 mini-batches)",
+                   f"{n_sel:,} particles in 3 selected 2D classes were kept", "generated de novo with the VDAM algorithm",
+                   "sorted by 3D classification into 2 classes (3 iterations, with global angular searches)",
+                   f"3D auto-refinement of {n_sel:,} particles gave a map at", "A soft mask was made from the map low-pass "
+                   "filtered to 10 Å", "post-processing with a soft mask sharpened it with a B-factor of",
+                   "Data processing was orchestrated with CryoPlug"):
+        assert phrase in text, phrase
+    assert text.index("Beam-induced motion") < text.index("CTFFIND") < text.index("picked") < text.index("auto-refinement")
+    assert cites[0].startswith("RELION: Scheres S.H.W. (2012)") and len(cites) == len(set(cites))
+    for ref_ in ("Zivanov J. et al. (2018) eLife 7, e42166", "MotionCor2", "CTFFIND", "Scheres S.H.W., Chen S. (2012)",
+                 "Chen S. et al. (2013) Ultramicroscopy", "Rosenthal P.B., Henderson R. (2003)"):
+        assert any(ref_ in c for c in cites), ref_
+    st = proc.stats
+    assert st["voltage"] == 300 and st["exposure"] == 9.0 and st["pixel_size"] == 1.0 and st["symmetry"] == "C1"
+    assert st["initial_particles"] == n_parts and st["final_particles"] == n_sel and st["n_movies"] == 4
+    assert st["bfactor"] == _outs(ref2)["map_sharp"]["meta"]["bfactor"] and 0 < st["defocus_range"][0] <= st["defocus_range"][1]
+    summary = {"ligands": {}, "n_atoms": 0, "n_hydrogens": 0, "polymers": [], "b_iso": {"mean": 0}}
+    rows = dict(table1(summary, {}, st["resolution"], {"pixel_size": 2.0}, "C1", st))
+    assert rows["Voltage (kV)"] == "300" and rows["Electron exposure (e–/Å²)"] == "9.0" and rows["Pixel size (Å)"] == "1"
+    assert rows["Initial particle images (no.)"] == f"{n_parts:,}" and rows["Final particle images (no.)"] == f"{n_sel:,}"
+    assert rows["Defocus range (μm)"].endswith("(estimated)") and rows["Map sharpening B factor (Å²)"]
+    assert rows["Magnification"] == ""  # not known to CryoPlug
+
     # CTF refinement: the three passes of the tutorial
     ctfr = _run(manager, puid, "relion_ctf_refine", {"threads": 2}, {"particles": _ref(ref, "particles"), **masked})
     log = _command(manager, puid, ctfr)

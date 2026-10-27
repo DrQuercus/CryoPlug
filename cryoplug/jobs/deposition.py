@@ -246,10 +246,18 @@ EXTRA_CITATIONS = {
 }
 
 
-def methods_text(ancestors: list[dict[str, Any]]) -> tuple[str, list[str]]:
+def methods_text(ancestors: list[dict[str, Any]], processing: Any = None) -> tuple[str, list[str]]:
+    """The methods paragraph: the RELION processing (movies to map, or tilt series to average) when it ran in CryoPlug,
+    then post-processing, model building and validation; with the papers to cite."""
     from cryoplug.jobs import REGISTRY
+    from cryoplug.methods import Processing
     from cryoplug.tools import TOOLS
-    sentences, citations, seen = [], [], set()
+    proc = processing or Processing(ancestors)
+    sentences, citations = list(proc.sentences), list(proc.citations)
+
+    def cite(c: str | None) -> None:
+        if c and c not in citations:
+            citations.append(c)
     for job in ancestors:
         if job.get("status") != "completed":
             continue
@@ -268,15 +276,13 @@ def methods_text(ancestors: list[dict[str, Any]]) -> tuple[str, list[str]]:
             if s not in sentences:
                 sentences.append(s)
         jt = REGISTRY.get(job["type"])
-        if jt and jt.tool and jt.tool not in seen and jt.tool in TOOLS and TOOLS[jt.tool].citation:
-            seen.add(jt.tool)
-            citations.append(f"{TOOLS[jt.tool].label}: {TOOLS[jt.tool].citation}")
-        extra = EXTRA_CITATIONS.get(job["type"])
-        if extra and extra not in citations:
-            citations.append(extra)
-    sentences.append(f"Post-processing was orchestrated with CryoPlug v{__version__}.")
+        if jt and jt.tool and jt.tool in TOOLS and TOOLS[jt.tool].citation:
+            cite(f"{TOOLS[jt.tool].label}: {TOOLS[jt.tool].citation}")
+        cite(EXTRA_CITATIONS.get(job["type"]))
+    sentences.append(f"{'Data processing' if proc.sentences else 'Post-processing'} was orchestrated with CryoPlug "
+                     f"v{__version__}.")
     if any(j["type"] == "mapmodel_validation" for j in ancestors):
-        citations.append("Q-score: Pintilie G. et al. (2020) Nat. Methods 17, 328-334.")
+        cite("Q-score: Pintilie G. et al. (2020) Nat. Methods 17, 328-334.")
     return " ".join(sentences), citations
 
 
@@ -297,22 +303,34 @@ def collect_metrics(ancestors: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def table1(summary: dict[str, Any], metrics: dict[str, Any], resolution: float | None, map_info: dict[str, Any],
-           symmetry: str) -> list[tuple[str, str]]:
+           symmetry: str, stats: dict[str, Any] | None = None) -> list[tuple[str, str]]:
+    """Rows of the cryo-EM statistics table; ``stats``: the values found in the processing history (methods.Processing),
+    empty cells for what CryoPlug cannot know (magnification) or did not run."""
     def f(key: str, fmt: str = "{:g}", suffix: str = "") -> str:
         v = metrics.get(key)
         return (fmt.format(v) + suffix) if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)) else ""
+
+    def s(key: str, fmt: str = "{:g}") -> str:
+        v = (stats or {}).get(key)
+        return fmt.format(v) if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)) else ""
+    st = stats or {}
     ligands = sum(summary["ligands"].values())
+    defocus = st.get("defocus_range")
+    local = st.get("resolution_range")
     rows = [
         ("**Data collection and processing**", ""),
-        ("Magnification", ""), ("Voltage (kV)", ""), ("Electron exposure (e–/Å²)", ""), ("Defocus range (μm)", ""),
-        ("Pixel size (Å)", f"{map_info.get('pixel_size', '')}"),
+        ("Magnification", ""), ("Voltage (kV)", s("voltage")), ("Electron exposure (e–/Å²)", s("exposure", "{:.1f}")),
+        ("Defocus range (μm)", f"{defocus[0]:.1f} to {defocus[1]:.1f} (estimated)" if defocus else ""),
+        ("Pixel size (Å)", s("pixel_size") or f"{map_info.get('pixel_size', '')}"),
         ("Symmetry imposed", symmetry),
-        ("Initial particle images (no.)", ""), ("Final particle images (no.)", ""),
+        ("Initial particle images (no.)", s("initial_particles", "{:,.0f}")),
+        ("Final particle images (no.)", s("final_particles", "{:,.0f}")),
         ("Map resolution (Å)", f"{resolution:.2f}" if resolution else ""),
         ("FSC threshold", "0.143"),
+        ("Map resolution range (Å)", f"{local[0]:.1f}-{local[1]:.1f} (local, 5th-95th percentile)" if local else ""),
         ("**Refinement**", ""),
         ("Model resolution (Å), FSC 0.5", f("map_model_fsc_0.5", "{:.2f}")),
-        ("Map sharpening B factor (Å²)", ""),
+        ("Map sharpening B factor (Å²)", s("bfactor", "{:.0f}")),
         ("Non-hydrogen atoms", str(summary["n_atoms"] - summary["n_hydrogens"])),
         ("Protein / nucleotide residues", str(sum(p["length"] for p in summary["polymers"]))),
         ("Ligands", str(ligands)),
@@ -414,11 +432,24 @@ class DepositionPackage(JobType):
 
         metrics = collect_metrics(ctx.ancestors)
         symmetry = (m.meta.get("symmetry") or hm.meta.get("symmetry") or "C1")
-        methods, citations = methods_text(ctx.ancestors)
+        from cryoplug.methods import Processing
+        proc = Processing(ctx.ancestors)
+        stats = dict(proc.stats)
+        # the particles and sharpening of the deposited maps themselves, when the job that made them is known
+        made_with = hm.sibling("particles", type="particles") or m.sibling("particles", type="particles")
+        if made_with and made_with.meta.get("n_particles"):
+            stats["final_particles"] = made_with.meta["n_particles"]
+        sharp = m if m.meta.get("bfactor") is not None else hm.sibling("map_sharp", type="map")
+        if sharp and sharp.meta.get("bfactor") is not None:
+            stats["bfactor"] = sharp.meta["bfactor"]
+        methods, citations = methods_text(ctx.ancestors, proc)
         (dep / "methods_draft.md").write_text(
             "# Draft methods\n\n" + methods + "\n\n## Software citations\n\n" + "\n".join(f"- {c}" for c in citations) + "\n")
-        rows = table1(summary, metrics, res, primary.info(), symmetry)
-        (dep / "table1_draft.md").write_text("# Draft cryo-EM statistics table\n\nEmpty cells: fill in from data collection and processing records.\n\n"
+        rows = table1(summary, metrics, res, primary.info(), symmetry, stats)
+        (dep / "table1_draft.md").write_text("# Draft cryo-EM statistics table\n\nFilled from the job history where CryoPlug "
+                                             "ran the processing; empty cells: fill in from the data collection and "
+                                             "processing records. Defocus: the range estimated by CTFFIND, not the "
+                                             "nominal one.\n\n"
                                              "| | |\n|---|---|\n" + "\n".join(f"| {a} | {b} |" for a, b in rows) + "\n")
 
         info = primary.info()

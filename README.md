@@ -647,7 +647,10 @@ Le job prépare la session (modèle + cartes associées, `clipper associate`, `i
 - **Deposition package** : `model.cif` (entités configurées), `primary_map.mrc`, `half_map_1/2.mrc`,
   `mask.mrc`, `fsc.xml` (format EMDB), rapports de validation, `CHECKLIST.md` (valeurs à saisir dans
   OneDep : contour, résolution, taille de pixel, symétrie), `methods_draft.md` (texte + citations générés
-  depuis l'historique des jobs) et `table1_draft.md`.
+  depuis l'historique des jobs) et `table1_draft.md`. Si le traitement RELION a été fait dans CryoPlug, chaque
+  étape (films → carte, ou séries d'inclinaison → moyenne) est décrite avec ses réglages, ses résultats et les
+  articles à citer, et le tableau reprend tension, exposition, défocus, pixel, particules initiales et finales,
+  facteur B et plage de résolution locale.
 - **Sequence register check (checkMySequence)** : décalages de registre, chaînes sans séquence correspondante,
   différences avec la séquence attendue.
 - **wwPDB validation report** : le rapport officiel (PDF + XML) calculé par le service de validation OneDep du
