@@ -256,6 +256,53 @@ WORKFLOWS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "relion_tomo",
+        "title": "Tilt series to subtomogram average (RELION 5)",
+        "description": ("RELION 5's subtomogram averaging, as in its tutorial: tilt series imported from SerialEM (movies "
+                        "and mdoc files) → motion correction with the even/odd sums → CTF estimation → bad tilt images "
+                        "excluded (the job shows the images by tilt angle and waits for you) → alignment (IMOD or "
+                        "AreTomo2) → tomograms reconstructed for denoising → cryoCARE → particles picked in the "
+                        "tomograms (the job waits for your picks: particles, spheres or filaments) → subtomograms "
+                        "extracted → initial model → 3D auto-refine → mask → post-processing. CTF refinement, frame "
+                        "alignment and a last refinement are optional."),
+        "nodes": [
+            {"id": "import", "type": "relion_tomo_import", "title": "Import tilt series",
+             "ask": ["movies", "mdocs", "pixel_size", "voltage", "cs", "dose", "tilt_axis", "flip_hand"]},
+            {"id": "motion", "type": "relion_tomo_motioncorr", "params": {"even_odd": True},
+             "inputs": {"tiltseries": ["import", "tiltseries"]}, "ask": ["threads"]},
+            {"id": "ctf", "type": "relion_tomo_ctffind", "inputs": {"tiltseries": ["motion", "tiltseries"]}, "ask": ["mpi"]},
+            {"id": "exclude", "type": "relion_tomo_exclude", "params": {"max_ctf_res": 20.0},
+             "inputs": {"tiltseries": ["ctf", "tiltseries"]}, "ask": ["max_tilt", "max_ctf_res"]},
+            {"id": "align", "type": "relion_tomo_align", "inputs": {"tiltseries": ["exclude", "tiltseries"]},
+             "ask": ["method", "thickness", "fiducial_diameter"]},
+            {"id": "reconstruct", "type": "relion_tomo_reconstruct", "title": "Reconstruct tomograms (for denoising)",
+             "params": {"split": True, "fourier": False}, "inputs": {"tiltseries": ["align", "tiltseries"]},
+             "ask": ["binned_pixel", "thickness"]},
+            {"id": "denoise", "type": "relion_tomo_denoise", "optional": True,
+             "inputs": {"tomograms": ["reconstruct", "tomograms"]}, "ask": ["training"]},
+            {"id": "pick", "type": "relion_tomo_pick",
+             "inputs": {"tomograms": [["denoise", "tomograms"], ["reconstruct", "tomograms"]]}, "ask": ["mode", "diameter", "spacing"]},
+            {"id": "extract", "type": "relion_tomo_extract", "inputs": {"particles": ["pick", "particles"]},
+             "ask": ["box_A", "binned_px"]},
+            {"id": "inimodel", "type": "relion_tomo_initial_model", "inputs": {"particles": ["extract", "particles"]},
+             "ask": ["symmetry", "gpus"]},
+            {"id": "refine", "type": "relion_tomo_refine3d",
+             "inputs": {"particles": ["extract", "particles"], "map": ["inimodel", "map"]}, "ask": ["symmetry", "mpi", "gpus"]},
+            {"id": "mask", "type": "relion_mask_create", "inputs": {"map": ["refine", "map"]}, "ask": ["lowpass", "extend", "soft_edge"]},
+            {"id": "post", "type": "relion_postprocess", "inputs": {"half_maps": ["refine", "half_maps"], "mask": ["mask", "mask"]}},
+            {"id": "ctfrefine", "type": "relion_tomo_ctf_refine", "optional": True, "default": False,
+             "inputs": {"particles": ["refine", "particles"], "half_maps": ["refine", "half_maps"], "mask": ["mask", "mask"],
+                        "postprocess": ["post", "map_sharp"]}},
+            {"id": "framealign", "type": "relion_tomo_frame_align", "optional": True, "default": False,
+             "inputs": {"particles": [["ctfrefine", "particles"], ["refine", "particles"]], "half_maps": ["refine", "half_maps"],
+                        "mask": ["mask", "mask"], "postprocess": ["post", "map_sharp"]}},
+            {"id": "refine2", "type": "relion_tomo_refine3d", "title": "3D auto-refine after CTF refinement and frame alignment",
+             "optional": True, "default": False, "params": {"ini_high": 10.0},
+             "inputs": {"particles": [["framealign", "particles"], ["ctfrefine", "particles"]], "map": ["refine", "map"],
+                        "mask": ["mask", "mask"]}, "ask": ["symmetry", "mpi", "gpus"]},
+        ],
+    },
+    {
         "id": "relion_clean_3d",
         "title": "Clean particles in 3D (decoys, heterogeneous refinement)",
         "description": ("CryoSPARC's junk removal in RELION: particles (those of a 2D selection, a RELION .star file or a "

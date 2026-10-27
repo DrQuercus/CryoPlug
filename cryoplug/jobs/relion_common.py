@@ -110,8 +110,12 @@ def star_of(ctx: JobContext, inp: InputData) -> tuple[Path, str]:
 
 
 def relion_particles(ctx: JobContext, inp: InputData, need_poses: bool = False) -> dict[str, Any]:
-    """Particles as RELION reads them: a STAR file of a RELION job as it is, anything else (CryoSPARC) converted."""
+    """Particles as RELION reads them: a STAR file of a RELION job as it is, anything else (CryoSPARC) converted;
+    subtomograms as their optimisation set (``tomo``: relion_refine reads them with --ios)."""
     from cryoplug.jobs.relion import prepare_particles
+    from cryoplug.jobs.tomo_common import is_tomo, tomo_particles
+    if is_tomo(inp):
+        return tomo_particles(ctx, inp)
     meta = inp.meta.get("relion") or {}
     star = Path(inp.files[0] if inp.files else inp.path)
     if meta.get("star") and star.suffix == ".star" and star.exists():

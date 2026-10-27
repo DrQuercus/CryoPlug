@@ -24,8 +24,9 @@ const FAMILY = {
   map: 'map', half_maps: 'map', mask: 'map', locres: 'map', variability: 'map', volume_series: 'map',
   model: 'model', restraints: 'model', sequence: 'model', particles: 'particles', latent: 'particles',
   coordinates: 'particles', class_averages: 'particles', movies: 'micrographs', micrographs: 'micrographs',
+  tiltseries: 'micrographs', tomograms: 'micrographs', tomo_particles: 'particles',
 };
-const FAMILIES = [['micrographs', 'Movies, micrographs'], ['map', 'Maps'], ['model', 'Models, sequences'], ['particles', 'Particles'],
+const FAMILIES = [['micrographs', 'Movies, micrographs, tilt series'], ['map', 'Maps'], ['model', 'Models, sequences'], ['particles', 'Particles'],
   ['other', 'Other data']];
 const familyOf = (types) => {
   const fams = new Set(types.map((t) => FAMILY[t] || 'other'));

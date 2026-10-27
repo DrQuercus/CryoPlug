@@ -11,6 +11,7 @@ import { helpSheet } from './help.js';
 import { latentExplorer } from './latent.js';
 import { liveDashboard } from './live.js';
 import { pickInspector } from './picker.js';
+import { tiltSeriesBrowser, tomogramViewer, tomoPicker } from './tomo.js';
 import { barChart, heatmap, lineChart } from './plots.js';
 import { builderHref, jobHref, navigate, refreshJobs, restricted, state, typeTitle } from './state.js';
 import { tagChip, tagsDialog, workspacesDialog } from './workspaces.js';
@@ -473,12 +474,17 @@ function renderOverview(body) {
         o.thumbnail ? h('img', { src: api.fileUrl(puid, o.thumbnail), alt: '', loading: 'lazy' })
           : h('div', { class: 'noimg' }, icon({ model: 'model', map: 'map', mask: 'map', half_maps: 'map', locres: 'map', variability: 'map', volume_series: 'map',
             report: 'check', fsc: 'graph', restraints: 'file', particles: 'grid', latent: 'graph', movies: 'film', micrographs: 'film',
-            coordinates: 'picks', class_averages: 'grid', topaz_model: 'cpu', polish_params: 'sliders' }[o.type] || 'file')),
+            coordinates: 'picks', class_averages: 'grid', topaz_model: 'cpu', polish_params: 'sliders', tiltseries: 'film',
+            tomograms: 'cube', tomo_particles: 'picks' }[o.type] || 'file')),
         h('div', {},
           h('div', { class: 'row' }, h('b', {}, o.label || o.name), h('span', { class: `tag type-${o.type}` }, state.info.data_types[o.type] || o.type),
             h('span', { class: 'muted small' }, o.name)),
-          o.meta && (o.meta.resolution || o.meta.pixel_size || o.meta.frames || o.meta.n_particles || o.meta.n_micrographs || o.meta.n_movies) ? h('div', { class: 'muted small' },
+          o.meta && (o.meta.resolution || o.meta.pixel_size || o.meta.frames || o.meta.n_particles || o.meta.n_micrographs || o.meta.n_movies
+            || o.meta.n_tomograms) ? h('div', { class: 'muted small' },
             [o.meta.n_movies ? `${Number(o.meta.n_movies).toLocaleString()} movies` : null,
+              o.meta.n_tomograms && o.type !== 'tomo_particles' ? `${o.meta.n_tomograms} ${o.type === 'tomograms' ? 'tomograms' : 'tilt series'}` : null,
+              o.meta.n_tilts && o.type === 'tiltseries' ? `${Number(o.meta.n_tilts).toLocaleString()} tilt images` : null,
+              o.type === 'tomograms' && o.meta.binned_pixel_size ? `${o.meta.binned_pixel_size} Å/voxel` : null,
               o.meta.n_micrographs ? `${Number(o.meta.n_micrographs).toLocaleString()} micrographs` : null,
               o.meta.n_classes ? `${o.meta.n_classes} classes` : null,
               o.meta.resolution ? `${(+o.meta.resolution).toFixed(2)} Å` : null, o.meta.pixel_size ? `${o.meta.pixel_size} Å/px` : null,
@@ -632,6 +638,20 @@ function reportSection(sec, puid, job) {
       curate: (sec.curate || sec.live) && job.status === 'completed' && mics ? (limits) => newCuration(job, mics, limits) : null,
       applyLive: sec.live && ['launched', 'running'].includes(job.status)
         ? (limits) => act(api.control(puid, job.uid, 'thresholds', limits), 'New acceptance limits: applied at the next cycle') : null,
+    })));
+  } else if (sec.kind === 'tiltseries') {
+    wrap.append(h('div', { class: 'box' }, tiltSeriesBrowser(sec, {
+      puid, job,
+      finish: (payload) => act(api.finish(puid, job.uid, JSON.stringify(payload)), 'Tilt images excluded'),
+      widen: () => widenFor(job),
+    })));
+  } else if (sec.kind === 'tomograms') {
+    wrap.append(h('div', { class: 'box' }, tomogramViewer(sec, { puid, job })));
+  } else if (sec.kind === 'tomopick') {
+    wrap.append(h('div', { class: 'box' }, tomoPicker(sec, {
+      puid, job,
+      finish: (payload) => act(api.finish(puid, job.uid, JSON.stringify(payload)), 'Picks saved'),
+      widen: () => widenFor(job),
     })));
   } else if (sec.kind === 'particle_stats') {
     wrap.append(h('div', { class: 'box' }, particleCurator(sec, {

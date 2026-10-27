@@ -523,6 +523,13 @@ def finish_refinement(ctx: JobContext, out: dict[str, Path], parts: dict[str, An
                        meta={**meta, **({"bfactor": round(pp["bfactor"], 1)} if pp.get("bfactor") is not None else {})})
     if mask is not None:
         ctx.add_output("mask", "mask", to_consensus(ctx, mask, parts, "mask_consensus.mrc"), "Mask", meta=meta)
+    if parts.get("tomo"):  # subtomograms: the optimisation set relion_refine wrote with them
+        from cryoplug.jobs.tomo_common import tomo_output
+        tomo_output(ctx, "particles", out["data"], f"Refined particles ({parts['n']:,})", parts, kind,
+                    opt=out["data"].with_name(out["data"].name.replace("_data.star", "_optimisation_set.star")),
+                    symmetry=sym, optimiser=ctx.rel(out["optimiser"]),
+                    **({"resolution": round(float(resolution), 3)} if resolution else {}))
+        return
     pmeta = particles_meta(ctx, out["data"], parts, kind, sym, optimiser=ctx.rel(out["optimiser"]),
                            model=ctx.rel(out["model"]))
     if resolution:

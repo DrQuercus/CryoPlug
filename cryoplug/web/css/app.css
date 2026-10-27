@@ -1168,3 +1168,31 @@ button.tag-chip:hover { border-color: var(--tc); color: var(--ink-1); }
 .compare h4 { margin: 4px 0 8px; }
 .compare h4:not(:first-child) { margin-top: 18px; }
 .compare svg { max-width: 100%; height: auto; }
+/* tomography: tilt series, tomograms, picker ------------------------------------ */
+.tsb, .tmv, .tmp { outline: none; }
+.tsb-strip { display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px 8px; scroll-snap-type: x proximity; }
+.tsb-card { position: relative; flex: 0 0 auto; width: 96px; padding: 0; border: 2px solid var(--border); border-radius: 6px;
+  background: #111; cursor: pointer; overflow: hidden; scroll-snap-align: center; }
+.tsb-card img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
+.tsb-card .tsb-movie { display: flex; align-items: center; justify-content: center; aspect-ratio: 1; }
+.tsb-card.on { border-color: var(--accent); }
+.tsb-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.tsb-card.out img { opacity: .35; }
+.tsb-card.out::after { content: "×"; position: absolute; top: 0; right: 4px; color: #ff453a; font-size: 22px; font-weight: 700; line-height: 1; }
+.tsb-tilt, .tsb-res { position: absolute; left: 0; padding: 1px 5px; font-size: 11px; font-variant-numeric: tabular-nums;
+  color: #fff; background: rgba(0, 0, 0, .6); }
+.tsb-tilt { top: 0; border-bottom-right-radius: 4px; }
+.tsb-res { bottom: 0; border-top-right-radius: 4px; }
+.tsb-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; }
+.panel.wide .tsb-view { grid-template-columns: minmax(0, 1fr) 260px; }
+.tsb-bigwrap { background: #111; border-radius: 6px; display: flex; justify-content: center; }
+.tsb-big { display: block; max-width: 100%; max-height: calc(100vh - 420px); min-height: 200px; object-fit: contain; }
+.tsb-side { display: flex; flex-direction: column; gap: 8px; }
+.tsb-ctf { width: 100%; max-width: 256px; border-radius: 6px; background: #111; }
+.tsb-out { color: var(--danger, #ff453a); }
+.tm-controls { margin-top: 2px; }
+.tm-zrow { min-width: 200px; }
+.tm-zrow input[type=range] { flex: 1; width: auto; min-width: 120px; }
+.tm-z { min-width: 64px; color: var(--ink-2); }
+.tm-canvas { cursor: crosshair; }
+.tmv .tm-canvas { cursor: grab; }

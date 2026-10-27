@@ -63,6 +63,8 @@ def _load() -> None:
         relion_picking,
         relion_preprocess,
         relion_refinement,
+        relion_tomo,
+        relion_tomo_sta,
         series,
         sharpening,
         utility,

@@ -14,6 +14,7 @@ export const CATEGORY_FR = {
   Picking: 'Sélection et extraction de particules',
   Classification: 'Classification 2D / 3D',
   Reconstruction: 'Reconstruction (RELION)',
+  Tomography: 'Tomographie (sous-tomogrammes, RELION 5)',
   'Map processing': 'Traitement de carte',
   Heterogeneity: 'Hétérogénéité (variabilité 3D)',
   'Model building': 'Construction de modèle',

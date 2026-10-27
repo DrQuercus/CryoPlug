@@ -150,6 +150,14 @@ def movies(tmp_path_factory) -> dict:
     return write_movies(tmp_path_factory.mktemp("movies") / "Movies", n_movies=4)
 
 
+@pytest.fixture(scope="session")
+def tilt_series(tmp_path_factory) -> dict:
+    """Synthetic tilt series (movies of 4 frames, 2 Å/px) with SerialEM mdoc files, for the RELION tomography jobs."""
+    sys.path.insert(0, str(ROOT / "tests" / "fakes"))
+    from tomo_data import write_tilt_series
+    return write_tilt_series(tmp_path_factory.mktemp("tomo") / "session1")
+
+
 def _script(path: Path, body: str) -> None:
     path.write_text("#!/bin/bash\n" + body)
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -513,10 +521,17 @@ exit 0
                  "relion_preprocess", "relion_preprocess_mpi", "relion_align_symmetry", "relion_class_ranker", "relion_project",
                  "relion_mask_create", "relion_ctf_refine", "relion_ctf_refine_mpi", "relion_motion_refine",
                  "relion_motion_refine_mpi", "relion_star_handler", "relion_flex_analyse", "relion_python_dynamight",
-                 "relion_stack_create", "relion_helix_toolbox", "relion_estimate_gain", "relion_helix_inimodel2d"):
+                 "relion_stack_create", "relion_helix_toolbox", "relion_estimate_gain", "relion_helix_inimodel2d",
+                 # tomography
+                 "relion_python_tomo_import", "relion_align_tiltseries", "relion_align_tiltseries_mpi",
+                 "relion_tomo_reconstruct_tomogram", "relion_tomo_reconstruct_tomogram_mpi", "relion_python_tomo_denoise",
+                 "relion_tomo_import_coordinates", "relion_tomo_subtomo", "relion_tomo_subtomo_mpi",
+                 "relion_tomo_reconstruct_particle", "relion_tomo_reconstruct_particle_mpi", "relion_tomo_refine_ctf",
+                 "relion_tomo_refine_ctf_mpi", "relion_tomo_align", "relion_tomo_align_mpi"):
         (d / prog).symlink_to(relion)
     # programs RELION calls (the fake RELION only checks that they can be run)
-    for prog in ("ctffind", "MotionCor2"):
+    for prog in ("ctffind", "MotionCor2", "AreTomo2", "batchruntomo", "cryoCARE_train.py", "cryoCARE_extract_train_data.py",
+                 "cryoCARE_predict.py"):
         _script(d / prog, f'echo "fake {prog} $@"\n')
     # Topaz: run by relion_autopick, and directly for denoising (topaz denoise -o DIR ... micrographs: DIR/<name>.mrc)
     topaz = d / "relion_python_topaz"
@@ -579,7 +594,8 @@ def manager(tmp_path, fakebin) -> Manager:
         lanes=[LaneConfig(name="local", type="local", max_jobs=4, gpus=[0, 1])],
         tools={k: ToolConfig(name=k, bin_dir=str(fakebin))
                for k in ("modelangelo", "phenix", "locscale", "cryoatom", "boltz", "spisonet", "checkmysequence", "onedep",
-                         "cryodrgn", "relion", "colabfold", "servalcat", "deepemhancer", "ctffind", "motioncor")},
+                         "cryodrgn", "relion", "colabfold", "servalcat", "deepemhancer", "ctffind", "motioncor", "aretomo",
+                         "imod", "cryocare")},
     )
     m = Manager(cfg)
     m.check_tools()

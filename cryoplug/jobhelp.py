@@ -2137,6 +2137,319 @@ HELP: dict[str, dict[str, Any]] = {
         "tips": ["Indiquez les motifs de sortie (ex. result*.mrc) pour récupérer cartes et modèles."],
         "next": [],
     },
+    # ------------------------------------------------------------------ tomographie (RELION 5)
+    "relion_tomo_import": {
+        "purpose": "Importe des séries d'inclinaison enregistrées avec SerialEM (relion_python_tomo_import SerialEM) : les "
+                   "films (ou images déjà corrigées) de chaque inclinaison et le fichier mdoc de chaque série, qui donne les "
+                   "angles, l'ordre d'acquisition (donc la dose reçue avant chaque image) et la défocalisation nominale. Le "
+                   "point de départ de la moyenne de sous-tomogrammes.",
+        "when": [
+            "Au début d'un projet de tomographie (données SerialEM : un fichier .mdoc par série, comme EMPIAR-10164).",
+            "Images déjà corrigées du mouvement ailleurs : cochez « Images already motion-corrected ».",
+        ],
+        "avoid": [
+            "Un fichier mdoc dont aucune image n'est parmi les fichiers : le job s'arrête (RELION 5.1 associerait alors les "
+            "autres séries aux mauvais fichiers mdoc) ; restreignez le motif des mdoc.",
+            "Une mauvaise main de défocalisation donne une carte en miroir : « Invert defocus handedness » oui pour les "
+            "données du tutoriel RELION, à déterminer une fois pour votre microscope.",
+        ],
+        "inputs": "Aucune : un motif sur les films et un sur les fichiers mdoc ; taille de pixel, tension, Cs, contraste "
+                  "d'amplitude et dose par image.",
+        "tips": [
+            "La dose : par image (les mdoc donnent l'ordre d'acquisition) ou par trame (« The dose above is per movie "
+            "frame ») ; 0 = les ExposureDose des mdoc (que RELION 5.1 cumule en comptant l'image elle-même).",
+            "Le préfixe (plusieurs sessions aux mêmes noms de séries) est ajouté par CryoPlug après l'import : l'option "
+            "--prefix de RELION 5.1.1 ne trouve plus aucune série.",
+            "Un avertissement compte les images nommées dans les mdoc mais absentes des fichiers (RELION les ignore).",
+        ],
+        "next": ["relion_tomo_motioncorr", "relion_tomo_ctffind"],
+    },
+    "relion_tomo_motioncorr": {
+        "purpose": "Corrige le mouvement de chaque film d'inclinaison (relion_run_motioncorr sur un jeu de séries ; "
+                   "implémentation de RELION sur CPU ou MotionCor2) : les images d'inclinaison, leur mouvement et les "
+                   "spectres de puissance pour CTFFIND ; en option les sommes des trames paires et impaires pour le "
+                   "débruitage.",
+        "when": [
+            "Juste après l'import des films.",
+            "Cochez « Save images for denoising » si vous comptez débruiter les tomogrammes avec cryoCARE.",
+        ],
+        "avoid": [
+            "Des séries importées comme images déjà corrigées : passez directement à l'estimation de CTF.",
+            "Pas de pondération de dose ici : RELION l'applique dans l'extraction et la reconstruction.",
+        ],
+        "inputs": "Les séries d'inclinaison importées (films).",
+        "tips": [
+            "Un seul patch (1 × 1) suffit souvent pour des films de tomographie à faible dose.",
+            "float16 : moitié moins de disque ; CTFFIND lit alors les spectres de puissance (sauvés d'office).",
+            "Les fichiers de séries des programmes C++ de RELION portent le nom du job puis celui de l'entrée "
+            "(J3/J2/tilt_series/TS_01.star) : c'est normal dans un projet CryoPlug.",
+        ],
+        "next": ["relion_tomo_ctffind"],
+    },
+    "relion_tomo_ctffind": {
+        "purpose": "Ajuste la CTF de chaque image d'inclinaison avec CTFFIND (relion_run_ctffind sur un jeu de séries) : "
+                   "recherche autour de la défocalisation nominale des mdoc, résolution maximale de l'ajustement relâchée "
+                   "avec la dose reçue (les anneaux de Thon s'estompent).",
+        "when": ["Après la correction de mouvement, avant l'exclusion des images et l'alignement."],
+        "avoid": [
+            "CTFFIND non configuré (page Tools) : le job échoue.",
+            "Une recherche trop étroite autour de la défocalisation nominale si le microscope s'écarte de la consigne : "
+            "élargissez « Search around the nominal defocus ».",
+        ],
+        "inputs": "Les séries corrigées du mouvement.",
+        "tips": [
+            "« Dose-dependent Thon ring fading » = 100 e⁻/Å² (défaut de RELION) : résolution maximale × exp(dose / 100).",
+            "Les graphiques défocalisation et résolution contre l'angle d'inclinaison montrent d'un coup d'œil les "
+            "images ratées ; le navigateur des séries montre chaque image avec son ajustement.",
+            "L'épaisseur de CTFFIND5 n'est pas prise en charge par le programme de RELION 5.1.",
+        ],
+        "next": ["relion_tomo_exclude", "relion_tomo_align"],
+    },
+    "relion_tomo_exclude": {
+        "purpose": "Retire les mauvaises images de chaque série (bord de grille ou de lamelle dans le faisceau, glace "
+                   "cristalline, dérive, CTF ratée), comme l'outil napari de RELION : les images par angle avec leur "
+                   "ajustement de CTF, un clic pour exclure ou garder, et des limites sur l'angle, la dose et la qualité "
+                   "de la CTF. Écrit selected_tilt_series.star comme RELION.",
+        "when": [
+            "Après l'estimation de CTF, avant l'alignement : une image ratée gâche l'alignement de toute la série.",
+            "Mode « By the limits below only » pour un traitement automatique (agents, flux de travail).",
+        ],
+        "avoid": [
+            "Exclure trop d'images aux grands angles : le cône manquant s'élargit ; gardez ±40° au moins si possible.",
+            "Une série sans aucune image restante est retirée (avertissement).",
+        ],
+        "inputs": "Les séries corrigées du mouvement, de préférence avec leur CTF.",
+        "tips": [
+            "Les limites pré-sélectionnent les images à exclure ; vous corrigez à la main (clic, X ou espace ; ← → : "
+            "images ; ↑ ↓ : séries).",
+            "Le travail en cours est sauvegardé pendant que le job attend ; « Done » écrit les séries.",
+            "« Worst CTF fit resolution » = 15-20 Å retire les images dont l'ajustement a échoué (RELION plafonne à 25 Å).",
+        ],
+        "next": ["relion_tomo_align"],
+    },
+    "relion_tomo_align": {
+        "purpose": "Aligne les images de chaque série (relion_align_tiltseries) : alignement d'IMOD sur billes d'or, suivi "
+                   "de patchs d'IMOD (sans billes) ou appariement de projections d'AreTomo2 sur GPU, qui peut aussi "
+                   "estimer la CTF et reconstruire les tomogrammes.",
+        "when": [
+            "Après l'exclusion des mauvaises images.",
+            "Billes d'or : IMOD fiducials ; lamelles FIB ou échantillons sans billes : AreTomo2 ou le suivi de patchs.",
+        ],
+        "avoid": [
+            "AreTomo2 sans GPU : impossible.",
+            "Une épaisseur très mal estimée : l'appariement de projections et le suivi de patchs en dépendent.",
+        ],
+        "inputs": "Les séries (avec leur CTF), de préférence après l'exclusion des mauvaises images.",
+        "tips": [
+            "Le tableau donne l'erreur résiduelle d'IMOD (nm) ou le score d'axe d'AreTomo2 de chaque série : une série "
+            "mal alignée se voit tout de suite.",
+            "« Correct the tilt angle offset » (AreTomo -TiltCor) pour les lamelles fraisées en biais.",
+            "Avec « Reconstruct the tomograms », la sortie est directement un jeu de tomogrammes.",
+            "AreTomo2, IMOD (batchruntomo) et cryoCARE se configurent dans Tools ; sinon RELION les cherche dans son PATH.",
+        ],
+        "next": ["relion_tomo_reconstruct"],
+    },
+    "relion_tomo_reconstruct": {
+        "purpose": "Reconstruit un tomogramme binné de chaque série alignée (relion_tomo_reconstruct_tomogram), corrigé de "
+                   "la CTF par inversion de Fourier avec un filtre de Wiener, pour regarder les données et pointer les "
+                   "particules (la moyenne repart des images d'inclinaison). En option les tomogrammes des trames paires "
+                   "et impaires (débruitage) et une projection 2D d'une tranche centrale.",
+        "when": ["Après l'alignement.", "Pour cryoCARE : « Tomograms for denoising » (sans inversion de Fourier)."],
+        "avoid": [
+            "« Tomograms for denoising » avec l'inversion de Fourier : refusé (RELION ne reconstruit alors que la série "
+            "entière).",
+            "Une épaisseur bien plus grande que l'échantillon : du vide inutile et un débruitage moins bon.",
+        ],
+        "inputs": "Les séries alignées (avec leur CTF).",
+        "tips": [
+            "5-10 Å par voxel suffisent pour voir les particules ; largeur et hauteur à 0 : celles des images.",
+            "Pour le débruitage, RELION n'écrit que les deux moitiés (rec_*_half1/2.mrc) : la visionneuse montre la "
+            "première, cryoCARE prend les deux.",
+            "« Only this tomogram » : RELION n'écrit pas de jeu de tomogrammes pour un seul tomogramme ; CryoPlug l'écrit.",
+            "Visionneuse : molette ou ↑ ↓ pour la coupe, une tranche de plusieurs coupes moyennées, un filtre passe-bas.",
+        ],
+        "next": ["relion_tomo_denoise", "relion_tomo_pick", "relion_tomo_import_coords"],
+    },
+    "relion_tomo_denoise": {
+        "purpose": "Débruite les tomogrammes avec cryoCARE (relion_python_tomo_denoise) : un réseau apprend, sur les "
+                   "tomogrammes des trames paires et impaires de quelques séries (Noise2Noise), à retirer le bruit, puis "
+                   "débruite chaque tomogramme. Le pointage devient bien plus facile ; la moyenne utilise toujours les "
+                   "images brutes.",
+        "when": ["Avant le pointage, surtout pour de petites particules ou un environnement encombré (in situ)."],
+        "avoid": [
+            "Des tomogrammes reconstruits sans « Tomograms for denoising » : pas de moitiés, impossible.",
+            "Mesurer sur le tomogramme débruité : il sert à voir et à pointer.",
+        ],
+        "inputs": "Les tomogrammes reconstruits pour le débruitage ; pour « Denoise with a trained model », ceux d'un job "
+                  "d'entraînement (son modèle est repris).",
+        "tips": [
+            "Entraînement sur 2-3 tomogrammes couvrant la plage de défocalisation (vide : trois répartis dans le jeu).",
+            "« Tiles » : augmentez-les si le GPU manque de mémoire (4,4,2…).",
+            "Le modèle (denoising_model.tar.gz) d'un entraînement sert aussi à débruiter d'autres jeux.",
+        ],
+        "next": ["relion_tomo_pick"],
+    },
+    "relion_tomo_pick": {
+        "purpose": "Pointe les particules dans les tomogrammes, coupe par coupe, comme le pointeur napari de RELION : "
+                   "particules isolées (un clic chacune), sphères (vésicules, capsides : un centre et un rayon, particules "
+                   "réparties sur la surface) ou filaments (des points le long de chacun, particules le long de la courbe), "
+                   "avec leurs orientations par rapport à la surface ou à l'axe. Écrit les annotations et le jeu de "
+                   "particules que RELION en dérive (particles.star, optimisation_set.star).",
+        "when": [
+            "Après la reconstruction (de préférence débruitée).",
+            "Sphères et filaments : des a priori d'orientation qui rendent les raffinements bien plus robustes.",
+        ],
+        "avoid": ["Corriger d'anciens pointages hors du mode « Particles » (seul mode qui les reprend)."],
+        "inputs": "Les tomogrammes (débruités de préférence) ; en option les particules d'un pointage précédent, à "
+                  "compléter ou corriger.",
+        "tips": [
+            "Molette ou ↑ ↓ : coupe ; Ctrl + molette : zoom ; glisser : déplacer ; ← → : tomogrammes.",
+            "Les cercles montrent la section, sur la coupe affichée, de la sphère du diamètre de la particule (trait plein : "
+            "centrée sur cette coupe).",
+            "Sphères : un clic au centre sur la coupe médiane, puis un point du bord ; « Particle spacing » fixe la "
+            "distance entre les particules réparties sur la surface.",
+            "Filaments : des points sur les coupes où il passe, Entrée pour le finir ; polarité inconnue : les deux sens "
+            "sont raffinés (rlnAnglePsiFlipRatio 0,5).",
+            "Le travail est sauvegardé pendant que le job attend ; « Done » écrit des fichiers lisibles aussi par RELION.",
+        ],
+        "next": ["relion_tomo_extract", "relion_tomo_reconstruct_particle"],
+    },
+    "relion_tomo_import_coords": {
+        "purpose": "Importe des positions de particules pointées ailleurs (crYOLO, PyTom, Dynamo, template matching, "
+                   "modèles IMOD convertis) : fichiers STAR ou texte à 3 colonnes (X Y Z), ou 6 avec les angles du "
+                   "sous-tomogramme, un fichier par tomogramme nommé d'après lui (relion_tomo_import_coordinates).",
+        "when": ["Un pointage fait par un autre logiciel (apprentissage profond, template matching)."],
+        "avoid": [
+            "Un seul fichier correspondant au motif : RELION le lit comme la liste STAR des fichiers de coordonnées "
+            "(rlnTomoName, rlnTomoImportParticleFile).",
+            "Des coordonnées binnées sans facteur : multipliez-les par le binning (« Multiply the coordinates by »).",
+        ],
+        "inputs": "Les tomogrammes auxquels appartiennent les coordonnées.",
+        "tips": [
+            "« Remove from the file names » : la partie à retirer du nom de fichier pour retrouver le tomogramme "
+            "(TS_01_coords.txt → TS_01).",
+            "Coordonnées centrées (Å depuis le centre) : cochez l'option ; sinon pixels de la série non binnée.",
+            "CryoPlug associe les particules aux tomogrammes de l'entrée dans un optimisation_set.star.",
+        ],
+        "next": ["relion_tomo_extract", "relion_tomo_pick"],
+    },
+    "relion_tomo_extract": {
+        "purpose": "Extrait les particules des séries d'inclinaison (relion_tomo_subtomo) : pour chacune les images des "
+                   "inclinaisons qui la voient, prémultipliées par la CTF, en pile d'images 2D (RELION 5), en "
+                   "pseudo-sous-tomogramme 3D (RELION 4) ou en sous-tomogramme réel, binnées à la boîte voulue.",
+        "when": ["Après le pointage ; à nouveau à pleine résolution après les premiers raffinements binnés."],
+        "avoid": [
+            "Une boîte trop petite : la délocalisation de la CTF coupe du signal (prenez une pré-découpe plus grande).",
+            "Pleine résolution d'emblée : des raffinements lents ; commencez binné (4-6 Å/px).",
+        ],
+        "inputs": "Les particules pointées (ou raffinées).",
+        "tips": [
+            "Boîte ≈ 1,5-2 × la particule ; « Binned box » = cette boîte en pixels après binning (Nyquist = 2 × pixel).",
+            "Piles 2D (RELION 5) : moins de disque, recommandé ; sous-tomogrammes réels pour un premier alignement "
+            "difficile.",
+            "« Highest dose » et « Fewest tilts » écartent les images trop irradiées et les particules trop peu vues.",
+        ],
+        "next": ["relion_tomo_reconstruct_particle", "relion_tomo_initial_model", "relion_tomo_refine3d",
+                 "relion_tomo_class3d"],
+    },
+    "relion_tomo_reconstruct_particle": {
+        "purpose": "Reconstruit la moyenne des particules à partir des images d'inclinaison, dans leurs orientations "
+                   "actuelles (relion_tomo_reconstruct_particle) : la carte complète et, avec des demi-jeux, les deux "
+                   "demi-cartes, à n'importe quels binning et boîte.",
+        "when": [
+            "Juste après un pointage sur sphères ou filaments : une référence de départ (orientations de la géométrie).",
+            "Après la CTF refinement ou l'alignement des trames : la carte améliorée, à pleine taille.",
+        ],
+        "avoid": ["Des particules sans demi-jeux (pas encore raffinées) : une seule carte, ni demi-cartes ni FSC."],
+        "inputs": "Les particules ; un masque pour la FSC masquée.",
+        "tips": [
+            "La boîte et le binning portent sur les images d'inclinaison : la carte peut être plus grande ou plus fine "
+            "que les sous-tomogrammes extraits.",
+            "La symétrie s'applique pendant la reconstruction ; la symétrie hélicoïdale après (relion_helix_toolbox).",
+        ],
+        "next": ["relion_tomo_refine3d", "relion_mask_create", "relion_postprocess"],
+    },
+    "relion_tomo_initial_model": {
+        "purpose": "Une première carte à partir des sous-tomogrammes, sans référence (relion_refine --grad --denovo_3dref "
+                   "--ios, VDAM), alignée sur les axes de symétrie et symétrisée : l'ab initio de RELION 5 pour la "
+                   "tomographie.",
+        "when": ["Aucune référence (ni structure connue, ni moyenne tirée de la géométrie du pointage)."],
+        "avoid": ["Des particules pointées sur des surfaces avec des a priori fiables : une moyenne directe est plus sûre."],
+        "inputs": "Les sous-tomogrammes extraits (binnés de préférence).",
+        "tips": [
+            "« Prior width on the tilt angle » : pour des particules pointées sur des sphères ou des filaments, la "
+            "recherche reste à ± 3 × cette valeur de l'a priori.",
+            "Pour le reste, comme le modèle initial en analyse de particules isolées.",
+        ],
+        "next": ["relion_tomo_refine3d", "relion_tomo_class3d"],
+    },
+    "relion_tomo_class3d": {
+        "purpose": "Trie les sous-tomogrammes en classes 3D contre une référence (relion_refine --K --ios) : recherches "
+                   "globales, locales ou aucune. Chaque classe donne une carte et ses particules.",
+        "when": ["Hétérogénéité de conformation ou de composition ; tri des faux positifs du pointage."],
+        "avoid": ["Trop de classes pour peu de particules : des classes vides ou bruitées."],
+        "inputs": "Les sous-tomogrammes (ou des particules raffinées) et une référence.",
+        "tips": [
+            "Sans alignement (après un raffinement) : rapide, le tri porte sur la structure seule.",
+            "« Prior width on the tilt angle » garde les orientations près de la surface ou de l'axe des filaments.",
+        ],
+        "next": ["relion_tomo_refine3d", "relion_tomo_reconstruct_particle"],
+    },
+    "relion_tomo_refine3d": {
+        "purpose": "Raffinement 3D gold-standard des sous-tomogrammes contre une référence (relion_refine --auto_refine "
+                   "--ios) : recherches globales puis locales, deux demi-jeux indépendants. Donne la carte, les "
+                   "demi-cartes, la FSC et les particules raffinées (pour la CTF refinement et l'alignement des trames).",
+        "when": [
+            "Après l'extraction et un modèle initial ou une moyenne ; à nouveau après la CTF refinement, l'alignement des "
+            "trames ou une ré-extraction à pleine résolution.",
+        ],
+        "avoid": [
+            "Moins de 3 processus MPI : impossible.",
+            "Une référence d'une autre boîte ou d'un autre pixel que les sous-tomogrammes : reconstruisez-la à la même "
+            "boîte.",
+        ],
+        "inputs": "Les sous-tomogrammes et une référence (modèle initial, moyenne, carte connue filtrée).",
+        "tips": [
+            "Avec des a priori (sphères, filaments), « Prior width on the tilt angle » de 5-10° stabilise la recherche.",
+            "Le jeu d'optimisation écrit (run_optimisation_set.star) garde les tomogrammes et trajectoires de l'entrée.",
+        ],
+        "next": ["relion_mask_create", "relion_postprocess", "relion_tomo_ctf_refine", "relion_tomo_frame_align",
+                 "relion_tomo_reconstruct_particle"],
+    },
+    "relion_tomo_ctf_refine": {
+        "purpose": "Affine la défocalisation de chaque image d'inclinaison et l'échelle de contraste (épaisseur de glace) "
+                   "contre la référence (relion_tomo_refine_ctf). Reconstruisez ou raffinez ensuite à nouveau.",
+        "when": ["Après un raffinement à résolution intermédiaire (meilleure que 10 Å) : des gains nets ensuite."],
+        "avoid": ["Une référence à basse résolution : rien à gagner.", "Échelle par image et par tomogramme : exclusives."],
+        "inputs": "Les particules raffinées, les demi-cartes de ce raffinement, un masque et la carte post-traitée de "
+                  "RELION (sa FSC pondère les fréquences).",
+        "tips": [
+            "Recherche de ±3000 Å ; la régularisation garde des défocalisations voisines dans une série (les grands "
+            "angles portent peu de signal).",
+            "CryoPlug passe --per_tomogram_scale, l'option que lit le programme (le GUI de RELION 5.1 passe "
+            "--per_tomo_scale, ignorée).",
+            "Le jeu de tomogrammes mis à jour suit les particules dans optimisation_set.star.",
+        ],
+        "next": ["relion_tomo_frame_align", "relion_tomo_reconstruct_particle", "relion_tomo_refine3d"],
+    },
+    "relion_tomo_frame_align": {
+        "purpose": "Affine l'alignement de chaque image d'inclinaison contre la référence (relion_tomo_align) : décalages "
+                   "et angles des images, positions 3D des particules et, en option, leur mouvement au fil de la série "
+                   "(le polissage bayésien des sous-tomogrammes). Reconstruisez ou raffinez ensuite à nouveau.",
+        "when": [
+            "Après la CTF refinement, pour les derniers gains de résolution.",
+            "« Align by shift only » pour des séries très mal alignées.",
+        ],
+        "avoid": ["Le mouvement par particule et l'alignement par décalage seul ensemble : impossible."],
+        "inputs": "Les particules raffinées (après la CTF refinement de préférence), les demi-cartes, un masque, la carte "
+                  "post-traitée.",
+        "tips": [
+            "« Fit per-particle motion » : des trajectoires 3D (motion.star) que la reconstruction et le raffinement "
+            "suivants appliquent.",
+            "Plusieurs cycles CTF refinement → alignement des trames → raffinement améliorent encore la carte.",
+        ],
+        "next": ["relion_tomo_reconstruct_particle", "relion_tomo_refine3d", "relion_tomo_ctf_refine"],
+    },
 }
 
 FIELDS = ("purpose", "when", "avoid", "inputs", "tips", "next")
@@ -2153,6 +2466,7 @@ CATEGORY_TITLES_FR = {
     "Picking": "Sélection et extraction de particules",
     "Classification": "Classification 2D / 3D",
     "Reconstruction": "Reconstruction (RELION)",
+    "Tomography": "Tomographie (sous-tomogrammes, RELION 5)",
     "Map processing": "Traitement de carte",
     "Heterogeneity": "Hétérogénéité (variabilité 3D)",
     "Model building": "Construction de modèle",

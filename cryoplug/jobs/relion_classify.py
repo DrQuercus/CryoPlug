@@ -13,6 +13,7 @@ from cryoplug import relion as rl
 from cryoplug.jobs import register
 from cryoplug.jobs.base import JobContext, JobError, JobType, OutputDef, Param, Slot, extra_args_param
 from cryoplug.jobs.relion import Progress, absolute_greyscale, map_on_grid
+from cryoplug.jobs.tomo_common import is_tomo, particle_args, tomo_output
 from cryoplug.jobs.relion_common import (
     SAMPLINGS, RelionJob, compute_params, continuation, continue_args, gpus, healpix, helical_check, helical_class2d_args, helical_class3d_args,
     helical_params, mask_diameter, mpi, particles_out_meta, refine_compute_params, refinement_diagnostics, relion_command,
@@ -617,7 +618,9 @@ class RelionInitialModel(RelionJob):
         sym = (str(p["symmetry"]).strip() or "C1").upper()
         k = int(p["classes"])
         args = [*relion_command(ctx, "relion_refine", 1), "--o", ctx.rel(ctx.path("run")), "--iter", str(iters),
-                "--grad", "--denovo_3dref", "--i", parts["ref"]]
+                "--grad", "--denovo_3dref", *particle_args(parts)]
+        if parts.get("tomo") and float(p.get("sigma_tilt", -1)) > 0:
+            args += ["--sigma_tilt", f"{p['sigma_tilt']:g}"]
         if p["ctf"]:
             args.append("--ctf")
             if p["ignore_first_peak"]:
@@ -677,8 +680,14 @@ class RelionInitialModel(RelionJob):
         if k > 1 and maps:
             ctx.add_output("maps", "volume_series", maps, f"{len(maps)} class maps", meta={"frames": len(maps), "relion_map": True})
         if files["data"].exists():
-            ctx.add_output("particles", "particles", files["data"], f"Particles ({total:,})",
-                           meta=particles_out_meta(ctx, files["data"], "inimodel", optimiser=ctx.rel(files["optimiser"])))
+            if is_tomo(ctx.input("particles")):
+                tomo_output(ctx, "particles", files["data"], f"Particles ({total:,})",
+                            relion_particles(ctx, ctx.require("particles")), "inimodel",
+                            opt=files["data"].with_name(files["data"].name.replace("_data.star", "_optimisation_set.star")),
+                            optimiser=ctx.rel(files["optimiser"]))
+            else:
+                ctx.add_output("particles", "particles", files["data"], f"Particles ({total:,})",
+                               meta=particles_out_meta(ctx, files["data"], "inimodel", optimiser=ctx.rel(files["optimiser"])))
         return it
 
 
@@ -768,10 +777,12 @@ class RelionClass3DGlobal(RelionJob):
             it, files = rl.iteration_files(ctx.job_dir)
             if not it or not files["data"].exists():
                 raise JobError("relion_refine wrote no run_itNNN_data.star (see the log)")
-            class3d_outputs(ctx, files, it, k, sym)
+            class3d_outputs(ctx, files, it, k, sym, parts)
             return
-        args = [*relion_command(ctx, "relion_refine", p["mpi"]), "--o", ctx.rel(ctx.path("run")), "--i", parts["ref"],
+        args = [*relion_command(ctx, "relion_refine", p["mpi"]), "--o", ctx.rel(ctx.path("run")), *particle_args(parts),
                 "--ref", ref]
+        if parts.get("tomo") and float(p.get("sigma_tilt", -1)) > 0:
+            args += ["--sigma_tilt", f"{p['sigma_tilt']:g}"]
         if not absolute:
             args.append("--firstiter_cc")
         args.append("--trust_ref_size")
@@ -816,19 +827,23 @@ class RelionClass3DGlobal(RelionJob):
         it, files = rl.iteration_files(ctx.job_dir)
         if not it or not files["data"].exists():
             raise JobError("relion_refine wrote no run_itNNN_data.star (see the log)")
-        class3d_outputs(ctx, files, it, k, sym)
+        class3d_outputs(ctx, files, it, k, sym, parts)
 
     def finish_partial(self, ctx: JobContext) -> str:
         it, files = rl.iteration_files(ctx.job_dir)
         if not it or not files["data"].exists():
             raise JobError("No iteration was written: nothing to use (clear the job and run it again)")
         k = len(rl.model_classes(files["model"])) if files["model"].exists() else int(ctx.params.get("classes") or 1)
-        class3d_outputs(ctx, files, it, k, (str(ctx.params.get("symmetry") or "").strip() or "C1").upper())
+        parts = relion_particles(ctx, ctx.require("particles")) if is_tomo(ctx.input("particles")) else None
+        class3d_outputs(ctx, files, it, k, (str(ctx.params.get("symmetry") or "").strip() or "C1").upper(), parts)
         return f"iteration {it}"
 
 
-def class3d_outputs(ctx: JobContext, files: dict[str, Path], it: int, k: int, sym: str) -> None:
-    """Maps and particles of every 3D class, a table and the projections of the class maps side by side."""
+def class3d_outputs(ctx: JobContext, files: dict[str, Path], it: int, k: int, sym: str,
+                    parts: dict[str, Any] | None = None) -> None:
+    """Maps and particles of every 3D class, a table and the projections of the class maps side by side (subtomogram
+    particles: an optimisation set for each class)."""
+    tomo = parts if parts and parts.get("tomo") else None
     from cryoplug.imaging import write_png
     from cryoplug.micrographs import tile_sheet
     from cryoplug.mrc import projection_image
@@ -855,8 +870,12 @@ def class3d_outputs(ctx: JobContext, files: dict[str, Path], it: int, k: int, sy
             sel = rl.write_star(ctx.path(f"class_{c}.star"),
                                 [t if t is not ptab else ptab.select(np.flatnonzero(classes == c)) for t in tables.values()],
                                 comment=f"Particles of class {c} ({files['data'].name})")
-            ctx.add_output(f"class_{c}", "particles", sel, f"Particles of class {c} ({count:,})",
-                           meta=particles_out_meta(ctx, sel, "class3d", symmetry=sym, class_number=c))
+            if tomo:
+                tomo_output(ctx, f"class_{c}", sel, f"Particles of class {c} ({count:,})", tomo, "class3d",
+                            symmetry=sym, class_number=c)
+            else:
+                ctx.add_output(f"class_{c}", "particles", sel, f"Particles of class {c} ({count:,})",
+                               meta=particles_out_meta(ctx, sel, "class3d", symmetry=sym, class_number=c))
         ctx.add_output(f"map_{c}", "map", path, f"Class {c} ({100 * count / max(n, 1):.0f} %)",
                        meta={"symmetry": sym, "relion_map": True, "class_number": c, "particles": count,
                              **({"resolution": round(res, 2)} if res else {})})
@@ -867,9 +886,14 @@ def class3d_outputs(ctx: JobContext, files: dict[str, Path], it: int, k: int, sy
         png = write_png(ctx.path("classes.png"), tile_sheet([t if t.ndim == 2 else t[..., :3] for t in tiles], per_row=min(6, len(tiles))))
         ctx.add_image("Class maps (projections)", png)
     ctx.add_output("maps", "volume_series", maps, f"{len(maps)} class maps", meta={"symmetry": sym, "frames": len(maps)})
-    ctx.add_output("particles", "particles", files["data"], f"Classified particles ({n:,})",
-                   meta=particles_out_meta(ctx, files["data"], "class3d", symmetry=sym, optimiser=ctx.rel(files["optimiser"]),
-                                           model=ctx.rel(files["model"])))
+    if tomo:
+        tomo_output(ctx, "particles", files["data"], f"Classified particles ({n:,})", tomo, "class3d",
+                    opt=files["data"].with_name(files["data"].name.replace("_data.star", "_optimisation_set.star")),
+                    symmetry=sym, optimiser=ctx.rel(files["optimiser"]))
+    else:
+        ctx.add_output("particles", "particles", files["data"], f"Classified particles ({n:,})",
+                       meta=particles_out_meta(ctx, files["data"], "class3d", symmetry=sym, optimiser=ctx.rel(files["optimiser"]),
+                                               model=ctx.rel(files["model"])))
     ctx.add_highlight("Classes", str(len(maps)))
     if k > 1:
         try:

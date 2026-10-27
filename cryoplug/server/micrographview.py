@@ -126,3 +126,30 @@ def ctf_png(project: Path, path: Path, size: int = 384) -> Path:
         from cryoplug.micrographs import ctf_fit_image
         return ctf_fit_image(path, size)
     return _cached(project, key, build)
+
+
+def tomogram_slice_png(project: Path, path: Path, z: int, thickness: int = 1, size: int = 1024,
+                       lowpass: float = 0.0) -> Path:
+    """Cached picture of a slab of a tomogram: the mean of ``thickness`` Z slices centred on slice ``z`` (read from the
+    memory-mapped file, so that a large tomogram is not loaded), binned and filtered as a micrograph."""
+    import mrcfile
+    size = int(max(128, min(size, 4096)))
+    lowpass = round(max(0.0, min(float(lowpass), 200.0)), 1)
+    thickness = int(max(1, min(thickness, 200)))
+    st = path.stat()
+    with mrcfile.mmap(str(path), mode="r", permissive=True) as m:
+        depth = int(m.data.shape[0]) if m.data.ndim == 3 else 1
+    z = int(max(0, min(int(z), depth - 1)))
+    key = f"v{CACHE_VERSION}:tomo:{path.resolve()}:{st.st_mtime_ns}:{z}:{thickness}:{size}:{lowpass}"
+
+    def build() -> np.ndarray:
+        with mrcfile.mmap(str(path), mode="r", permissive=True) as m:
+            data = m.data
+            pixel = float(m.voxel_size.x) or 1.0
+            if data.ndim == 2:
+                slab = np.asarray(data, dtype=np.float32)
+            else:
+                z0 = max(0, z - (thickness - 1) // 2)
+                slab = np.asarray(data[z0:min(depth, z0 + thickness)], dtype=np.float32).mean(axis=0)
+        return render_micrograph(slab, size, pixel, lowpass)
+    return _cached(project, key, build)

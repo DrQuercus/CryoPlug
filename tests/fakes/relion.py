@@ -1,6 +1,6 @@
 """Fake RELION 5.1 programs for the tests, dispatched on the program name (relion_refine[_mpi],
 relion_particle_subtract[_mpi], relion_particle_symmetry_expand, relion_postprocess, relion_reconstruct[_mpi], and the
-single-particle programs of relion_spa.py: motion correction to DynaMight) and a fake ``mpirun -n N prog ...`` that
+single-particle programs of relion_spa.py: motion correction to DynaMight, the tomography programs of relion_tomo.py) and a fake ``mpirun -n N prog ...`` that
 runs ``prog`` with FAKE_MPI_SIZE=N.
 
 They refuse options RELION 5.1 does not know (relion_options.json; RELION warns and ignores them), need MPI where
@@ -17,6 +17,7 @@ import numpy as np
 sys.path.insert(0, os.environ.get("CRYOPLUG_ROOT", ""))
 sys.path.insert(0, os.path.join(os.environ.get("CRYOPLUG_ROOT", ""), "tests", "fakes"))
 import relion_spa  # noqa: E402
+import relion_tomo  # noqa: E402
 from cryoplug import relion as rl  # noqa: E402
 from cryoplug.mrc import MapVolume  # noqa: E402
 
@@ -55,7 +56,7 @@ def mpi_size():
 def check_images(tables):
     parts = rl.particle_table(tables)
     for name in dict.fromkeys(v.split("@", 1)[-1] for v in parts.column("rlnImageName")):
-        if not name.endswith(".mrcs"):
+        if not name.endswith(".mrcs") and not (os.environ.get("FAKE_TOMO") and name.endswith(".mrc")):  # 3D subtomograms
             die(f"{name}: image stacks need the .mrcs extension")
         if not os.path.exists(name):  # relative to the working directory, as in RELION
             die(f"Cannot open image file {name} (from {os.getcwd()})")
@@ -439,8 +440,18 @@ PROGRAMS = {"relion_refine": refine, "relion_refine_mpi": refine, "relion_partic
             "relion_postprocess": postprocess, "relion_postprocess_mpi": postprocess, "relion_reconstruct": reconstruct,
             "relion_reconstruct_mpi": reconstruct, "mpirun": mpirun}
 PROGRAMS.update(relion_spa.PROGRAMS)
-# relion_refine: 2D classification, initial model and multi-body refinement in relion_spa, the rest here
-PROGRAMS["relion_refine"] = PROGRAMS["relion_refine_mpi"] = lambda argv: relion_spa.refine_spa(argv, refine)
+PROGRAMS.update(relion_tomo.PROGRAMS)
+
+
+def refine_any(argv):
+    """relion_refine: 2D classification, initial model and multi-body refinement in relion_spa, the rest here; the
+    particles of an optimisation set (--ios, subtomograms) in relion_tomo."""
+    if "--ios" in argv:
+        return relion_tomo.refine_ios(argv, lambda av: relion_spa.refine_spa(av, refine))
+    return relion_spa.refine_spa(argv, refine)
+
+
+PROGRAMS["relion_refine"] = PROGRAMS["relion_refine_mpi"] = refine_any
 
 if __name__ == "__main__":
     prog = os.path.basename(sys.argv[0])

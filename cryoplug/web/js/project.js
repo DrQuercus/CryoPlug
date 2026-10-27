@@ -310,6 +310,7 @@ const CATEGORY_LOOK = {
   Picking: ['picks', '--series-1'],
   Classification: ['grid', '--series-4'],
   Reconstruction: ['target', '--series-8'],
+  Tomography: ['cube', '--series-3'],
   'Map processing': ['map', '--series-1'],
   Heterogeneity: ['layers', '--series-4'],
   'Model building': ['model', '--series-2'],

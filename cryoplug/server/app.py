@@ -733,6 +733,18 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
             raise HTTPException(400, f"Cannot read {path}: {exc}") from None
         return FileResponse(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
+    @app.get("/api/projects/{puid}/tomo-slice")
+    def tomogram_slice(puid: str, path: str, z: int = 0, thickness: int = 1, size: int = 1024, lowpass: float = 0.0) -> Response:
+        """A slab of a tomogram as a PNG: ``thickness`` Z slices around slice ``z``, binned by ceil(largest side / size),
+        cached."""
+        from cryoplug.server import micrographview
+        p = manager.safe_path(puid, path)
+        try:
+            png = micrographview.tomogram_slice_png(manager.project_dir(puid), p, z, thickness, size, lowpass)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(400, f"Cannot read {path}: {exc}") from None
+        return FileResponse(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+
     @app.get("/api/projects/{puid}/ctf-image")
     def ctf_picture(puid: str, path: str, size: int = 384) -> Response:
         """The CTFFIND diagnostic image (power spectrum and fitted CTF) of a micrograph as a PNG, cached."""

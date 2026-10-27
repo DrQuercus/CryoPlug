@@ -18,6 +18,7 @@ from cryoplug.jobs.base import InputData, JobContext, JobError, JobType, OutputD
 from cryoplug.jobs.relion import (
     Progress, absolute_greyscale, finish_refinement, map_on_grid, outputs_of_refine, partial_refine_outputs, postprocess,
 )
+from cryoplug.jobs.tomo_common import particle_args
 from cryoplug.jobs.relion_common import (
     SAMPLINGS, RelionJob, compute_params, continuation, continue_args, gpus, healpix, helical_check, helical_params,
     helical_refine_args, histogram,
@@ -124,7 +125,9 @@ class RelionRefine3D(RelionJob):
             return
         diameter = mask_diameter(ctx, parts)
         args = [*relion_command(ctx, "relion_refine", p["mpi"]), "--o", ctx.rel(ctx.path("run")), "--auto_refine",
-                "--split_random_halves", "--i", parts["ref"], "--ref", ctx.rel(ref)]
+                "--split_random_halves", *particle_args(parts), "--ref", ctx.rel(ref)]
+        if parts.get("tomo") and float(p.get("sigma_tilt", -1)) > 0:
+            args += ["--sigma_tilt", f"{p['sigma_tilt']:g}"]
         if not absolute_greyscale(ctx, ref_in):
             args.append("--firstiter_cc")
         args.append("--trust_ref_size")

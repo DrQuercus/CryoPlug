@@ -108,6 +108,9 @@ def motioncorr(argv: list[str]) -> None:
             die("MotionCor2 cannot write float16 files")
     elif "--use_own" not in a:
         die("Specify --use_own or --use_motioncor2")
+    import relion_tomo
+    if relion_tomo.is_tilt_series_set(str(a["--i"])):  # a tilt-series set (MotioncorrRunner: is_tomo)
+        return relion_tomo.motioncorr(a, out)
     tables = rl.read_star(str(a["--i"]))
     if "movies" not in tables:
         die(f"{a['--i']} has no data_movies table")
@@ -189,6 +192,9 @@ def ctffind(argv: list[str]) -> None:
     out = outdir(a)
     if not os.access(str(a["--ctffind_exe"]), os.X_OK):
         die(f"Cannot find the CTFFIND executable {a['--ctffind_exe']}")
+    import relion_tomo
+    if relion_tomo.is_tilt_series_set(str(a["--i"])):  # a tilt-series set (CtffindRunner: is_tomo)
+        return relion_tomo.ctffind(a, out)
     tables = rl.read_star(str(a["--i"]))
     mics = rl.micrograph_table(tables)
     if "--use_given_ps" in a and not mics.has("rlnCtfPowerSpectrum"):
@@ -454,14 +460,14 @@ def particle_images(tables: dict) -> np.ndarray:
     ptab = rl.particle_table(tables)
     cache, out = {}, []
     for name in ptab.column("rlnImageName"):
-        num, stack = name.split("@", 1)
+        num, stack = name.split("@", 1) if "@" in name else ("0", name)  # subtomograms: a file per particle
         if stack not in cache:
             if not os.path.exists(stack):
                 die(f"Cannot open image file {stack} (from {os.getcwd()})")
             with mrcfile.open(stack, permissive=True) as m:
                 data = np.asarray(m.data, dtype=np.float32)
             cache[stack] = data if data.ndim == 3 else data[np.newaxis]
-        out.append(cache[stack][int(num) - 1])
+        out.append(cache[stack][int(num) - 1] if num != "0" else cache[stack][len(cache[stack]) // 2])
     return np.stack(out)
 
 

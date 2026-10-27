@@ -121,6 +121,8 @@ export const api = {
 
   fileUrl: (p, path, download = false) => `/api/projects/${p}/file?path=${enc(path)}${download ? '&download=true' : ''}`,
   micrographUrl: (p, path, size = 1024, lowpass = 20, apix = 0) => `/api/projects/${p}/micrograph?path=${enc(path)}&size=${size}&lowpass=${lowpass}&apix=${apix}`,
+  tomoSliceUrl: (p, path, z, thickness = 1, size = 1024, lowpass = 0) =>
+    `/api/projects/${p}/tomo-slice?path=${enc(path)}&z=${z}&thickness=${thickness}&size=${size}&lowpass=${lowpass}`,
   ctfImageUrl: (p, path, size = 384) => `/api/projects/${p}/ctf-image?path=${enc(path)}&size=${size}`,
   drift: (p, path) => request('GET', `/api/projects/${p}/drift?path=${enc(path)}`),
   control: (p, j, action, value = null) => request('POST', `/api/projects/${p}/jobs/${j}/control`, { action, value }),

@@ -53,6 +53,22 @@ TOOLS: dict[str, ToolDef] = {
                 "implementation when chosen.",
                 "https://emcore.ucsf.edu/ucsf-software",
                 "Zheng S.Q. et al. (2017) Nat. Methods 14, 331-332."),
+        ToolDef("aretomo", "AreTomo2", ["AreTomo2", "AreTomo"],
+                "Tilt-series alignment (projection matching), CTF estimation and tomogram reconstruction on GPUs, run "
+                "by RELION 5's tilt-series alignment job.",
+                "https://github.com/czimaginginstitute/AreTomo2",
+                "Zheng S. et al. (2022) J. Struct. Biol. X 6, 100068."),
+        ToolDef("imod", "IMOD (batchruntomo)", ["batchruntomo"],
+                "Tilt-series alignment with fiducials or patch tracking (batchruntomo), run by RELION 5's tilt-series "
+                "alignment job.",
+                "https://bio3d.colorado.edu/imod/",
+                "Kremer J.R., Mastronarde D.N., McIntosh J.R. (1996) J. Struct. Biol. 116, 71-76; Mastronarde D.N., "
+                "Held S.R. (2017) J. Struct. Biol. 197, 102-113."),
+        ToolDef("cryocare", "cryoCARE", ["cryoCARE_predict.py", "cryoCARE_train.py"],
+                "Tomogram denoising trained on the tomograms of the even and odd frames (Noise2Noise), run by RELION "
+                "5's denoising job.",
+                "https://github.com/juglab/cryoCARE_pip",
+                "Buchholz T.-O. et al. (2019) IEEE ISBI, 502-506."),
         ToolDef("modelangelo", "ModelAngelo", ["model_angelo"],
                 "Automated de novo model building with graph neural networks.",
                 "https://github.com/3dem/model-angelo",
