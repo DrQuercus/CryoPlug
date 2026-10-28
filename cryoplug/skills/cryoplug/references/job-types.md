@@ -23,7 +23,7 @@ Usually followed by: `phenix_process_predicted_model`, `fit_in_map`, `chimerax_f
 built-in. In: none. Out: half_maps: half_maps, map: map, map_sharp: map, mask: mask, map_locres: locres, particles: particles, latent: latent.
 
 Import the final reconstruction of a CryoSPARC refinement job (half maps, unsharpened and sharpened maps, FSC mask, local resolution) and its particles (for heterogeneity analysis) by pointing at its job directory, e.g. /data/CS-myproject/J245. The latest iteration is selected automatically.
-Usually followed by: `directional_fsc`, `locscale`, `modelangelo_build`, `cryoatom_build`, `cryoatom_enhanced`, `import_sequence`, `draw_mask`, `relion_local_refine`.
+Usually followed by: `directional_fsc`, `locscale`, `modelangelo_build`, `cryoatom_build`, `cryoatom_enhanced`, `import_sequence`, `draw_mask`, `relion_local_refine`, `mask_enhanced`, `sharpen_enhanced`.
 
 ### `import_maps` — Import maps
 built-in. In: none. Out: half_maps: half_maps, map: map, map_sharp: map, mask: mask.
@@ -451,11 +451,23 @@ built-in. In: map: map, model?: model. Out: mask: mask.
 Mask drawn by hand on a map in the 3D viewer, as in Chimera: spheres, boxes and cylinders placed with the mouse, connected regions of density picked at the contour level, zones around chains, the density simulated from chains of a model (molmap), the density above a level or an existing mask, added, erased or intersected; then dilated and given a soft edge. Computed here on the full grid of the map, with its centre of mass and the box to re-centre particles on it (signal subtraction).
 Usually followed by: `relion_subtract`, `relion_local_refine`, `relion_class3d`, `map_fsc`, `locscale`.
 
+### `mask_enhanced` — Mask enhanced (validated by the FSC)
+built-in. In: half_maps: half_maps, map?: map. Out: mask: mask, fsc: fsc, masks: files.
+
+Masks made from the map at several thresholds, dilations and soft edges, each scored by the gold-standard FSC of the half maps it gives (masked, corrected by phase randomisation): the tightest mask that does not correlate the noise nor inflate the FSC is kept, with its FSC curves. The mask for post-processing, local refinement and the deposition.
+Usually followed by: `relion_postprocess`, `locscale`, `spisonet`, `relion_local_refine`, `map_fsc`, `local_resolution`.
+
 ### `segment_map` — Segment map into regions
 built-in. In: map: map, mask?: mask. Out: region_1: mask, region_2: mask.
 
 Splits a map into regions (domains, subunits) as ChimeraX's Segger: watershed of the smoothed density above a threshold, regions grouped by the depth of the valleys between them until the number asked remains; a soft mask per region, the largest first: the bodies of a multi-body refinement, the mask of a focused refinement or classification, or of a signal subtraction.
 Usually followed by: `relion_multibody`, `relion_local_refine`, `relion_subtract`, `relion_class3d`.
+
+### `sharpen_enhanced` — Sharpening enhanced (B-factors and methods compared)
+built-in · GPU optional. In: map: map, half_maps?: half_maps, model?: model, mask?: mask, sequence?: sequence. Out: map: map, map_auto: map, map_locscale: map, map_emmernet: map, map_deepemhancer: map, map_emready: map, map_sharpening: map, map_denmod: map, maps: files, report: report.
+
+The map sharpened several ways — the B-factor estimated from its Guinier plot, the B-factors asked for, and the methods installed (LocScale, EMmerNet, DeepEMhancer, EMReady2, Phenix map sharpening and density modification) — every result scored the same way with the model (Q-score of the atoms, map-model correlation and FSC) and the best kept, with the sections of each map side by side, the Guinier plots and the decision map. Without a model, the map at the Guinier B-factor is kept.
+Usually followed by: `cryoatom_enhanced`, `modelangelo_build`, `phenix_real_space_refine`, `phenix_refine_enhanced`, `mapmodel_validation`, `predeposition_check`.
 
 ### `relion_symmetry_search` — Symmetry search (RELION)
 RELION. In: map: map. Out: map: map.
@@ -572,7 +584,7 @@ Usually followed by: `phenix_real_space_refine`, `isolde_session`, `mapmodel_val
 ### `cryoatom_enhanced` — CryoAtom2 enhanced (best of several runs)
 CryoAtom2 · GPU. In: map: map, half_maps?: half_maps, sequence?: sequence, mask?: mask, alt_map_1?: map, alt_map_2?: map, alt_map_3?: map. Out: model: model, model_raw: model, sequence: sequence, candidates: files, map_improved: map, map_other_hand: map, model_other_hand: model.
 
-Runs CryoAtom2 several times (it builds differently each time) with several settings, and optionally on re-sharpened or other maps; scores every model against the experimental map (residues fitted to the density by Q-score, the same density traced twice counted once) and keeps the best, with its gaps filled by well-fitted pieces of the other runs. With sequence databases, identifies the chains and rebuilds with them until no new sequence appears. Can improve the map with the best model (LocScale hybrid or model-based, Phenix) and build again while the score improves, or try other sharpening methods (EMmerNet, DeepEMhancer, EMReady2, density modification). Checks the hand of the map when the model comes out in short pieces.
+Runs CryoAtom2 several times (it builds differently each time) with several settings, and optionally on re-sharpened or other maps; scores every model against the experimental map (residues fitted to the density by Q-score, the same density traced twice counted once) and keeps the best, with its gaps filled by well-fitted pieces of the other runs. With sequence databases, identifies the chains and rebuilds with them until no new sequence appears. Can improve the map with the best model (LocScale hybrid or model-based, Phenix) and build again while the score improves, or try other sharpening methods (EMmerNet, DeepEMhancer, EMReady2, density modification). Checks the hand of the map when the model comes out in short pieces. ModelAngelo can build next to CryoAtom2 (Builders): both are scored the same way, and the best model is kept whichever program built it, its gaps filled from the runs of the other.
 Usually followed by: `phenix_real_space_refine`, `isolde_session`, `mapmodel_validation`, `checkmysequence`.
 
 ### `phenix_dock_in_map` — Dock in map (Phenix)
@@ -662,6 +674,12 @@ Servalcat. In: model: model, half_maps?: half_maps, map?: map, mask?: mask, rest
 
 servalcat refine_spa_norefmac: reciprocal-space refinement against unsharpened half maps with a Gaussian likelihood target and Servalcat's own engine (no REFMAC needed), atomic B-factors, sharpened Fo and Fo-Fc difference maps (Yamashita et al. 2021).
 Usually followed by: `mapmodel_validation`, `coot_session`, `phenix_douse`.
+
+### `phenix_refine_enhanced` — Refinement enhanced (Phenix, cross-validated weight)
+Phenix. In: model: model, half_maps: half_maps, map: map, restraints?: restraints. Out: model: model, report: report, trials: files.
+
+phenix.real_space_refine run against half map 1 with several map weights; every result is scored by its FSC against half map 2 (free) and half map 1 (work): the weight giving the best free FSC without over-fitting or broken geometry is kept, and the model is then refined against the full map with it (the half-map cross-validation of Brown et al. 2015, Acta Cryst. D71, 136).
+Usually followed by: `mapmodel_validation`, `phenix_validation_cryoem`, `predeposition_check`, `servalcat_refine`.
 
 ## Validation
 
