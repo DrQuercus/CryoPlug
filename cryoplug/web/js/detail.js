@@ -6,6 +6,7 @@ import { builderConnect, builderPrefill, builderSetParams, builderSlotsFor, open
 import { classGallery, forgetSelection } from './classes.js';
 import { computeRows } from './compute.js';
 import { exposureCurator } from './curate.js';
+import { decisionMap } from './flow.js';
 import { particleCurator } from './pcurate.js';
 import { helpSheet } from './help.js';
 import { latentExplorer } from './latent.js';
@@ -21,14 +22,14 @@ import {
 } from './ui.js';
 
 const D = { puid: null, uid: null, job: null, mode: 'panel', tab: 'overview', log: '', logOffset: 0, filesSub: '', autoscroll: true, busy: false, again: false,
-  wide: false, frameSel: {}, frameViews: [], warningsOpen: null };
+  wide: false, frameSel: {}, frameViews: [], warningsOpen: null, flows: {} };
 const container = () => document.getElementById(D.mode === 'page' ? 'content' : 'panel');
 
 // mode: 'panel' (right side) or 'page' (main area, next to the job builder).
 export function openDetail(uid, mode = 'panel') {
   const puid = state.project?.uid || null;
   if (D.uid !== uid || D.mode !== mode || D.puid !== puid) {
-    Object.assign(D, { puid, uid, mode, job: null, tab: 'overview', log: '', logOffset: 0, filesSub: '', frameSel: {}, warningsOpen: null });
+    Object.assign(D, { puid, uid, mode, job: null, tab: 'overview', log: '', logOffset: 0, filesSub: '', frameSel: {}, warningsOpen: null, flows: {} });
     setWide(D.wide);
     container().scrollTop = 0;
     renderLoading();
@@ -678,6 +679,12 @@ function reportSection(sec, puid, job) {
           h('span', { class: 'muted small' }, `${s.mean} picks per micrograph (${(s.counts || []).join(', ')})`)),
         usable ? h('button', { class: 'btn small', type: 'button', title: 'Auto-picking of all the micrographs with these settings',
           onclick: () => pickWithSettings(job, s.params) }, icon('play'), 'Pick with these settings…') : null))), note));
+  } else if (sec.kind === 'flow') {
+    const id = sec.key || sec.title;
+    D.flows[id] = D.flows[id] || {}; // zoom, place and tile chosen, kept while the map grows
+    wrap.append(h('h4', {}, sec.title), h('div', { class: 'box' }, decisionMap(sec, {
+      state: D.flows[id], active: ACTIVE.includes(job.status), viewerUrl, scroller: container, name: `${job.uid}_${id}`,
+    }), note));
   } else if (sec.kind === 'image' && sec.frames && sec.frames.length) {
     wrap.append(h('h4', {}, sec.title), h('div', { class: 'box' }, frameView(sec, (f) => [
       h('a', { href: api.fileUrl(puid, f.path), target: '_blank', rel: 'noopener' },

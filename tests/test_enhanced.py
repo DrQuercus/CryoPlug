@@ -39,6 +39,21 @@ def _section(job_dir, title):
     return next(s for s in report["sections"] if s["title"] == title)
 
 
+def _decisions(job_dir):
+    """The decision map of the job, by step, checked: first in the report, every line from a step on the map, the runs
+    of a round inside its box, one result."""
+    report = json.loads((job_dir / "report.json").read_text())
+    assert report["sections"][0]["kind"] == "flow"
+    nodes = {n["id"]: n for n in report["sections"][0]["nodes"]}
+    for n in nodes.values():
+        assert all(p in nodes for p in n["parents"]), n
+        if n["kind"] == "run" and n.get("group"):
+            assert nodes[n["group"]]["kind"] == "group" and not n["parents"]
+        assert n["status"] != "running"  # the job is over
+    assert [n["kind"] for n in nodes.values()].count("result") == 1
+    return nodes
+
+
 def test_scoring_and_combination():
     st = build_helix()
     xyz = np.array([[a.pos.x, a.pos.y, a.pos.z] for r in st[0][0] for a in r])
@@ -114,6 +129,16 @@ def test_best_run_kept_and_gaps_filled(manager, synthetic):
     highlights = {h["label"]: h["value"] for h in job["highlights"]}
     assert highlights["Fitted"].startswith(str(n)) and highlights["Runs"] == "4"
     assert "Hand" not in highlights  # the model is in one piece: no reason to check
+    # the decision map: the runs, the best settings tried on the re-sharpened map, the best of round 1, the gaps filled
+    steps = _decisions(job_dir)
+    runs = [s for s in steps.values() if s.get("group") == "group:1"]
+    assert len(runs) == 2 and [s["status"] for s in runs].count("chosen") == 1
+    assert steps["best_setting"]["parents"] == [next(s["id"] for s in runs if s["status"] == "chosen")]
+    assert steps["group:1:B -30"]["parents"] == ["map:B -30", "best_setting"] and steps["map:B -30"]["parents"] == ["input"]
+    assert steps["combine:best:1"]["status"] == "chosen" and steps["combine:best:1"]["title"] == "Gaps filled"
+    assert steps["result"]["parents"] == ["combine:best:1"] and steps["hand"]["status"] == "skipped"
+    assert all((manager.project_dir(puid) / v["path"]).exists() for s in steps.values() for v in s.get("view", []))
+    assert [v["kind"] for v in steps["result"]["view"]] == ["map", "model"]
 
 
 def test_identification_until_no_new_sequence(manager, synthetic, tmp_path):
@@ -129,6 +154,11 @@ def test_identification_until_no_new_sequence(manager, synthetic, tmp_path):
     fasta = (manager.project_dir(puid) / outs["sequence"]["path"]).read_text()
     assert "P0TEST" in fasta and "P0OTHER" not in fasta
     assert {h["label"]: h["value"] for h in job["highlights"]}["Best run"].startswith("More residues")
+    steps = _decisions(manager.job_dir(puid, job["uid"]))
+    assert steps["identified:2"]["title"] == "1 new sequence identified" and "P0TEST" in steps["identified:2"]["lines"][0]
+    assert steps["group:2"]["parents"] == ["identified:2"]
+    assert steps["best:2"]["status"] == "discarded"  # the same model: not better
+    assert steps["identified:end"]["title"] == "Identification converged" and steps["result"]["parents"] == ["best:1"]
 
 
 def test_wrong_hand_detected(manager, synthetic, monkeypatch):
@@ -141,6 +171,10 @@ def test_wrong_hand_detected(manager, synthetic, monkeypatch):
     outs = {o["name"]: o for o in job["outputs"]}
     assert {"map_other_hand", "model_other_hand"} <= set(outs)
     assert {h["label"]: h["value"] for h in job["highlights"]}["Hand"] == "probably wrong"
+    steps = _decisions(manager.job_dir(puid, job["uid"]))
+    assert steps["hand"]["parents"] == ["best:1"] and steps["map:other hand"]["parents"] == ["hand"]
+    assert steps["run:other_hand"]["parents"] == ["map:other hand"]
+    assert steps["hand:verdict"]["status"] == "warning" and steps["hand:verdict"]["parents"] == ["run:other_hand"]
     # The mirrored map is the experimental map with one axis reversed
     mirrored = MapVolume.read(manager.project_dir(puid) / outs["map_other_hand"]["path"])
     sharp = next(o for o in manager.job(puid, imp)["outputs"] if o["name"] == "map_sharp")
@@ -179,6 +213,13 @@ def test_map_model_cycles(manager, synthetic):
     assert maps == ["experimental", "LocScale hybrid ⟳1", "LocScale hybrid ⟳2", "Phenix model-based sharpening ⟳1",
                     "DeepEMhancer"]
     assert "Map improvement tried: LocScale hybrid" in _section(job_dir, "Summary")["text"]
+    steps = _decisions(job_dir)
+    assert steps["improve:locscale_hybrid:1"]["status"] == "done" and steps["improve:locscale_hybrid:1"]["parents"] == ["best:1"]
+    assert steps["best:improve:locscale_hybrid:1"]["status"] == "chosen"
+    assert steps["improve:locscale_hybrid:2"]["status"] == "discarded"  # not better: its branch fades
+    assert steps["improve:locscale_hybrid:2"]["parents"] == ["best:improve:locscale_hybrid:1"]
+    assert steps["improve:emready:1"]["status"] == "failed" and "left out" in steps["improve:emready:1"]["lines"]
+    assert steps["result"]["parents"] == ["best:improve:locscale_hybrid:1"]
 
 
 def test_map_improvement_choices(manager, synthetic):

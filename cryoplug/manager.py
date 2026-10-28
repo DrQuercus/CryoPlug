@@ -1013,11 +1013,11 @@ class Manager:
             found.append({"time": m["time"], "text": m["text"]})
 
     def _drop_cleared_views(self, puid: str, report: dict[str, Any]) -> None:
-        """Maps of the steps of a finished job opened from its frames: those deleted since (Clear intermediate
-        iterations) are not offered any more."""
+        """Maps of the steps of a finished job opened from its frames or its decision map: those deleted since (Clear
+        intermediate iterations, models of the runs not kept) are not offered any more."""
         root = self.project_dir(puid)
         for sec in report.get("sections", []):
-            for frame in sec.get("frames") or []:
+            for frame in [*(sec.get("frames") or []), *(sec.get("nodes") or [])]:
                 if frame.get("view"):
                     frame["view"] = [v for v in frame["view"] if (root / v["path"]).exists()]
 

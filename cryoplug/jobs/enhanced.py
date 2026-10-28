@@ -38,6 +38,7 @@ from cryoplug.jobs.base import (
     resolution_param,
 )
 from cryoplug.jobs.building import _sequences_from, map_file_for, report_model, sequence_files
+from cryoplug.jobs.decisions import DecisionMap
 
 # CryoAtom2 2.1.1 defaults (CryoAtom2/config.json). "threshold" is the name of the Cα threshold before 2.1.
 CRYOATOM_CONFIG: dict[str, dict[str, Any]] = {
@@ -240,12 +241,12 @@ class CryoAtomEnhanced(JobType):
         for i in range(1, ALT_MAPS + 1):
             alt = ctx.input(f"alt_map_{i}")
             if alt:
-                maps.append({"label": f"other {i}", "short": f"other {i}", "path": alt.path,
+                maps.append({"label": f"other {i}", "short": f"other {i}", "path": alt.path, "title": f"Other map {i}",
                              "note": alt.label or Path(alt.path).name})
         for b in parse_bfactors(ctx.params["bfactors"]):
             data = fourier_filter(self.ref, bfactor=b, lowpass=resolution if b < 0 else 0.0)
             path = self.ref.like(data).write(ctx.path(f"map_B{b:+g}.mrc"))
-            maps.append({"label": f"B {b:+g}", "short": f"B {b:+g} Å²", "path": str(path),
+            maps.append({"label": f"B {b:+g}", "short": f"B {b:+g} Å²", "path": str(path), "title": f"Map at B {b:+g} Å²",
                          "note": f"map {'sharpened' if b < 0 else 'blurred'} by B = {b:+g} Å²"})
 
         settings = SETTING_SETS.get(ctx.params["settings"]) or auto_settings(resolution)
@@ -253,8 +254,9 @@ class CryoAtomEnhanced(JobType):
         first = [(maps[0], s, r) for s in settings for r in range(1, runs + 1)]
         later = [(mp, None, r) for mp in maps[1:] for r in range(1, runs + 1)]  # the best setting, once known
         limit = int(ctx.params["max_runs"])
-        if len(first) + len(later) > limit:
-            ctx.warn(f"{len(first) + len(later)} runs planned, {limit} at most (Maximum runs): the last ones are left out")
+        asked = len(first) + len(later)
+        if asked > limit:
+            ctx.warn(f"{asked} runs planned, {limit} at most (Maximum runs): the last ones are left out")
             later = later[: max(0, limit - len(first))]
             first = first[:limit]
         self.planned = len(first) + len(later)
@@ -263,14 +265,41 @@ class CryoAtomEnhanced(JobType):
                 + f"; models scored against {Path(m.path).name} at {resolution:g} Å (fitted: residue Q ≥ "
                   f"{ms.fitted_cutoff(resolution):.2f})")
 
+        self._flow_start(m, maps, settings, runs, asked)
         sequences = self.sequences = self._write_sequences(1)
-        round1 = [c for c in (self._build(mp, s, r, sequences, 1) for mp, s, r in first) if c]
+        self.flow.add("group:1", "group", f"Round 1 · {len(first)} run{'s' if len(first) > 1 else ''} on the experimental map",
+                      parents=["settings"], icon="grid")
+        round1 = [c for c in (self._build(mp, s, r, sequences, 1, group="group:1") for mp, s, r in first) if c]
         if not round1:
             raise JobError("No CryoAtom2 run produced a model (see the log)")
-        best_setting = self._best(round1)["setting"]
-        round1 += [c for c in (self._build(mp, best_setting, r, sequences, 1) for mp, _, r in later) if c]
+        best_first = self._best(round1)
+        best_setting = best_first["setting"]
+        groups = []  # the boxes of the runs on the other maps
+        if later:
+            self.flow.mark(self._node(best_first), [self._node(c) for c in round1])
+            self.flow.add("best_setting", "decision", "Best settings", status="chosen", parents=[self._node(best_first)],
+                          icon="sliders", lines=[PRESETS[best_setting][0], f"used on the {len(maps) - 1} other map{'s' if len(maps) > 2 else ''}"],
+                          detail=f"The settings of the best of the first runs, {self._name(best_first)}: {self._summary(best_first)}")
+            for mp in maps[1:]:
+                todo = [r for other, _, r in later if other is mp]
+                if not todo:
+                    continue
+                gid = f"group:1:{mp['label']}"
+                self.flow.add(gid, "group", f"{len(todo)} run{'s' if len(todo) > 1 else ''} on the {mp['note']}",
+                              parents=[f"map:{mp['label']}", "best_setting"], icon="grid")
+                built = [c for c in (self._build(mp, best_setting, r, sequences, 1, group=gid) for r in todo) if c]
+                groups.append((gid, built))
+                round1 += built
         best = self._best(round1)
         ctx.log(f"Round 1: best run {best['label']} ({self._summary(best)})")
+        if groups:  # the best of the first runs (its box, through the best settings) or a run on another map
+            parents = ["best_setting" if best is best_first else self._node(best)]
+            parents += [gid for gid, built in groups if best not in built]
+            self._decide("best:1", best, [c for _, built in groups for c in built], parents=parents,
+                         title=f"Best of {len(round1)} runs")
+        else:
+            self._decide("best:1", best, round1)
+        self.head = "best:1"
 
         if ctx.params["combine"] and len(round1) > 1:
             best = self._combine(best, round1, write_structure) or best
@@ -282,25 +311,43 @@ class CryoAtomEnhanced(JobType):
                 new = self._new_sequences(last_round)
                 if not new:
                     ctx.log("No new sequence identified: the identification has converged")
+                    self.flow.add("identified:end", "decision", "Identification converged", parents=[self.head], icon="check",
+                                  lines=["no new sequence identified", f"after {rnd - 1} round{'s' if rnd > 2 else ''}"])
                     break
                 for kind, recs in new.items():
                     self.records.setdefault(kind, []).extend(recs)
                     ctx.log(f"Round {rnd}: rebuilding with {len(recs)} new {kind} sequence(s): "
                             + ", ".join(n[:40] for n, _ in recs))
+                names = [n for recs in new.values() for n, _ in recs]
+                self.flow.add(f"identified:{rnd}", "decision", f"{len(names)} new sequence{'s' if len(names) > 1 else ''} identified",
+                              parents=[self.head], icon="search", lines=[n[:60] for n in names[:2]] + (
+                                  [f"and {len(names) - 2} more"] if len(names) > 2 else []),
+                              detail="Identified in the databases by at least half of the runs of the round, then given to "
+                                     "CryoAtom2 for the next round:\n" + "\n".join(names))
                 self.planned += runs
                 sequences = self.sequences = self._write_sequences(rnd)
                 mp = {x["label"]: x for x in maps}.get(best["map"], maps[0])
-                last_round = [c for c in (self._build(mp, best["setting"], r, sequences, rnd) for r in range(1, runs + 1)) if c]
+                gid = f"group:{rnd}"
+                self.flow.add(gid, "group", f"Round {rnd} · {runs} run{'s' if runs > 1 else ''} with the sequences found",
+                              parents=[f"identified:{rnd}"], icon="grid")
+                last_round = [c for c in (self._build(mp, best["setting"], r, sequences, rnd, group=gid)
+                                          for r in range(1, runs + 1)) if c]
                 rounds = rnd
                 if not last_round:
                     ctx.warn(f"Round {rnd}: no run produced a model")
+                    self.flow.add(f"best:{rnd}", "decision", f"No model in round {rnd}", parents=[gid], status="failed",
+                                  lines=["no run produced a model"], icon="alert")
                     break
                 top = self._best(last_round)
-                if top["score"]["score"] > best["score"]["score"]:
-                    best = top
+                if self._decide(f"best:{rnd}", top, last_round, before=best):
+                    best, self.head = top, f"best:{rnd}"
                     if ctx.params["combine"] and len(last_round) > 1:
                         best = self._combine(best, last_round, write_structure) or best
                 ctx.log(f"Round {rnd}: best run {top['label']} ({self._summary(top)})")
+            else:
+                self.flow.add("identified:end", "decision", "Identification stopped", parents=[self.head], icon="search",
+                              lines=[f"{int(ctx.params['identify_rounds'])} round{'s' if int(ctx.params['identify_rounds']) > 1 else ''} "
+                                     "at most (Identification rounds)"])
 
         self.round = rounds
         if ctx.params["improve_map"]:
@@ -309,11 +356,19 @@ class CryoAtomEnhanced(JobType):
         # The hand of the map
         hand = "not checked"
         mode = ctx.params["check_hand"]
+        short = f"{best['score']['short_fraction']:.0%} of the residues in short pieces"
         if mode == "always" or (mode == "auto" and ms.wrong_hand_suspected(best["score"])):
             if mode == "auto":
                 ctx.warn(f"{best['score']['short_fraction']:.0%} of the residues are in pieces shorter than {ms.SHORT}: "
                          "is the map in the wrong hand? Building once into the mirrored map")
+            self.flow.add("hand", "decision", "Hand check", parents=[self.head], icon="shield",
+                          lines=[short if mode == "auto" else "asked for (Check the hand: always)", "one run in the mirrored map"])
             hand = self._check_hand(best, maps[0], flip_hand, MapVolume)
+        elif mode == "auto":
+            self.flow.add("hand", "decision", "Hand check", parents=[self.head], status="skipped", icon="shield",
+                          lines=[short, "checked above 50%"],
+                          detail=f"Pieces shorter than {ms.SHORT} residues: most of the model in such pieces (helices broken up) is "
+                                 "the sign of a map in the wrong hand, and the job then builds once into the mirrored map.")
 
         self._report(best, rounds, hand)
 
@@ -348,9 +403,15 @@ class CryoAtomEnhanced(JobType):
         return map_file_for(self.ctx, self.mask.path, "input_mask")
 
     def _build(self, mp: dict[str, Any], setting: str, run: int, sequences: dict[str, str], rnd: int,
-               label: str | None = None, mask_path: str | None | bool = True, ref: Any = None) -> dict[str, Any] | None:
+               label: str | None = None, mask_path: str | None | bool = True, ref: Any = None, group: str = "",
+               parents: tuple[str, ...] = ()) -> dict[str, Any] | None:
         ctx, ms = self.ctx, self.ms
         label = label or f"r{rnd}_{re.sub(r'[^A-Za-z0-9+-]+', '', mp['label'])}_{setting}_{run}"
+        node = f"run:{label}"
+        self.flow.add(node, "run", f"{PRESETS[setting][0]} {run}" if group else f"{PRESETS[setting][0]} · {mp['note']}",
+                      parents=parents, group=group, status="running", lines=["running…"], icon="model",
+                      detail=f"CryoAtom2 with the {PRESETS[setting][0].lower()} settings ({PRESETS[setting][1]}) on the "
+                             f"{mp['note']}. Folder runs/{label}.")
         folder = self.runs_dir / label
         folder.mkdir(exist_ok=True)
         config = merged(self.base_config, PRESETS[setting][2])
@@ -385,17 +446,20 @@ class CryoAtomEnhanced(JobType):
         except JobError as exc:
             ctx.warn(f"Run {label} failed: {exc}")
             self.done += 1
+            self.flow.update(node, status="failed", lines=["failed", str(exc).splitlines()[0][:80]])
             return None
         self.done += 1
         model = first_existing([out / "cryoatom.cif"]) or next(iter(sorted(out.glob("*.cif"))), None)
         if model is None:
             ctx.warn(f"Run {label}: no model written")
+            self.flow.update(node, status="failed", lines=["failed", "no model written"])
             return None
         try:
             st = self.read_structure(model)
             score = ms.score_model(st, ref if ref is not None else self.ref, self.resolution)
         except Exception as exc:  # an unreadable model is one bad run, not the end of the search
             ctx.warn(f"Run {label}: model not scored ({exc})")
+            self.flow.update(node, status="failed", lines=["model not scored", str(exc)[:80]])
             return None
         found_prot = _sequences_from([out / "cryoatom_prot.fasta"])
         found_na = [(n, s.upper().replace("T", "U")) for n, s in _sequences_from([out / "cryoatom_na.fasta"])]
@@ -404,6 +468,10 @@ class CryoAtomEnhanced(JobType):
                 "model": model, "raw": first_existing([out / "cryoatom_raw.cif"]), "score": score,
                 "found_prot": found_prot, "found_na": found_na}
         ctx.log(f"Run {label}: {self._summary(cand)}")
+        self.flow.update(node, status="done", lines=[f"{score['fitted']} fitted ({score['fitted_fraction']:.0%})",
+                                                     f"score {score['score']:.0f} · Q {score['q_mean']:.2f}"],
+                         detail=self.flow.nodes[node].get("detail", "") + f"\n{self._summary(cand)}",
+                         view=[{"kind": "map", "path": mp["path"], "label": mp["note"]}, {"kind": "model", "path": model, "label": label}])
         if ref is None:
             self.candidates.append(cand)
             self._live(cand, st)
@@ -435,25 +503,42 @@ class CryoAtomEnhanced(JobType):
                 f"CC {s['cc_mask']:.3f}, {s['fragments']} fragments, {s['duplicated']} duplicated, score {s['score']:.1f}")
 
     def _combine(self, best: dict[str, Any], cands: list[dict[str, Any]], write_structure) -> dict[str, Any] | None:
+        """The best model with the gaps filled by fitted pieces of the other runs, when the score improves; on the
+        decision map, under the decision that chose the best model (which it then follows if kept)."""
         ctx, ms = self.ctx, self.ms
         others = sorted((c for c in cands if c is not best and "combined_from" not in c), key=lambda c: -c["score"]["score"])
         if not others:
             return None
+        after = self.head
+        node = f"combine:{after}"
         base = self.read_structure(best["model"])
         combined, added = ms.combine(base, [(c["label"], self.read_structure(c["model"]), c["score"]["per_residue"]) for c in others],
                                      ms.fitted_cutoff(self.resolution))
         if not added:
             ctx.log("Combination: no fitted piece of the other runs where the best model has nothing")
+            self.flow.add(node, "decision", "No gap filled", parents=[after], status="skipped", icon="layers",
+                          lines=["no fitted piece of the other runs", "where the best model has nothing"])
             return None
         path = write_structure(combined, ctx.path(f"combined_round{best['round']}.cif"))
         score = ms.score_model(self.read_structure(path), self.ref, self.resolution)
         cand = {**best, "label": f"{best['label']} + {len(added)} piece(s)", "model": path, "score": score,
                 "combined_from": added}
         self.candidates.append(cand)
-        verdict = "kept" if score["score"] > best["score"]["score"] else "not kept (the score does not improve)"
-        ctx.log(f"Combination: {sum(a['length'] for a in added)} residues in {len(added)} piece(s) from "
-                f"{len({a['source'] for a in added})} other run(s) — {self._summary(cand)} — {verdict}")
-        if score["score"] > best["score"]["score"]:
+        kept = score["score"] > best["score"]["score"]
+        verdict = "kept" if kept else "not kept (the score does not improve)"
+        residues, sources = sum(a["length"] for a in added), len({a["source"] for a in added})
+        ctx.log(f"Combination: {residues} residues in {len(added)} piece(s) from {sources} other run(s) — "
+                f"{self._summary(cand)} — {verdict}")
+        self.flow.add(node, "decision", "Gaps filled" if kept else "Gap filling not kept", parents=[after],
+                      status="chosen" if kept else "discarded", icon="layers",
+                      lines=[f"+{residues} residues in {len(added)} piece{'s' if len(added) > 1 else ''}",
+                             f"score {best['score']['score']:.0f} → {score['score']:.0f}" + ("" if kept else ": no better")],
+                      detail=f"Fitted pieces of {sources} other run{'s' if sources > 1 else ''} where the best model has "
+                             f"nothing ({', '.join(sorted({a['source'] for a in added}))}). {self._summary(cand)}",
+                      view=[{"kind": "map", "path": best["map_path"], "label": best["map_note"]},
+                            {"kind": "model", "path": path, "label": cand["label"]}])
+        if kept:
+            self.head = node
             self._live(cand)
             return cand
         return None
@@ -533,15 +618,23 @@ class CryoAtomEnhanced(JobType):
             for cycle in range(1, (int(ctx.params["improve_rounds"]) if uses_model else 1) + 1):
                 folder = ctx.path("improve", f"{method}_{cycle}" if uses_model else method)
                 folder.mkdir(parents=True, exist_ok=True)
+                node = f"improve:{method}:{cycle}"
+                title = f"{label} · cycle {cycle}" if uses_model else label
                 model = None
                 if uses_model:
                     part = ms.reliable_part(self.read_structure(best["model"]), best["score"]["per_residue"], cutoff)
                     n = len(ms.polymer_residues(part))
                     if n < 10:
                         ctx.warn(f"{label}: only {n} residues of the best model fit the density, too few to sharpen with")
+                        self.flow.add(node, "map", title, parents=[self.head], status="skipped", icon="map",
+                                      lines=[f"only {n} residues of the best model fit", "too few to sharpen with"])
                         break
                     model = str(write_structure(part, folder / "model_fitted.cif"))
                     ctx.log(f"{label}, cycle {cycle}: sharpening with the {n} fitted residues of {best['label']}")
+                    made = [f"sharpened with the {n} fitted residues", f"of {self._name(best)}"]
+                else:
+                    made = [f"from the {'half maps' if ctx.input('half_maps') else 'experimental map'}", "no model used"]
+                self.flow.add(node, "map", title, parents=[self.head], status="running", lines=["making the map…"], icon="map")
                 self.planned += runs
                 ctx.progress(self.done / max(self.planned, 1), f"Map improvement: {label}"
                              + (f", cycle {cycle} (with the model of {best['label']})" if uses_model else ""),
@@ -551,26 +644,34 @@ class CryoAtomEnhanced(JobType):
                 except JobError as exc:
                     self.planned -= runs
                     ctx.warn(f"{label} left out: {exc}")
+                    self.flow.update(node, status="failed", lines=["left out", str(exc).splitlines()[0][:80]])
                     break
                 self.round += 1
                 mp = {"label": f"{label} {cycle}" if uses_model else label,
                       "short": f"{label} ⟳{cycle}" if uses_model else label, "path": str(new_map),
                       "note": f"{label} map" + (f", cycle {cycle}" if uses_model else "")}
+                self.flow.update(node, status="done", lines=made, view=[{"kind": "map", "path": new_map, "label": mp["note"]}])
                 maps.append(mp)
                 self.improved[mp["label"]] = new_map
-                cands = [c for c in (self._build(mp, best["setting"], r, self.sequences, self.round)
+                gid = f"group:{node}"
+                self.flow.add(gid, "group", f"{runs} run{'s' if runs > 1 else ''} in the {mp['note']}", parents=[node], icon="grid")
+                cands = [c for c in (self._build(mp, best["setting"], r, self.sequences, self.round, group=gid)
                                      for r in range(1, runs + 1)) if c]
                 if not cands:
                     ctx.warn(f"{label}: no run produced a model in the new map")
+                    self.flow.add(f"best:{node}", "decision", "No model in the new map", parents=[gid], status="failed",
+                                  lines=["no run produced a model"], icon="alert")
                     break
                 top = self._best(cands)
-                better = top["score"]["score"] > best["score"]["score"]
+                better = self._decide(f"best:{node}", top, cands, before=best)
                 ctx.log(f"{mp['note']}: best run {top['label']} ({self._summary(top)}) — "
                         + ("better than the best so far" if better else f"not better than {best['label']}"))
                 if better:
-                    best = top
+                    best, self.head = top, f"best:{node}"
                     if ctx.params["combine"] and len(cands) > 1:
                         best = self._combine(best, cands, write_structure) or best
+                else:  # this map gave nothing better: its branch fades on the decision map
+                    self.flow.update(node, status="discarded")
                 if not better or not uses_model:
                     break
         return best
@@ -586,13 +687,21 @@ class CryoAtomEnhanced(JobType):
                 mask = str(mvol.like(flip_hand(mvol)).write(ctx.path("mask_other_hand.mrc")))
         self.planned += 1
         mp = {"label": "other hand", "short": "mirrored", "path": str(path), "note": "map mirrored (other hand)"}
+        self.flow.add("map:other hand", "map", "Mirrored map", parents=["hand"], icon="map",
+                      lines=["the experimental map", "with one axis reversed"], view=[{"kind": "map", "path": path, "label": mp["note"]}])
         cand = self._build(mp, best["setting"], 1, self.sequences, 0, label="other_hand", mask_path=mask or False,
-                           ref=flipped)
+                           ref=flipped, parents=("map:other hand",))
         if cand is None:
+            self.flow.add("hand:verdict", "decision", "Hand check failed", parents=["map:other hand"], status="failed",
+                          icon="alert", lines=["no model in the mirrored map"])
             return "check failed (the run in the mirrored map gave no model)"
         mine, theirs = best["score"]["score"], cand["score"]["score"]
         self.hand_candidate = cand
+        compared = [f"mirrored map: score {theirs:.0f}", f"experimental map: {mine:.0f}"]
         if theirs > 1.25 * mine and theirs - mine >= max(5.0, 0.1 * best["score"]["residues"]):
+            self.flow.add("hand:verdict", "decision", "Probably the WRONG HAND", parents=[self._node(cand)], status="warning",
+                          icon="alert", lines=compared, detail="Flip the map (and the half maps) before building further: "
+                                                               "the mirrored map and its model are outputs of the job.")
             ctx.warn(f"The map is probably in the WRONG HAND: built into the mirrored map, the model scores {theirs:.0f} "
                      f"against {mine:.0f} ({cand['score']['fitted']} fitted residues against {best['score']['fitted']}). Flip "
                      "the map (and the half maps) before building further: the mirrored map and its model are outputs.")
@@ -602,8 +711,73 @@ class CryoAtomEnhanced(JobType):
             ctx.add_highlight("Hand", "probably wrong", "bad")
             return f"probably wrong: the mirrored map scores {theirs:.0f} against {mine:.0f}"
         ctx.log(f"Hand check: the mirrored map does not do better (score {theirs:.0f} against {mine:.0f}): the hand looks right")
+        self.flow.mark(None, [self._node(cand)])
+        self.flow.add("hand:verdict", "decision", "The hand looks right", parents=[self._node(cand)], icon="check", lines=compared)
         ctx.add_highlight("Hand", "checked", "good")
         return f"looks right (mirrored map: score {theirs:.0f} against {mine:.0f})"
+
+    # --------------------------------------------------------------- decision map
+    def _flow_start(self, m: Any, maps: list[dict[str, Any]], settings: list[str], runs: int, asked: int) -> None:
+        """The decision map from the start: the experimental map, the other maps, the settings to try."""
+        ctx = self.ctx
+        self.flow = DecisionMap(ctx, note="How the job got to its model: the runs of each round side by side, each decision "
+                                          "under what it was taken from. The path to the best model is lit up; what was "
+                                          "tried and not kept is faded. Click a tile for its details and its 3D view.")
+        self.head = "settings"
+        given = [name for name, there in (("half maps", ctx.input("half_maps")), ("sequence", ctx.input("sequence")),
+                                          ("mask", self.mask)) if there]
+        self.flow.add("input", "input", "Experimental map", icon="map",
+                      lines=[Path(m.path).name, f"{self.resolution:g} Å" + (f" · {', '.join(given)}" if given else "")],
+                      detail=f"{m.path}\nEvery model is scored against this map at {self.resolution:g} Å: a residue counts as "
+                             f"fitted from a Q-score of {self.ms.fitted_cutoff(self.resolution):.2f}."
+                             + (f"\nAlso given: {', '.join(given)}." if given else ""),
+                      view=[{"kind": "map", "path": m.path, "label": "experimental map"}])
+        for mp in maps[1:]:
+            self.flow.add(f"map:{mp['label']}", "map", mp.get("title", mp["short"]), parents=["input"], icon="map",
+                          lines=[mp["note"]], view=[{"kind": "map", "path": mp["path"], "label": mp["note"]}])
+        auto = ctx.params["settings"] == "auto"
+        cut = asked > self.planned
+        self.flow.add("settings", "decision", "Settings to try", parents=["input"], status="warning" if cut else "done",
+                      icon="sliders", lines=[", ".join(PRESETS[s][0] for s in settings),
+                                             (f"auto at {self.resolution:g} Å" if auto else "as set")
+                                             + f" · {runs} run{'s' if runs > 1 else ''} each"],
+                      detail=(("Chosen for the resolution: beyond 3.5 Å more rounds (low resolution), at 3.5 Å or better "
+                               "more residues (lower thresholds).\n") if auto else "")
+                             + "\n".join(f"{PRESETS[s][0]}: {PRESETS[s][1]}." for s in settings)
+                             + f"\n{self.planned} run{'s' if self.planned > 1 else ''} planned to start with"
+                             + (f" ({asked} asked for, {self.planned} at most: Maximum runs)." if cut else "."))
+
+    @staticmethod
+    def _node(c: dict[str, Any]) -> str:
+        return f"run:{c['label']}"
+
+    @staticmethod
+    def _name(c: dict[str, Any]) -> str:
+        """A run as the decision map names it: its settings, its number, its map if not the experimental one."""
+        where = "" if c["map"] == "map" else f", {c['map_short']}"
+        rnd = f", round {c['round']}" if c["map"] == "map" and c["round"] > 1 else ""
+        return f"{PRESETS[c['setting']][0]} {c['run']}{where}{rnd}" + (" + pieces" if "combined_from" in c else "")
+
+    @staticmethod
+    def _scores(s: dict[str, Any]) -> list[str]:
+        return [f"{s['fitted']} fitted ({s['fitted_fraction']:.0%}) · score {s['score']:.0f}",
+                f"Q {s['q_mean']:.2f} · CC {s['cc_mask']:.2f} · {s['fragments']} piece{'s' if s['fragments'] != 1 else ''}"]
+
+    def _decide(self, node: str, top: dict[str, Any], cands: list[dict[str, Any]], before: dict[str, Any] | None = None,
+                parents: list[str] | None = None, title: str | None = None) -> bool:
+        """The best run of a round on the decision map: kept, or not better than the best model so far (``before``)."""
+        better = before is None or top["score"]["score"] > before["score"]["score"]
+        self.flow.mark(self._node(top) if better else None, [self._node(c) for c in cands])
+        s = top["score"]
+        if before is None:
+            lines = [self._name(top), self._scores(s)[0]]
+        else:
+            lines = [self._name(top), f"score {s['score']:.0f} " + ("better than" if better else "not better than")
+                     + f" {before['score']['score']:.0f}"]
+        self.flow.add(node, "decision", title or f"Best of {len(cands)} run{'s' if len(cands) > 1 else ''}",
+                      parents=parents or [self._node(top)], status="chosen" if better else "discarded", icon="target",
+                      lines=lines, detail=self._summary(top) + ("" if before is None else f"\nBest so far: {self._summary(before)}"))
+        return better
 
     # --------------------------------------------------------------- live dashboard
     def _live(self, cand: dict[str, Any], st: Any = None) -> None:
@@ -716,6 +890,10 @@ class CryoAtomEnhanced(JobType):
         if s["short_fraction"] > 0.3:
             lines.append(f"{s['short_fraction']:.0%} of the residues are in pieces shorter than {self.ms.SHORT} residues.")
         ctx.add_text("Summary", "\n".join(lines))
+        self.flow.add("result", "result", "Best model", parents=[self.head], status="chosen", icon="target",
+                      lines=[self._name(best), *self._scores(s)[:1]], detail="\n".join(lines),
+                      view=[{"kind": "map", "path": best["map_path"], "label": best["map_note"]},
+                            {"kind": "model", "path": final, "label": f"best model ({best['label']})"}])
         if ctx.params["keep_runs"]:
             folder = ctx.path("candidates")
             folder.mkdir(exist_ok=True)

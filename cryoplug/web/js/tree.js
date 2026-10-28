@@ -335,7 +335,7 @@ function crossings(rows) {
 }
 
 // Centres as close as possible (weighted least squares) to the desired ones, in the same order and spaced enough.
-function place(list, desired, weights, spacing) {
+export function place(list, desired, weights, spacing) {
   const offset = [0];
   for (let i = 1; i < list.length; i++) offset.push(offset[i - 1] + spacing(list[i - 1], list[i]));
   const blocks = [];

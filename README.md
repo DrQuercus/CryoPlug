@@ -352,8 +352,8 @@ Comme dans CryoSPARC, le panneau d'un job en cours se met à jour tout seul : tu
 avertissements du job, et **un curseur d'itération** sur les graphiques (FSC, coupes de la carte avec le contour
 du masque, classes, part de chaque classe) des raffinements, classifications et modèles initiaux RELION ; **View 3D**
 ouvre les cartes d'une itération pendant que le job continue. CryoAtom2 enhanced montre le modèle de chaque essai,
-le tableau des essais et le meilleur modèle à ce stade avec ses scores. Détails : guide, *Suivre un job pendant
-qu'il tourne*.
+le tableau des essais, le meilleur modèle à ce stade avec ses scores, et sa carte des décisions qui grandit à chaque
+essai. Détails : guide, *Suivre un job pendant qu'il tourne*.
 
 ### Vue en arbre
 
@@ -636,6 +636,16 @@ petits morceaux. **CryoAtom2 enhanced** fait tout cela seul :
 La notation se fait toujours contre la carte expérimentale : une carte améliorée n'est jamais la référence, ce qui
 évite qu'un modèle se « confirme » lui-même. LocScale model-based et hybride affinent les B-factors avec REFMAC5 (CCP4
 doit être installé pour LocScale).
+
+**Carte des décisions.** En tête du rapport, la *Decision map* montre le chemin suivi par le job, comme une carte
+mentale : la carte de départ, les réglages choisis, les essais de chaque tour côte à côte dans une boîte, puis chaque
+décision sous ce dont elle découle (meilleurs réglages, meilleur essai, trous comblés, séquences identifiées, carte
+améliorée, main vérifiée). Le chemin qui mène au meilleur modèle est en bleu ; ce qui a été essayé sans être gardé est
+estompé, les échecs en rouge. Un clic sur une tuile donne ses détails et ouvre sa carte et son modèle en 3D, et
+éclaire le chemin qui y mène. La carte se remplit pendant le calcul (l'essai en cours clignote) et s'enregistre en
+SVG ou PNG pour une présentation.
+
+![CryoAtom2 enhanced : la carte des décisions, du réglage au meilleur modèle](docs/images/cryoatom_decision_map.png)
 
 Le rapport compare tous les essais (*Runs compared* : résidus construits, ajustés, dupliqués, Q-score, CC, fragments,
 score) et liste les morceaux ajoutés. Les modèles de chaque essai restent disponibles (*Models of every run*).

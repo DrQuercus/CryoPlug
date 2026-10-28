@@ -888,6 +888,11 @@ class JobContext:
                       hlines=hlines or [], y_range=y_range, frames=frames[-MAX_FRAMES:],
                       **({"note": note} if note else {}), **({"group": group} if group else {}))
 
+    def add_flow(self, title: str, nodes: list[dict[str, Any]], key: str | None = None, note: str = "") -> None:
+        """A decision map: the steps of the job and the choices it made, as tiles joined by lines (see
+        :class:`cryoplug.jobs.decisions.DecisionMap`, which builds the nodes)."""
+        self._section("flow", title, key=key, nodes=nodes, **({"note": note} if note else {}))
+
     def remove_section(self, key: str) -> None:
         """Drop a section shown while the job ran (a preview the final report supersedes)."""
         sections = self.report.get("sections", [])

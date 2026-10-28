@@ -127,7 +127,7 @@ Ce qui s'affiche pendant le calcul :
 | Raffinement 3D et raffinement local (RELION) | à chaque itération : FSC des deux demi-cartes, coupes centrales XY/XZ/YZ de la carte avec le contour du masque, résolution et déplacement des poses au fil des itérations, demi-cartes à ouvrir en 3D |
 | Classification 3D, raffinement hétérogène, modèle initial | projections de chaque classe à chaque itération, part et résolution de chaque classe au fil des itérations, cartes des classes en 3D |
 | Classification 2D | la galerie des classes de la dernière itération, et les plus grandes classes de chaque itération (curseur) |
-| CryoAtom2 enhanced | le modèle de chaque essai (curseur, View 3D dans sa carte), le tableau des essais et le **meilleur modèle à ce stade** avec ses scores (résidus ajustés, Q-score, CC) dans les tuiles |
+| CryoAtom2 enhanced | la **carte des décisions** (chaque essai et chaque décision dès qu'ils arrivent), le modèle de chaque essai (curseur, View 3D dans sa carte), le tableau des essais et le **meilleur modèle à ce stade** avec ses scores (résidus ajustés, Q-score, CC) dans les tuiles |
 | Entraînements cryoDRGN, prétraitement live | courbes d'entraînement, tableau de bord de la session |
 
 Les images des itérations restent dans le rapport une fois le job terminé ; *Clear intermediate iterations*
@@ -1163,6 +1163,24 @@ chaînes avec une base de séquences, et vérifie la main quand le modèle sort 
 - des essais très différents avec le même réglage indiquent des régions ambiguës : regardez-les dans le visualiseur ;
 - branchez toujours la carte **expérimentale** en « Map » : une carte de réseau de neurones en référence
   noterait les modèles contre une densité déjà interprétée.
+
+**La carte des décisions** (*Decision map*, en tête du rapport) raconte le job comme une carte mentale, du haut vers
+le bas :
+
+- la carte de départ, puis les **réglages** essayés et pourquoi (*auto* : selon la résolution) ;
+- les essais d'un même tour **côte à côte dans une boîte**, chacun avec ses résidus ajustés et son score ; le meilleur
+  porte la mention *best* ;
+- chaque **décision** sous ce dont elle découle : meilleurs réglages (repris sur les autres cartes), meilleur essai
+  d'un tour, trous comblés ou non, nouvelles séquences identifiées, carte améliorée (LocScale…) et son cycle, main
+  vérifiée ou non, et enfin le **meilleur modèle**.
+
+Le chemin qui mène au meilleur modèle est **en bleu** ; ce qui a été essayé sans être gardé est **estompé** (trait en
+pointillé), les échecs sont **en rouge** avec leur cause. Cliquez une tuile : ses détails s'affichent dessous (scores
+complets, raison de la décision), **View 3D** ouvre sa carte et son modèle, et le chemin qui y mène s'éclaire ; un
+clic sur le fond revient au chemin du meilleur modèle. **−/+** et Ctrl/⌘ + molette zooment, un glisser déplace,
+**Fit** remet la carte à la largeur du panneau. **SVG** et **PNG** l'enregistrent pour une présentation ou un cahier
+de laboratoire. Pendant le calcul, la carte grandit à chaque essai : l'essai en cours clignote et le trait qui y mène
+défile.
 
 **Boucle carte–modèle.** Sur une carte dont la résolution varie beaucoup, branchez les **demi-cartes** et cochez
 **LocScale hybrid** dans *Improve the map and build again*. Les parties du meilleur modèle bien ajustées affûtent

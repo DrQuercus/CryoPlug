@@ -2449,6 +2449,7 @@ CryoAtom2 lancé plusieurs fois, avec plusieurs réglages (et éventuellement d'
 
 **Conseils**
 
+- La « Decision map », en tête du rapport, montre le chemin suivi : les essais de chaque tour côte à côte, chaque décision (réglages, meilleur essai, trous comblés, séquences identifiées, carte améliorée, main) sous ce dont elle découle. Le chemin vers le meilleur modèle est en bleu, ce qui a été essayé sans être gardé est estompé. Cliquez une tuile pour ses détails et sa vue 3D ; SVG ou PNG pour une présentation. Elle se remplit pendant le calcul.
 - Le tableau « Runs compared » donne, pour chaque essai, les résidus construits, ajustés (Q-score par résidu ≥ Q attendu − 0,2), dupliqués, et le score : résidus ajustés, une densité tracée deux fois comptée une seule fois.
 - Comptez « Runs » × réglages × durée d'un CryoAtom2 (≈ 30 min pour 5 000 résidus sur une A100) ; « Maximum runs » plafonne le premier tour.
 - Si le job signale une main probablement inversée, retournez la carte (et les demi-cartes) avant d'aller plus loin : la carte miroir et son modèle sont en sortie.

@@ -559,6 +559,8 @@ def report_lines(report: dict[str, Any] | None, full: bool = False) -> list[str]
             lines.append(f"[{title}] interactive latent-space explorer (in the web interface)")
         elif kind == "classes2d":
             lines += class_lines(sec, rows_shown)
+        elif kind == "flow":
+            lines += flow_lines(sec, full)
         elif kind == "exposures":
             line = f"[{title}] micrograph browser (CTF fit, drift, distributions) in the web interface"
             if sec.get("waiting"):
@@ -613,6 +615,55 @@ def class_lines(sec: dict[str, Any], rows_shown: int) -> list[str]:
     if len(classes) > max(rows_shown, 24):
         lines.append(f"  … {len(classes) - max(rows_shown, 24)} smaller classes (get_job with full_report=true)")
     return lines
+
+
+FLOW_OFF = ("discarded", "failed", "skipped")
+
+
+def flow_lines(sec: dict[str, Any], full: bool = False) -> list[str]:
+    """A decision map: the steps that led to the result (or to the last step kept while the job runs), then what was
+    tried and not kept, what failed and what is running."""
+    nodes = [n for n in sec.get("nodes") or [] if n.get("id")]
+    by_id = {n["id"]: n for n in nodes}
+    groups = {n["id"] for n in nodes if n.get("kind") == "group"}
+
+    def step(n: dict[str, Any]) -> str:
+        return n.get("title", "") + (f" ({'; '.join(n['lines'])})" if n.get("lines") else "")
+
+    def lineage(target: str) -> list[dict[str, Any]]:  # as the panel lights it up
+        seen: list[str] = []
+        todo = [target]
+        while todo:
+            node_id = todo.pop()
+            if node_id in seen or node_id not in by_id:
+                continue
+            seen.append(node_id)
+            n = by_id[node_id]
+            for up in [n] + ([by_id[n["group"]]] if n.get("group") in groups else []):
+                if up is not n and up["id"] not in seen:
+                    seen.append(up["id"])
+                parents = [q for q in up.get("parents") or [] if q in by_id]
+                kept = [q for q in parents if by_id[q].get("status") not in FLOW_OFF]
+                todo += kept or parents
+        return [n for n in nodes if n["id"] in seen]  # in the order the steps came
+
+    result = next((n for n in nodes if n.get("kind") == "result"), None)
+    last = next((n for n in reversed(nodes) if n.get("kind") == "decision" and n.get("status") == "chosen"), None)
+    target = result or last
+    out = [f"[{sec.get('title', 'Decision map')}] {len(nodes)} steps (drawn as a map in the job panel)"]
+    if target:
+        path = [n for n in lineage(target["id"]) if n.get("kind") != "group"]
+        out.append(("  path to the result: " if result else "  path to the best so far: ")
+                   + " › ".join(short(step(n), 160) for n in path))
+    shown = len(nodes) if full else 12
+    for label, status in (("not kept", "discarded"), ("failed", "failed"), ("running", "running"), ("check", "warning")):
+        # the decisions and maps; the runs too when they failed or run (most runs are not kept: the decisions say it)
+        kinds = ("decision", "map", "result") + (() if status == "discarded" else ("run",))
+        found = [n for n in nodes if n.get("status") == status and n.get("kind") in kinds]
+        if found:
+            out.append(f"  {label}: " + "; ".join(short(step(n), 140) for n in found[:shown])
+                       + (f"; … {len(found) - shown} more" if len(found) > shown else ""))
+    return out
 
 
 def _program_note(s: Session, jt: dict[str, Any]) -> str:

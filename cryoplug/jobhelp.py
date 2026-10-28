@@ -1905,6 +1905,11 @@ HELP: dict[str, dict[str, Any]] = {
         "inputs": "Carte expérimentale (référence de la notation), séquence(s), masque ; demi-cartes non filtrées pour améliorer "
                   "la carte ; cartes alternatives et bases de séquences optionnelles.",
         "tips": [
+            "La « Decision map », en tête du rapport, montre le chemin suivi : les essais de chaque tour côte à côte, chaque "
+            "décision (réglages, meilleur essai, trous comblés, séquences identifiées, carte améliorée, main) sous ce dont "
+            "elle découle. Le chemin vers le meilleur modèle est en bleu, ce qui a été essayé sans être gardé est estompé. "
+            "Cliquez une tuile pour ses détails et sa vue 3D ; SVG ou PNG pour une présentation. Elle se remplit pendant le "
+            "calcul.",
             "Le tableau « Runs compared » donne, pour chaque essai, les résidus construits, ajustés (Q-score par résidu ≥ Q "
             "attendu − 0,2), dupliqués, et le score : résidus ajustés, une densité tracée deux fois comptée une seule fois.",
             "Comptez « Runs » × réglages × durée d'un CryoAtom2 (≈ 30 min pour 5 000 résidus sur une A100) ; « Maximum runs » "
