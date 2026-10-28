@@ -67,6 +67,7 @@ def _load() -> None:
         relion_tomo,
         relion_tomo_sta,
         series,
+        sharpen_enhanced,
         sharpening,
         utility,
         validation,

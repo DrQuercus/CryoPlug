@@ -310,13 +310,15 @@ printf 'data_comp_list\nloop_\n_chem_comp.id\n%s\n' "$name" > "$name.cif"
 printf 'HETATM    1  C1  %s A   1       0.000   0.000   0.000  1.00 20.00           C\nEND\n' "$name" > "$name.pdb"
 """)
     # real_space_refine checks its parameters and the model/map overlap like Phenix 2 does (a test model containing
-    # MISALIGNED stands for a model outside the map)
+    # MISALIGNED stands for a model outside the map); a map weight of 10 or more over-fits: the atoms are jittered by
+    # 0.02 Å per unit of weight and the clashscore and MolProbity score grow with it
     _script(d / "phenix.real_space_refine", f"""
 echo "fake phenix.real_space_refine $@"
-bad=""; skip=0
+bad=""; skip=0; w=0
 for a in "$@"; do case "$a" in
   resolution=*|macro_cycles=*|nproc=*|run=*|secondary_structure.enabled=*|ramachandran_plot_restraints.enabled=*) ;;
   ignore_symmetry_conflicts=*) ;;
+  weight=*) w="${{a#weight=}}";;
   skip_map_model_overlap_check=True) skip=1;;
   *=*) bad="$bad    ${{a/=/ = }}\n";;
 esac; done
@@ -330,21 +332,34 @@ if grep -q MISALIGNED "$1" && [ "$skip" = 0 ]; then
   echo "Sorry: Map and model are not aligned! Use skip_map_model_overlap_check=True to continue."
   exit 1
 fi
-cp "{model}" ./helix_real_space_refined_000.pdb
-cat <<EOF
-Final:
-  Model vs map:
-    CC_mask  : 0.8123
-    CC_box   : 0.7012
-  MolProbity statistics.
-    All-atom clashscore : 4.56
-    Ramachandran plot:
-      outliers :  0.00 %
-      allowed  :  2.10 %
-      favored  : 97.90 %
-    Rotamer outliers : 0.40 %
-  MolProbity score : 1.42
-EOF
+{sys.executable} - "{model}" "$w" <<'PY'
+import sys
+import gemmi
+import numpy as np
+src, w = sys.argv[1], float(sys.argv[2] or 0)
+st = gemmi.read_structure(src)
+if w >= 10:
+    rng = np.random.default_rng(int(w))
+    for ch in st[0]:
+        for r in ch:
+            for a in r:
+                d = rng.normal(0, 0.02 * w, 3)
+                a.pos = gemmi.Position(a.pos.x + d[0], a.pos.y + d[1], a.pos.z + d[2])
+st.write_pdb("helix_real_space_refined_000.pdb")
+over = w if w >= 10 else 0.0
+print("Final:")
+print("  Model vs map:")
+print("    CC_mask  : 0.8123")
+print("    CC_box   : 0.7012")
+print("  MolProbity statistics.")
+print(f"    All-atom clashscore : {{4.56 + 0.3 * over:.2f}}")
+print("    Ramachandran plot:")
+print("      outliers :  0.00 %")
+print("      allowed  :  2.10 %")
+print("      favored  : 97.90 %")
+print("    Rotamer outliers : 0.40 %")
+print(f"  MolProbity score : {{1.42 + 0.05 * over:.2f}}")
+PY
 """)
     _script(d / "phenix.version", "echo 'Phenix fake 1.21'\n")
     _script(d / "phenix.resolve_cryo_em", """

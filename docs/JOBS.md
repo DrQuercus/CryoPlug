@@ -93,7 +93,7 @@ Point d'entrée habituel : récupère la reconstruction finale d'un job CryoSPAR
 - Indiquez la symétrie réellement imposée (C1, C2, D7…) : LocScale, EMmerNet et le dépôt l'utilisent.
 - « copy » rend le projet autonome ; « symlink » économise de l'espace mais dépend du dossier CryoSPARC.
 
-**Étapes suivantes** : Directional resolution (3D FSC), LocScale 2, ModelAngelo build, CryoAtom2 build, CryoAtom2 enhanced (best of several runs), Import sequence, Mask drawn in the 3D viewer, RELION local refinement
+**Étapes suivantes** : Directional resolution (3D FSC), LocScale 2, ModelAngelo build, CryoAtom2 build, CryoAtom2 enhanced (best of several runs), Import sequence, Mask drawn in the 3D viewer, RELION local refinement, Mask enhanced (validated by the FSC), Sharpening enhanced (B-factors and methods compared)
 
 ### Import maps
 
@@ -1912,6 +1912,34 @@ Masque dessiné à la main sur une carte dans le visualiseur 3D, comme dans Chim
 
 **Étapes suivantes** : RELION signal subtraction, RELION local refinement, RELION 3D classification (focused), Half-map FSC, LocScale 2
 
+### Mask enhanced (validated by the FSC)
+
+`mask_enhanced` — intégré (aucun logiciel externe)
+
+Masques faits à partir de la carte pour plusieurs seuils, dilatations et bords doux, chacun noté par la FSC des demi-cartes qu'il donne (masquée, corrigée par randomisation des phases) : le masque le plus serré qui ne corrèle pas le bruit ni ne gonfle la FSC est gardé, avec ses courbes.
+
+**Quand l'utiliser**
+
+- Masque pour la FSC de dépôt, le post-processing ou le raffinement local, sans tâtonner.
+- Le masque de CryoSPARC ou RELION semble serré (résolution « trop belle ») ou lâche.
+- Avant LocScale, spIsoNet ou un raffinement local RELION : un masque validé.
+
+**À éviter / pièges**
+
+- Demi-cartes filtrées ou affûtées : la randomisation des phases n'a plus de sens.
+- Masque d'une sous-partie (raffinement focalisé d'un domaine) : « Create mask » depuis le modèle, ou le dessin dans le visualiseur.
+
+**Entrées conseillées** : Les deux demi-cartes non filtrées (+ la carte complète pour le seuillage ; par défaut leur moyenne).
+
+**Conseils**
+
+- « Noise » : la plus grande valeur de la FSC à phases randomisées au-delà du point de randomisation ; au-dessus de « Noise correlation allowed », le masque est trop serré.
+- « Inflation » : de combien la résolution masquée non corrigée dépasse la résolution corrigée ; c'est la résolution corrigée qu'on rapporte.
+- Parmi les masques sûrs, celui de meilleure résolution corrigée, le plus large à 1 % près (un bord plus doux ne coûte rien).
+- Les coupes de chaque masque (curseur) et ses courbes FSC sont dans le rapport ; « Keep every mask » les donne tous en 3D.
+
+**Étapes suivantes** : RELION post-processing, LocScale 2, Anisotropy correction (spIsoNet), RELION local refinement, Half-map FSC, Local resolution
+
 ### Segment map into regions
 
 `segment_map` — intégré (aucun logiciel externe)
@@ -1938,6 +1966,34 @@ Découpe une carte en régions (domaines, sous-unités), comme Segger dans Chime
 - Les couleurs du rapport (bleu, orange, vert…) suivent l'ordre des régions et le nom des sorties.
 
 **Étapes suivantes** : 3D multi-body refinement (RELION), RELION local refinement, RELION signal subtraction, RELION 3D classification (focused)
+
+### Sharpening enhanced (B-factors and methods compared)
+
+`sharpen_enhanced` — intégré (aucun logiciel externe)
+
+La carte affûtée de plusieurs façons — facteur B estimé sur le tracé de Guinier, facteurs B demandés, et les méthodes installées (LocScale, EMmerNet, DeepEMhancer, EMReady2, map sharpening et modification de densité de Phenix) — chaque carte notée de la même façon avec le modèle (Q-score des atomes, CC, FSC carte–modèle) et la meilleure gardée, avec les coupes de chaque carte, les tracés de Guinier et la carte des décisions.
+
+**Quand l'utiliser**
+
+- Choisir l'affûtage de la carte d'interprétation ou de dépôt sur un critère objectif plutôt qu'à l'œil.
+- Comparer une carte « réseau de neurones » (DeepEMhancer, EMReady2) à un affûtage classique, avec le même modèle.
+- Un modèle, même partiel, est disponible ; sans modèle, le job donne les cartes et garde celle du facteur B de Guinier.
+
+**À éviter / pièges**
+
+- Juger avec un modèle construit dans une des cartes comparées venant d'un réseau : il se confirmerait lui-même ; prenez un modèle affiné contre la carte expérimentale.
+- Déposer une carte DeepEMhancer ou EMReady2 comme carte primaire : elle peut être additionnelle.
+
+**Entrées conseillées** : La carte (non affûtée de préférence : les facteurs B s'y appliquent), le modèle ajusté ; demi-cartes non filtrées pour LocScale, EMmerNet, DeepEMhancer et la modification de densité ; masque ; séquence.
+
+**Conseils**
+
+- Le Q-score (Pintilie et al. 2020) est maximal quand la densité autour de chaque atome a la forme attendue à la résolution : il baisse pour une carte sur-affûtée (bruit) comme pour une carte floue.
+- Tracés de Guinier : une courbe plate jusqu'à la résolution est une carte affûtée ; qui remonte au-delà, du bruit affûté. « auto » = −B de la chute ajustée entre 10 Å et la résolution (l'auto-B de RELION).
+- « Quick Q-score » note au plus 15 000 atomes répartis le long du modèle ; la moyenne ne change pas au millième sur un gros modèle.
+- Chaque carte de méthode est aussi une sortie (map_locscale, map_deepemhancer…) pour continuer avec celle de votre choix.
+
+**Étapes suivantes** : CryoAtom2 enhanced (best of several runs), ModelAngelo build, Real-space refinement (Phenix), Refinement enhanced (Phenix, cross-validated weight), Map-model validation (Q-score, FSC), Pre-deposition checks
 
 ### Symmetry search (RELION)
 
@@ -2430,10 +2486,11 @@ Construction automatique (CryoAtom2 : attention locale et encodage de position 3
 
 `cryoatom_enhanced` — logiciel : `cryoatom` · GPU
 
-CryoAtom2 lancé plusieurs fois, avec plusieurs réglages (et éventuellement d'autres cartes), chaque modèle noté contre la carte expérimentale ; le meilleur est gardé, ses trous comblés par les morceaux bien ajustés des autres essais, les chaînes identifiées et reconstruites jusqu'à convergence, la main vérifiée. En option, la carte est améliorée avec le modèle (LocScale…) puis reconstruite, tant que le score monte.
+CryoAtom2 lancé plusieurs fois, avec plusieurs réglages (et éventuellement d'autres cartes), chaque modèle noté contre la carte expérimentale ; le meilleur est gardé, ses trous comblés par les morceaux bien ajustés des autres essais, les chaînes identifiées et reconstruites jusqu'à convergence, la main vérifiée. En option, la carte est améliorée avec le modèle (LocScale…) puis reconstruite, tant que le score monte. ModelAngelo peut construire à côté de CryoAtom2 (« Builders ») : mêmes notes, meilleur modèle gardé quel que soit le programme, ses trous comblés par l'autre.
 
 **Quand l'utiliser**
 
+- Vous hésitez entre ModelAngelo et CryoAtom2 : « Builders : both » les lance tous deux et garde le meilleur modèle.
 - Carte difficile (résolution locale basse, régions flexibles) : CryoAtom2 construit différemment à chaque lancement, et ses auteurs conseillent d'en lancer plusieurs et de garder le meilleur.
 - Vous ne savez pas quels réglages conviennent : « auto » essaie les réglages standard et, selon la résolution, « more residues » (seuils Cα/P abaissés) ou « low resolution » (4 tours).
 - Comparer la construction dans plusieurs cartes (affûtées autrement, LocScale, EMReady…) en les notant toutes contre la même carte expérimentale.
@@ -2453,6 +2510,7 @@ CryoAtom2 lancé plusieurs fois, avec plusieurs réglages (et éventuellement d'
 - Le tableau « Runs compared » donne, pour chaque essai, les résidus construits, ajustés (Q-score par résidu ≥ Q attendu − 0,2), dupliqués, et le score : résidus ajustés, une densité tracée deux fois comptée une seule fois.
 - Comptez « Runs » × réglages × durée d'un CryoAtom2 (≈ 30 min pour 5 000 résidus sur une A100) ; « Maximum runs » plafonne le premier tour.
 - Si le job signale une main probablement inversée, retournez la carte (et les demi-cartes) avant d'aller plus loin : la carte miroir et son modèle sont en sortie.
+- ModelAngelo tourne une fois par carte (ses essais diffèrent peu) : « build » avec une séquence protéique, « build_no_seq » sans ; s'il n'est pas trouvé sur le serveur, CryoAtom2 construit seul (avertissement).
 - Boucle carte–modèle : seuls les résidus ajustés à la densité, avec un B uniforme, sont donnés à LocScale (qui affine leurs B avec REFMAC5 : CCP4 requis) ; LocScale hybride complète le reste par des pseudo-atomes. Le cycle s'arrête dès qu'il n'améliore plus le score contre la carte expérimentale : la carte améliorée ne sert jamais de référence, ce qui évite qu'un modèle se « confirme » lui-même.
 - Les méthodes sans modèle (EMmerNet, LocScale model-free, DeepEMhancer, EMReady2, modification de densité Phenix) donnent une carte de plus à essayer, une seule fois ; cochez-en plusieurs pour les comparer.
 - Affinez ensuite le meilleur modèle (real-space refine, ISOLDE) : les modèles bruts gardent des erreurs locales. La carte améliorée (sortie « map_improved ») aide à interpréter ; déposez la carte expérimentale comme carte principale.
@@ -2807,6 +2865,34 @@ Affinement contre les demi-cartes non affûtées avec pondération statistique, 
 - Jelly-body à basse résolution ; examinez la carte Fo-Fc normalisée (pics à ±4σ).
 
 **Étapes suivantes** : Map-model validation (Q-score, FSC), Coot session, Add waters (phenix.douse)
+
+### Refinement enhanced (Phenix, cross-validated weight)
+
+`phenix_refine_enhanced` — logiciel : `phenix`
+
+Affinement en espace réel (phenix.real_space_refine) dont le poids carte / géométrie est choisi par validation croisée sur les demi-cartes : plusieurs poids essayés contre la demi-carte 1, chaque modèle jugé par sa FSC contre la demi-carte 2 (libre) ; le poids qui ajuste le mieux sans sur-ajuster est gardé, puis l'affinement final se fait contre la carte complète avec ce poids.
+
+**Quand l'utiliser**
+
+- Vous ne savez pas quel poids donner à la carte : le « auto » de Phenix peut sur-ajuster à basse résolution ou sous-ajuster à haute résolution.
+- Résolution intermédiaire (3–4,5 Å), où le sur-ajustement est le plus facile.
+- Avant la validation finale : la FSC libre et l'écart work − free sont des pièces à montrer.
+
+**À éviter / pièges**
+
+- Demi-cartes non indépendantes (après spIsoNet, DeepEMhancer, ou déjà filtrées) : la validation croisée perd son sens.
+- Modèle très incomplet ou mal placé : commencez par un docking ou un premier affinement classique.
+
+**Entrées conseillées** : Modèle + les deux demi-cartes non filtrées + la carte complète pour l'affinement final (+ restreintes de ligands).
+
+**Conseils**
+
+- Le tableau « Trials » donne, par poids, la FSC contre la demi-carte 1 (work), contre la demi-carte 2 (free), l'écart work − free (sur-ajustement) et le clashscore ; les courbes FSC de chaque essai sont sous un curseur.
+- Un essai dont le clashscore dépasse « Max clashscore » est écarté quel que soit son ajustement ; un écart work − free au-dessus de « Max gap » est signalé.
+- Les essais sont courts (« Trial cycles ») ; l'affinement final reprend les macro-cycles habituels.
+- Méthode : Brown et al. 2015, Acta Cryst. D71, 136 (validation croisée par demi-cartes en espace réel).
+
+**Étapes suivantes** : Map-model validation (Q-score, FSC), Comprehensive validation (Phenix), Pre-deposition checks, Refinement (Servalcat)
 
 ## Validation
 

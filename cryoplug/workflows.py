@@ -148,6 +148,35 @@ WORKFLOWS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "enhanced_pipeline",
+        "title": "Validated pipeline (enhanced jobs) → deposition",
+        "description": ("Each step tries alternatives and keeps the best by an independent measure: the mask validated by the "
+                        "half-map FSC, the model built by CryoAtom2 and ModelAngelo and scored against the map, the sharpening "
+                        "chosen by the model's Q-score, the refinement weight chosen by half-map cross-validation; then "
+                        "validation, pre-deposition checks and the deposition package."),
+        "nodes": [
+            IMPORT_NODE,
+            {"id": "seq", "type": "import_sequence", "title": "Sample sequence", "ask": ["fasta", "uniprot"]},
+            {"id": "mask", "type": "mask_enhanced", "title": "Mask validated by the FSC",
+             "inputs": {"half_maps": ["import", "half_maps"], "map": ["import", "map"]}},
+            {"id": "build", "type": "cryoatom_enhanced", "title": "Build (CryoAtom2 and ModelAngelo)", "params": {"programs": "both"},
+             "ask": ["programs", "settings", "runs"],
+             "inputs": {"map": ["import", "map_sharp"], "half_maps": ["import", "half_maps"], "sequence": ["seq", "sequence"],
+                        "mask": [["mask", "mask"], ["import", "mask"]]}},
+            {"id": "sharpen", "type": "sharpen_enhanced", "title": "Sharpening chosen by the model", "ask": ["bfactors", "methods"],
+             "inputs": {"map": ["import", "map"], "half_maps": ["import", "half_maps"], "model": ["build", "model"],
+                        "mask": [["mask", "mask"], ["import", "mask"]], "sequence": ["seq", "sequence"]}},
+            {"id": "refine", "type": "phenix_refine_enhanced", "title": "Refinement (cross-validated weight)", "ask": ["weights"],
+             "inputs": {"model": ["build", "model"], "half_maps": ["import", "half_maps"], "map": ["sharpen", "map"]}},
+            {"id": "isolde", "type": "isolde_session", "title": "Rebuild in ISOLDE", "optional": True, "default": False,
+             "inputs": {"model": ["refine", "model"], "map": ["sharpen", "map"], "map2": ["import", "map_sharp"]}},
+            {"id": "refine2", "type": "phenix_real_space_refine", "title": "Final refinement", "optional": True, "default": False,
+             "params": {"macro_cycles": 3, "run": "minimization_global+adp"},
+             "inputs": {"model": [["isolde", "model"], ["refine", "model"]], "map": ["sharpen", "map"]}},
+            *_final_steps([["refine2", "model"], ["refine", "model"]], ["sharpen", "map"], ["seq", "sequence"]),
+        ],
+    },
+    {
         "id": "heterogeneity_cryodrgn",
         "title": "Conformational heterogeneity (cryoDRGN)",
         "description": ("First round of the cryoDRGN protocol (Kinman et al. 2023): particles of the CryoSPARC consensus "

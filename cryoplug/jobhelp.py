@@ -37,7 +37,7 @@ HELP: dict[str, dict[str, Any]] = {
             "« copy » rend le projet autonome ; « symlink » économise de l'espace mais dépend du dossier CryoSPARC.",
         ],
         "next": ["directional_fsc", "locscale", "modelangelo_build", "cryoatom_build", "cryoatom_enhanced", "import_sequence",
-                 "draw_mask", "relion_local_refine"],
+                 "draw_mask", "relion_local_refine", "mask_enhanced", "sharpen_enhanced"],
     },
     "import_maps": {
         "purpose": "Importe des demi-cartes, une carte complète, une carte affûtée et un masque venant de n'importe quel logiciel.",
@@ -1288,6 +1288,31 @@ HELP: dict[str, dict[str, Any]] = {
         ],
         "next": ["relion_multibody", "relion_local_refine", "relion_subtract", "relion_class3d"],
     },
+    "mask_enhanced": {
+        "purpose": "Masques faits à partir de la carte pour plusieurs seuils, dilatations et bords doux, chacun noté par la FSC des "
+                   "demi-cartes qu'il donne (masquée, corrigée par randomisation des phases) : le masque le plus serré qui ne corrèle "
+                   "pas le bruit ni ne gonfle la FSC est gardé, avec ses courbes.",
+        "when": [
+            "Masque pour la FSC de dépôt, le post-processing ou le raffinement local, sans tâtonner.",
+            "Le masque de CryoSPARC ou RELION semble serré (résolution « trop belle ») ou lâche.",
+            "Avant LocScale, spIsoNet ou un raffinement local RELION : un masque validé.",
+        ],
+        "avoid": [
+            "Demi-cartes filtrées ou affûtées : la randomisation des phases n'a plus de sens.",
+            "Masque d'une sous-partie (raffinement focalisé d'un domaine) : « Create mask » depuis le modèle, ou le dessin dans "
+            "le visualiseur.",
+        ],
+        "inputs": "Les deux demi-cartes non filtrées (+ la carte complète pour le seuillage ; par défaut leur moyenne).",
+        "tips": [
+            "« Noise » : la plus grande valeur de la FSC à phases randomisées au-delà du point de randomisation ; au-dessus de "
+            "« Noise correlation allowed », le masque est trop serré.",
+            "« Inflation » : de combien la résolution masquée non corrigée dépasse la résolution corrigée ; c'est la résolution "
+            "corrigée qu'on rapporte.",
+            "Parmi les masques sûrs, celui de meilleure résolution corrigée, le plus large à 1 % près (un bord plus doux ne coûte rien).",
+            "Les coupes de chaque masque (curseur) et ses courbes FSC sont dans le rapport ; « Keep every mask » les donne tous en 3D.",
+        ],
+        "next": ["relion_postprocess", "locscale", "spisonet", "relion_local_refine", "map_fsc", "local_resolution"],
+    },
     "create_mask": {
         "purpose": "Crée un masque à bord doux : à partir de la densité (passe-bas + seuil), des atomes de chaînes choisies, "
                    "de la carte simulée à partir de ces atomes (comme molmap dans Chimera/ChimeraX), ou de la densité "
@@ -1391,6 +1416,35 @@ HELP: dict[str, dict[str, Any]] = {
             "Un emplacement « Focused map » de plus apparaît dès que le précédent est rempli.",
         ],
         "next": ["local_resolution", "phenix_real_space_refine", "isolde_session"],
+    },
+    "sharpen_enhanced": {
+        "purpose": "La carte affûtée de plusieurs façons — facteur B estimé sur le tracé de Guinier, facteurs B demandés, et les "
+                   "méthodes installées (LocScale, EMmerNet, DeepEMhancer, EMReady2, map sharpening et modification de densité de "
+                   "Phenix) — chaque carte notée de la même façon avec le modèle (Q-score des atomes, CC, FSC carte–modèle) et la "
+                   "meilleure gardée, avec les coupes de chaque carte, les tracés de Guinier et la carte des décisions.",
+        "when": [
+            "Choisir l'affûtage de la carte d'interprétation ou de dépôt sur un critère objectif plutôt qu'à l'œil.",
+            "Comparer une carte « réseau de neurones » (DeepEMhancer, EMReady2) à un affûtage classique, avec le même modèle.",
+            "Un modèle, même partiel, est disponible ; sans modèle, le job donne les cartes et garde celle du facteur B de Guinier.",
+        ],
+        "avoid": [
+            "Juger avec un modèle construit dans une des cartes comparées venant d'un réseau : il se confirmerait lui-même ; "
+            "prenez un modèle affiné contre la carte expérimentale.",
+            "Déposer une carte DeepEMhancer ou EMReady2 comme carte primaire : elle peut être additionnelle.",
+        ],
+        "inputs": "La carte (non affûtée de préférence : les facteurs B s'y appliquent), le modèle ajusté ; demi-cartes non "
+                  "filtrées pour LocScale, EMmerNet, DeepEMhancer et la modification de densité ; masque ; séquence.",
+        "tips": [
+            "Le Q-score (Pintilie et al. 2020) est maximal quand la densité autour de chaque atome a la forme attendue à la "
+            "résolution : il baisse pour une carte sur-affûtée (bruit) comme pour une carte floue.",
+            "Tracés de Guinier : une courbe plate jusqu'à la résolution est une carte affûtée ; qui remonte au-delà, du bruit "
+            "affûté. « auto » = −B de la chute ajustée entre 10 Å et la résolution (l'auto-B de RELION).",
+            "« Quick Q-score » note au plus 15 000 atomes répartis le long du modèle ; la moyenne ne change pas au millième sur "
+            "un gros modèle.",
+            "Chaque carte de méthode est aussi une sortie (map_locscale, map_deepemhancer…) pour continuer avec celle de votre choix.",
+        ],
+        "next": ["cryoatom_enhanced", "modelangelo_build", "phenix_real_space_refine", "phenix_refine_enhanced",
+                 "mapmodel_validation", "predeposition_check"],
     },
     "locscale": {
         "purpose": "Affûtage local (local amplitude scaling) : renforce le contraste là où la carte est moins résolue sans "
@@ -1885,8 +1939,11 @@ HELP: dict[str, dict[str, Any]] = {
         "purpose": "CryoAtom2 lancé plusieurs fois, avec plusieurs réglages (et éventuellement d'autres cartes), chaque modèle "
                    "noté contre la carte expérimentale ; le meilleur est gardé, ses trous comblés par les morceaux bien "
                    "ajustés des autres essais, les chaînes identifiées et reconstruites jusqu'à convergence, la main vérifiée. "
-                   "En option, la carte est améliorée avec le modèle (LocScale…) puis reconstruite, tant que le score monte.",
+                   "En option, la carte est améliorée avec le modèle (LocScale…) puis reconstruite, tant que le score monte. "
+                   "ModelAngelo peut construire à côté de CryoAtom2 (« Builders ») : mêmes notes, meilleur modèle gardé quel que "
+                   "soit le programme, ses trous comblés par l'autre.",
         "when": [
+            "Vous hésitez entre ModelAngelo et CryoAtom2 : « Builders : both » les lance tous deux et garde le meilleur modèle.",
             "Carte difficile (résolution locale basse, régions flexibles) : CryoAtom2 construit différemment à chaque "
             "lancement, et ses auteurs conseillent d'en lancer plusieurs et de garder le meilleur.",
             "Vous ne savez pas quels réglages conviennent : « auto » essaie les réglages standard et, selon la résolution, "
@@ -1916,6 +1973,8 @@ HELP: dict[str, dict[str, Any]] = {
             "plafonne le premier tour.",
             "Si le job signale une main probablement inversée, retournez la carte (et les demi-cartes) avant d'aller plus loin : "
             "la carte miroir et son modèle sont en sortie.",
+            "ModelAngelo tourne une fois par carte (ses essais diffèrent peu) : « build » avec une séquence protéique, "
+            "« build_no_seq » sans ; s'il n'est pas trouvé sur le serveur, CryoAtom2 construit seul (avertissement).",
             "Boucle carte–modèle : seuls les résidus ajustés à la densité, avec un B uniforme, sont donnés à LocScale (qui "
             "affine leurs B avec REFMAC5 : CCP4 requis) ; LocScale hybride complète le reste par des pseudo-atomes. Le cycle "
             "s'arrête dès qu'il n'améliore plus le score contre la carte expérimentale : la carte améliorée ne sert jamais "
@@ -2078,6 +2137,32 @@ HELP: dict[str, dict[str, Any]] = {
             "Les statistiques finales (MolProbity, CC_mask) sont lues dans la sortie et affichées.",
         ],
         "next": ["mapmodel_validation", "phenix_validation_cryoem", "isolde_session", "predeposition_check"],
+    },
+    "phenix_refine_enhanced": {
+        "purpose": "Affinement en espace réel (phenix.real_space_refine) dont le poids carte / géométrie est choisi par validation "
+                   "croisée sur les demi-cartes : plusieurs poids essayés contre la demi-carte 1, chaque modèle jugé par sa FSC "
+                   "contre la demi-carte 2 (libre) ; le poids qui ajuste le mieux sans sur-ajuster est gardé, puis l'affinement "
+                   "final se fait contre la carte complète avec ce poids.",
+        "when": [
+            "Vous ne savez pas quel poids donner à la carte : le « auto » de Phenix peut sur-ajuster à basse résolution ou "
+            "sous-ajuster à haute résolution.",
+            "Résolution intermédiaire (3–4,5 Å), où le sur-ajustement est le plus facile.",
+            "Avant la validation finale : la FSC libre et l'écart work − free sont des pièces à montrer.",
+        ],
+        "avoid": [
+            "Demi-cartes non indépendantes (après spIsoNet, DeepEMhancer, ou déjà filtrées) : la validation croisée perd son sens.",
+            "Modèle très incomplet ou mal placé : commencez par un docking ou un premier affinement classique.",
+        ],
+        "inputs": "Modèle + les deux demi-cartes non filtrées + la carte complète pour l'affinement final (+ restreintes de ligands).",
+        "tips": [
+            "Le tableau « Trials » donne, par poids, la FSC contre la demi-carte 1 (work), contre la demi-carte 2 (free), l'écart "
+            "work − free (sur-ajustement) et le clashscore ; les courbes FSC de chaque essai sont sous un curseur.",
+            "Un essai dont le clashscore dépasse « Max clashscore » est écarté quel que soit son ajustement ; un écart work − free "
+            "au-dessus de « Max gap » est signalé.",
+            "Les essais sont courts (« Trial cycles ») ; l'affinement final reprend les macro-cycles habituels.",
+            "Méthode : Brown et al. 2015, Acta Cryst. D71, 136 (validation croisée par demi-cartes en espace réel).",
+        ],
+        "next": ["mapmodel_validation", "phenix_validation_cryoem", "predeposition_check", "servalcat_refine"],
     },
     "servalcat_refine": {
         "purpose": "Affinement contre les demi-cartes non affûtées avec pondération statistique, B-factors atomiques et cartes "

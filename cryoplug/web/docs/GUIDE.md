@@ -656,6 +656,16 @@ autre chose que le nombre de particules (hétérogénéité, poses, CTF).
 Le workflow **Map enhancement comparison** lance ces méthodes côte à côte sur les mêmes demi-cartes ;
 comparez-les dans le visualiseur 3D (bouton *View 3D*) avant de choisir.
 
+**Choisir sur un critère plutôt qu'à l'œil : Sharpening enhanced.** Dès qu'un modèle, même partiel, est ajusté dans
+la carte, le job **Sharpening enhanced** fait les cartes (facteur B estimé sur le tracé de Guinier, facteurs B
+demandés, et les méthodes installées : LocScale, EMmerNet, DeepEMhancer, EMReady2, Phenix) et note chacune avec le même
+modèle : Q-score des atomes, corrélation dans l'enveloppe du modèle, FSC carte–modèle. Le Q-score est maximal quand
+la densité autour de chaque atome a la forme attendue à la résolution ; il baisse pour une carte sur-affûtée (bruit
+net) comme pour une carte floue. La meilleure carte est gardée, les coupes de chaque carte sont sous un curseur, et la
+carte des décisions montre ce qui a été essayé. Sans modèle, les cartes sont faites et montrées, et celle du facteur B
+de Guinier est gardée. Ne jugez pas avec un modèle construit dans une carte de réseau de neurones : il se confirmerait
+lui-même.
+
 ### 4.3 Vérifier la main
 
 Une main inversée donne des hélices gauches et des constructions automatiques en petits fragments.
@@ -733,6 +743,14 @@ the view* place la forme exactement sur ce résidu.
 La commande de ChimeraX marche aussi dans la ligne de commande du visualiseur : `molmap #2/A,B 10` ajoute au masque la
 carte simulée des chaînes A et B du modèle #2 à 10 Å (`molmap #2/C:10-250 15 displayThreshold 0.9` pour un segment et un
 autre contour ; `onGrid #1` choisit la carte ; `erase` ou `keep` changent le mode).
+
+**Un masque validé par la FSC : Mask enhanced.** Pour la FSC de dépôt, le post-processing ou un raffinement local,
+**Mask enhanced** fabrique des masques à partir de la carte pour plusieurs seuils × dilatations × bords doux et note
+chacun par la FSC des demi-cartes qu'il donne, masquée et corrigée par randomisation des phases. Un masque trop serré
+corrèle le bruit des deux demi-cartes (la FSC à phases randomisées reste haute au-delà du point de randomisation,
+colonne *Noise*) ou gonfle la résolution non corrigée (colonne *Inflation*) : il est écarté. Parmi les masques sûrs, le
+job garde celui de meilleure résolution corrigée, le plus large à 1 % près. Les coupes et les courbes FSC de chaque
+masque sont dans le rapport ; le masque gardé sort avec ses courbes (JSON + XML EMDB).
 
 ### 4.6 Gros complexes : cartes composites
 
@@ -1165,7 +1183,9 @@ Ouvrez le job et vérifiez :
 - **CC (mask)** et, mieux, un job **Map-model validation** (Q-score) ;
 - la carte et le modèle dans le **visualiseur 3D** : hélices droites, chaînes continues, résidus dans la densité.
 
-Lancer ModelAngelo et CryoAtom2 sur la même carte puis comparer les Q-scores est peu coûteux et souvent instructif.
+Lancer ModelAngelo et CryoAtom2 sur la même carte puis comparer les Q-scores est peu coûteux et souvent instructif :
+c'est ce que fait **CryoAtom2 enhanced** avec *Builders : both* (ModelAngelo une fois par carte, CryoAtom2 selon ses
+réglages ; le meilleur modèle est gardé quel que soit le programme, ses trous comblés par l'autre).
 
 **Plusieurs essais : CryoAtom2 enhanced.** CryoAtom2 donne un modèle un peu différent à chaque lancement, et ses
 réglages comptent. Sur une carte difficile, **CryoAtom2 enhanced** le lance plusieurs fois avec plusieurs réglages,
@@ -1305,6 +1325,14 @@ construction auto / docking → Real-space refinement → ISOLDE (ou Coot) → R
 
 Les workflows *De novo* et *Predicted model* créent exactement cette boucle ; l'étape ISOLDE met la
 chaîne en pause jusqu'à ce que vous ayez fini.
+
+**Le poids de la carte, validé plutôt que deviné : Refinement enhanced.** Le poids carte / géométrie de
+`phenix.real_space_refine` décide de tout : trop fort, le modèle suit le bruit (géométrie dégradée, clashs) ; trop
+faible, il n'entre pas dans la densité. **Refinement enhanced** essaie plusieurs poids (dont le *auto* de Phenix) en
+affinant contre la demi-carte 1, et juge chaque modèle par sa FSC contre la demi-carte 2, qu'il n'a jamais vue
+(validation croisée, Brown et al. 2015) ; l'écart entre la FSC *work* et la FSC *free* mesure le sur-ajustement, et un
+clashscore trop haut écarte l'essai. Le poids qui ajuste le mieux sans sur-ajuster sert à l'affinement final contre la
+carte complète. Il faut les deux demi-cartes non filtrées et indépendantes (pas après spIsoNet ou DeepEMhancer).
 
 ### 7.2 ISOLDE ou Coot ?
 
@@ -1453,10 +1481,13 @@ Raccourci : workflow *De novo model → deposition (ModelAngelo ou CryoAtom2)*.
 2. Modèles prédits : AlphaFold DB, ColabFold ou Boltz-2 (complexe entier)
 3. Process predicted model (découpe en domaines si nécessaire)
 4. Fit in map (recherche globale, ou à la main puis Fit dans le visualiseur) ou Dock in map, domaine par domaine → Merge models
-5. Real-space refinement avec morphing → ISOLDE (restreintes adaptatives) → affinement final
-6. LocScale en mode hybride avec le modèle pour la carte d'interprétation finale
+5. Real-space refinement avec morphing → ISOLDE (restreintes adaptatives) → affinement final (ou **Refinement
+   enhanced**, qui choisit le poids de la carte par validation croisée sur les demi-cartes)
+6. LocScale en mode hybride avec le modèle pour la carte d'interprétation finale, ou **Sharpening enhanced** pour
+   choisir l'affûtage sur le Q-score du modèle
 
-Raccourci : workflow *Predicted model → deposition (AlphaFold)*.
+Raccourci : workflow *Predicted model → deposition (AlphaFold)* ; pour une construction de novo validée à chaque
+étape (masque, construction, affûtage, affinement), workflow *Validated pipeline (enhanced jobs) → deposition*.
 
 ### C. Densité inconnue dans un complexe natif
 

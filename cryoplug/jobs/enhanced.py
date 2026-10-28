@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import os
 import re
 import shutil
 from collections import Counter
@@ -55,7 +56,10 @@ PRESETS: dict[str, tuple[str, str, dict[str, dict[str, Any]]]] = {
                        "maps)", {"CryoNet_args": {"num_rounds": 4, "repeat_per_residue": 4}}),
     "strict": ("Strict", "Cα / P thresholds raised to 0.7 / 0.55: fewer residues built in noise",
                {"RUNet_args": {"ca_threshold": 0.7, "p_threshold": 0.55, "threshold": 0.7}}),
+    "modelangelo": ("ModelAngelo", "ModelAngelo's own network: build with the sequences given, build_no_seq without", {}),
 }
+MODELANGELO = "modelangelo"  # the pseudo-setting of a ModelAngelo run (not in SETTING_SETS: chosen by 'Builders')
+PROGRAMS = {"cryoatom": "CryoAtom2", "both": "CryoAtom2 and ModelAngelo", "modelangelo": "ModelAngelo"}
 SETTING_SETS = {
     "standard": ["standard"],
     "standard + more residues": ["standard", "more_residues"],
@@ -89,6 +93,16 @@ def auto_settings(resolution: float) -> list[str]:
     return ["standard", "low_resolution"] if resolution > 3.5 else ["standard", "more_residues"]
 
 
+def how(setting: str) -> str:
+    """'CryoAtom2, standard settings' or 'ModelAngelo'."""
+    return "ModelAngelo" if setting == MODELANGELO else f"CryoAtom2, {PRESETS[setting][0].lower()} settings"
+
+
+def describe(setting: str) -> str:
+    """:func:`how` with what the settings are."""
+    return f"{how(setting)} ({PRESETS[setting][1]})"
+
+
 def parse_bfactors(text: str) -> list[float]:
     values = []
     for item in re.split(r"[,;\s]+", str(text or "").strip()):
@@ -115,7 +129,7 @@ class CryoAtomEnhanced(JobType):
     title = "CryoAtom2 enhanced (best of several runs)"
     category = "Model building"
     tool = "cryoatom"
-    software = ["CryoAtom2"]
+    software = ["CryoAtom2", "ModelAngelo"]
     gpu = 1
     gpu_param = "gpus"
     cpus = 4
@@ -126,7 +140,9 @@ class CryoAtomEnhanced(JobType):
                    "chains and rebuilds with them until no new sequence appears. Can improve the map with the best model "
                    "(LocScale hybrid or model-based, Phenix) and build again while the score improves, or try other "
                    "sharpening methods (EMmerNet, DeepEMhancer, EMReady2, density modification). Checks the hand of the "
-                   "map when the model comes out in short pieces.")
+                   "map when the model comes out in short pieces. ModelAngelo can build next to CryoAtom2 (Builders): "
+                   "both are scored the same way, and the best model is kept whichever program built it, its gaps "
+                   "filled from the runs of the other.")
     inputs = [
         Slot("map", ("map",), "Map", help="The experimental map to build into: every model is scored against it."),
         Slot("half_maps", ("half_maps",), "Half maps", required=False,
@@ -143,6 +159,10 @@ class CryoAtomEnhanced(JobType):
         Param("settings", "choice", "auto", choices=["auto", *SETTING_SETS], label="Settings to try",
               help="auto: standard and 'low resolution' (4 rounds) beyond 3.5 Å, standard and 'more residues' (lower Cα/P "
                    "thresholds) otherwise. 'all' adds 'strict' (higher thresholds, fewer residues in noise)."),
+        Param("programs", "choice", "cryoatom", choices=list(PROGRAMS), labels=PROGRAMS, label="Builders",
+              help="CryoAtom2 with the settings above, ModelAngelo (one run per map, with the sequences given or "
+                   "build_no_seq without), or both: every model is scored the same way against the experimental map, "
+                   "the best is kept whichever program built it, and its gaps are filled from the runs of the other."),
         Param("runs", "int", 2, label="Runs per setting", min=1, max=10,
               help="CryoAtom2 visits the residues in a random order: each run differs, and the best is kept (as its "
                    "authors suggest on difficult maps)."),
@@ -214,7 +234,16 @@ class CryoAtomEnhanced(JobType):
         self.ref = MapVolume.read(m.path)
         self.resolution = resolution
         self.ms, self.read_structure = ms, read_structure
+        programs = str(ctx.params.get("programs") or "cryoatom")
         self.exe = ctx.executable("cryoatom")
+        self.angelo = self._modelangelo_exe() if programs != "cryoatom" else None
+        if programs != "cryoatom" and not self.angelo:
+            if programs == MODELANGELO:
+                raise JobError("ModelAngelo is not found on this server (Tools page): set it up, or choose CryoAtom2 as "
+                               "the builder")
+            ctx.warn("ModelAngelo is not found on this server (Tools page): CryoAtom2 builds alone")
+            programs = "cryoatom"
+        self.programs = programs
         self.base_config = self._base_config()
         self.runs_dir = ctx.path("runs")
         self.runs_dir.mkdir(exist_ok=True)
@@ -250,8 +279,12 @@ class CryoAtomEnhanced(JobType):
                          "note": f"map {'sharpened' if b < 0 else 'blurred'} by B = {b:+g} Å²"})
 
         settings = SETTING_SETS.get(ctx.params["settings"]) or auto_settings(resolution)
-        runs = int(ctx.params["runs"])
-        first = [(maps[0], s, r) for s in settings for r in range(1, runs + 1)]
+        if programs == MODELANGELO:
+            settings = [MODELANGELO]
+        elif programs == "both":
+            settings = [*settings, MODELANGELO]
+        runs = self.runs = int(ctx.params["runs"])
+        first = [(maps[0], s, r) for s in settings for r in range(1, self._runs_for(s) + 1)]
         later = [(mp, None, r) for mp in maps[1:] for r in range(1, runs + 1)]  # the best setting, once known
         limit = int(ctx.params["max_runs"])
         asked = len(first) + len(later)
@@ -260,7 +293,8 @@ class CryoAtomEnhanced(JobType):
             later = later[: max(0, limit - len(first))]
             first = first[:limit]
         self.planned = len(first) + len(later)
-        ctx.log(f"CryoAtom2 enhanced: {self.planned} runs to start with — settings {', '.join(settings)} × {runs} run(s)"
+        ctx.log(f"CryoAtom2 enhanced: {self.planned} runs to start with — {PROGRAMS[programs]}; settings "
+                f"{', '.join(settings)} × {runs} run(s)" + (" (ModelAngelo once)" if MODELANGELO in settings else "")
                 + (f", then {len(later)} on {len(maps) - 1} other map(s)" if later else "")
                 + f"; models scored against {Path(m.path).name} at {resolution:g} Å (fitted: residue Q ≥ "
                   f"{ms.fitted_cutoff(resolution):.2f})")
@@ -280,8 +314,12 @@ class CryoAtomEnhanced(JobType):
             self.flow.add("best_setting", "decision", "Best settings", status="chosen", parents=[self._node(best_first)],
                           icon="sliders", lines=[PRESETS[best_setting][0], f"used on the {len(maps) - 1} other map{'s' if len(maps) > 2 else ''}"],
                           detail=f"The settings of the best of the first runs, {self._name(best_first)}: {self._summary(best_first)}")
+            per_map = self._runs_for(best_setting)
             for mp in maps[1:]:
                 todo = [r for other, _, r in later if other is mp]
+                if len(todo) > per_map:  # ModelAngelo: once per map
+                    self.planned -= len(todo) - per_map
+                    todo = todo[:per_map]
                 if not todo:
                     continue
                 gid = f"group:1:{mp['label']}"
@@ -324,14 +362,15 @@ class CryoAtomEnhanced(JobType):
                                   [f"and {len(names) - 2} more"] if len(names) > 2 else []),
                               detail="Identified in the databases by at least half of the runs of the round, then given to "
                                      "CryoAtom2 for the next round:\n" + "\n".join(names))
-                self.planned += runs
+                n_runs = self._runs_for(best["setting"])
+                self.planned += n_runs
                 sequences = self.sequences = self._write_sequences(rnd)
                 mp = {x["label"]: x for x in maps}.get(best["map"], maps[0])
                 gid = f"group:{rnd}"
-                self.flow.add(gid, "group", f"Round {rnd} · {runs} run{'s' if runs > 1 else ''} with the sequences found",
+                self.flow.add(gid, "group", f"Round {rnd} · {n_runs} run{'s' if n_runs > 1 else ''} with the sequences found",
                               parents=[f"identified:{rnd}"], icon="grid")
                 last_round = [c for c in (self._build(mp, best["setting"], r, sequences, rnd, group=gid)
-                                          for r in range(1, runs + 1)) if c]
+                                          for r in range(1, n_runs + 1)) if c]
                 rounds = rnd
                 if not last_round:
                     ctx.warn(f"Round {rnd}: no run produced a model")
@@ -382,6 +421,32 @@ class CryoAtomEnhanced(JobType):
         except (OSError, ValueError) as exc:
             raise JobError(f"Cannot read the base config {path}: {exc}") from None
 
+    def _runs_for(self, setting: str) -> int:
+        """ModelAngelo once per map (its runs differ little); CryoAtom2 as many times as asked (Runs per setting)."""
+        return 1 if setting == MODELANGELO else self.runs
+
+    def _modelangelo_exe(self) -> str | None:
+        """ModelAngelo's executable when it is set up (Tools page) or on the PATH, else None."""
+        exe = self.ctx.executable("modelangelo")
+        return exe if os.path.isabs(exe) or shutil.which(exe) else None
+
+    def _modelangelo_args(self, map_path: str, out: Path, sequences: dict[str, str], mask: str | None) -> list[str]:
+        """model_angelo build with the sequences (-pf / -rf / -df; build needs a protein one), build_no_seq without."""
+        if sequences.get("protein"):
+            args = [self.angelo, "build", "-v", map_path, "-o", str(out)]
+            for kind, flag in (("protein", "-pf"), ("rna", "-rf"), ("dna", "-df")):
+                if sequences.get(kind):
+                    args += [flag, sequences[kind]]
+        else:
+            if sequences and not getattr(self, "_na_warned", False):
+                self._na_warned = True
+                self.ctx.warn("ModelAngelo 'build' needs a protein sequence: without one it runs build_no_seq, the "
+                              "nucleic-acid sequences left aside")
+            args = [self.angelo, "build_no_seq", "-v", map_path, "-o", str(out)]
+        if mask:
+            args += ["-m", mask]
+        return args + ["--device", ",".join(self.ctx.relative_gpus())]
+
     def _write_sequences(self, rnd: int) -> dict[str, str]:
         from cryoplug.modelio import write_fasta
         files = {}
@@ -408,31 +473,36 @@ class CryoAtomEnhanced(JobType):
         ctx, ms = self.ctx, self.ms
         label = label or f"r{rnd}_{re.sub(r'[^A-Za-z0-9+-]+', '', mp['label'])}_{setting}_{run}"
         node = f"run:{label}"
+        angelo = setting == MODELANGELO
+        tool = "modelangelo" if angelo else "cryoatom"
         self.flow.add(node, "run", f"{PRESETS[setting][0]} {run}" if group else f"{PRESETS[setting][0]} · {mp['note']}",
                       parents=parents, group=group, status="running", lines=["running…"], icon="model",
-                      detail=f"CryoAtom2 with the {PRESETS[setting][0].lower()} settings ({PRESETS[setting][1]}) on the "
-                             f"{mp['note']}. Folder runs/{label}.")
+                      detail=f"{describe(setting)} on the {mp['note']}. Folder runs/{label}.")
         folder = self.runs_dir / label
         folder.mkdir(exist_ok=True)
-        config = merged(self.base_config, PRESETS[setting][2])
-        (folder / "config.json").write_text(json.dumps(config, indent=1))
-        out = folder / "cryoatom"
         map_path = self._readable(mp)
-        args = [self.exe, "build", "-v", map_path, "-o", str(out), "-c", str(folder / "config.json")]
-        for kind, path in sequences.items():
-            args += [FLAGS[kind], path]
         mask = self._mask_for(map_path) if mask_path is True else (mask_path or None)
-        if mask:
-            args += ["-m", mask]
-        args += self.dbs
-        args += ["-d", ",".join(ctx.relative_gpus())] + ctx.split_extra()
+        if angelo:
+            out = folder / "modelangelo"
+            args = self._modelangelo_args(map_path, out, sequences, mask)
+        else:
+            config = merged(self.base_config, PRESETS[setting][2])
+            (folder / "config.json").write_text(json.dumps(config, indent=1))
+            out = folder / "cryoatom"
+            args = [self.exe, "build", "-v", map_path, "-o", str(out), "-c", str(folder / "config.json")]
+            for kind, path in sequences.items():
+                args += [FLAGS[kind], path]
+            if mask:
+                args += ["-m", mask]
+            args += self.dbs
+            args += ["-d", ",".join(ctx.relative_gpus())] + ctx.split_extra()
         index = self.done
-        ctx.progress(index / max(self.planned, 1), f"Run {index + 1}/{self.planned}: {PRESETS[setting][0].lower()} settings on "
+        ctx.progress(index / max(self.planned, 1), f"Run {index + 1}/{self.planned}: {how(setting)} on "
                      f"the {mp['note']} " + (f"(run {run}, round {rnd})" if rnd else "(hand check)"))
 
         def on_line(line: str) -> None:
             part = None
-            if "Stage1" in line:
+            if "Stage1" in line or "C-alpha" in line or "Cα" in line:
                 part = 0.05
             elif (hit := re.search(r"round (\d+) / (\d+)", line)):
                 part = 0.1 + 0.8 * (int(hit.group(1)) - 1) / max(1, int(hit.group(2)))
@@ -442,14 +512,14 @@ class CryoAtomEnhanced(JobType):
                 ctx.progress((index + part) / max(self.planned, 1), None, log=False)
 
         try:
-            ctx.run(args, tool="cryoatom", on_line=on_line)
+            ctx.run(args, tool=tool, on_line=on_line)
         except JobError as exc:
             ctx.warn(f"Run {label} failed: {exc}")
             self.done += 1
             self.flow.update(node, status="failed", lines=["failed", str(exc).splitlines()[0][:80]])
             return None
         self.done += 1
-        model = first_existing([out / "cryoatom.cif"]) or next(iter(sorted(out.glob("*.cif"))), None)
+        model = first_existing([out / f"{out.name}.cif"]) or next(iter(sorted(out.glob("*.cif"))), None)
         if model is None:
             ctx.warn(f"Run {label}: no model written")
             self.flow.update(node, status="failed", lines=["failed", "no model written"])
@@ -461,11 +531,11 @@ class CryoAtomEnhanced(JobType):
             ctx.warn(f"Run {label}: model not scored ({exc})")
             self.flow.update(node, status="failed", lines=["model not scored", str(exc)[:80]])
             return None
-        found_prot = _sequences_from([out / "cryoatom_prot.fasta"])
-        found_na = [(n, s.upper().replace("T", "U")) for n, s in _sequences_from([out / "cryoatom_na.fasta"])]
+        found_prot = [] if angelo else _sequences_from([out / "cryoatom_prot.fasta"])
+        found_na = [] if angelo else [(n, s.upper().replace("T", "U")) for n, s in _sequences_from([out / "cryoatom_na.fasta"])]
         cand = {"label": label, "map": mp["label"], "map_short": mp["short"], "map_note": mp["note"], "map_path": mp["path"],
-                "setting": setting, "run": run, "round": rnd,
-                "model": model, "raw": first_existing([out / "cryoatom_raw.cif"]), "score": score,
+                "setting": setting, "program": "ModelAngelo" if angelo else "CryoAtom2", "run": run, "round": rnd,
+                "model": model, "raw": first_existing([out / f"{out.name}_raw.cif"]), "score": score,
                 "found_prot": found_prot, "found_na": found_na}
         ctx.log(f"Run {label}: {self._summary(cand)}")
         self.flow.update(node, status="done", lines=[f"{score['fitted']} fitted ({score['fitted_fraction']:.0%})",
@@ -547,7 +617,7 @@ class CryoAtomEnhanced(JobType):
         known = {s.upper() for recs in self.records.values() for _, s in recs}
         new: dict[str, list[tuple[str, str]]] = {}
         for kind, key in (("protein", "found_prot"), ("rna", "found_na")):
-            hits = consensus_hits([c[key] for c in cands])
+            hits = consensus_hits([c[key] for c in cands if c.get("program") != "ModelAngelo"])
             fresh = [(n, s) for n, s in hits if s.upper() not in known]
             if fresh:
                 new[kind] = fresh
@@ -610,7 +680,6 @@ class CryoAtomEnhanced(JobType):
         """Sharpen with the best model and build again, while the score improves (model-based methods); one more map
         to build into for the others."""
         ctx, ms = self.ctx, self.ms
-        runs = int(ctx.params["runs"])
         cutoff = ms.fitted_cutoff(self.resolution)
         self.improved: dict[str, Path] = {}
         for method in ctx.params["improve_map"]:
@@ -635,14 +704,15 @@ class CryoAtomEnhanced(JobType):
                 else:
                     made = [f"from the {'half maps' if ctx.input('half_maps') else 'experimental map'}", "no model used"]
                 self.flow.add(node, "map", title, parents=[self.head], status="running", lines=["making the map…"], icon="map")
-                self.planned += runs
+                n_runs = self._runs_for(best["setting"])
+                self.planned += n_runs
                 ctx.progress(self.done / max(self.planned, 1), f"Map improvement: {label}"
                              + (f", cycle {cycle} (with the model of {best['label']})" if uses_model else ""),
                              log=not uses_model)  # the model-based cycles have logged it in detail
                 try:
                     new_map = self._improve_map(method, model, folder)
                 except JobError as exc:
-                    self.planned -= runs
+                    self.planned -= n_runs
                     ctx.warn(f"{label} left out: {exc}")
                     self.flow.update(node, status="failed", lines=["left out", str(exc).splitlines()[0][:80]])
                     break
@@ -654,9 +724,9 @@ class CryoAtomEnhanced(JobType):
                 maps.append(mp)
                 self.improved[mp["label"]] = new_map
                 gid = f"group:{node}"
-                self.flow.add(gid, "group", f"{runs} run{'s' if runs > 1 else ''} in the {mp['note']}", parents=[node], icon="grid")
+                self.flow.add(gid, "group", f"{n_runs} run{'s' if n_runs > 1 else ''} in the {mp['note']}", parents=[node], icon="grid")
                 cands = [c for c in (self._build(mp, best["setting"], r, self.sequences, self.round, group=gid)
-                                     for r in range(1, runs + 1)) if c]
+                                     for r in range(1, n_runs + 1)) if c]
                 if not cands:
                     ctx.warn(f"{label}: no run produced a model in the new map")
                     self.flow.add(f"best:{node}", "decision", "No model in the new map", parents=[gid], status="failed",
@@ -793,7 +863,7 @@ class CryoAtomEnhanced(JobType):
             n = len(self.candidates)
             png = write_png(live / f"run_{n:03d}.png", trace_image(ca_traces(st), 240))
             s = cand["score"]
-            caption = (f"{cand['label']}: {PRESETS[cand['setting']][0].lower()} settings on the {cand['map_note']} — "
+            caption = (f"{cand['label']}: {how(cand['setting'])} on the {cand['map_note']} — "
                        f"{s['fitted']} fitted residues ({s['fitted_fraction']:.0%}), Q {s['q_mean']:.3f}, CC {s['cc_mask']:.3f}")
             view = [{"kind": "map", "path": cand["map_path"], "label": cand["map_note"]},
                     {"kind": "model", "path": cand["model"], "label": cand["label"]}]
@@ -829,7 +899,7 @@ class CryoAtomEnhanced(JobType):
         return rows
 
     def _runs_table(self, title: str, rows: list[list[Any]]) -> None:
-        self.ctx.add_table(title, ["Run", "Map", "Settings", "Fitted", "Score", "Best", "Residues", "Q-score", "CC (mask)",
+        self.ctx.add_table(title, ["Run", "Map", "Builder / settings", "Fitted", "Score", "Best", "Residues", "Q-score", "CC (mask)",
                                    "Fragments", "Duplicated", "Round"], rows, key="runs",
                            note=f"Fitted: residues whose mean atom Q-score is at least "
                                 f"{self.ms.fitted_cutoff(self.resolution):.2f} (expected Q at {self.resolution:g} Å minus 0.2). "
@@ -879,8 +949,7 @@ class CryoAtomEnhanced(JobType):
             ctx.add_table("Pieces added from other runs", ["From run", "Chain", "Residues", "Length", "Q-score", "New chain"],
                           [[a["source"], a["chain"], f"{a['first']}-{a['last']}", a["length"], f"{a['q_mean']:.3f}", a["new_chain"]]
                            for a in best["combined_from"]])
-        lines = [f"Best model: run {best['label']} — {PRESETS[best['setting']][0]} settings "
-                 f"({PRESETS[best['setting']][1]}) on the {best['map_note']}.",
+        lines = [f"Best model: run {best['label']} — {describe(best['setting'])} on the {best['map_note']}.",
                  f"Rounds: {rounds} (identification {'on' if self.dbs else 'off: no sequence database'}). Hand: {hand}."]
         if ctx.params["improve_map"]:
             tried = ", ".join(IMPROVE_METHODS[m][0] for m in ctx.params["improve_map"])
@@ -905,4 +974,4 @@ class CryoAtomEnhanced(JobType):
                 ctx.add_output("candidates", "files", files, "Models of every run")
         else:  # the outputs are copies at the top of the job folder
             shutil.rmtree(self.runs_dir, ignore_errors=True)
-        ctx.log(f"Done in {self.done} CryoAtom2 run(s): {self._summary(best)}")
+        ctx.log(f"Done in {self.done} building run(s): {self._summary(best)}")

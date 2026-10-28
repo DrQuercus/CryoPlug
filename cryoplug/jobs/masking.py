@@ -1,7 +1,9 @@
 """Mask creation (built-in): soft-edged masks for FSC, local refinement, LocScale, spIsoNet, signal subtraction."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -483,3 +485,267 @@ class SegmentMap(JobType):
         ctx.add_highlight("Threshold", f"{threshold:.4g}")
         if removed:
             ctx.log(f"{removed} small blob(s) below {p['min_region_kda']:g} kDa left out")
+
+
+# ------------------------------------------------------ enhanced: the mask validated by the corrected FSC
+def parse_numbers(text: str, what: str) -> list[float]:
+    """'2, 4, 8' → [2.0, 4.0, 8.0] (each once, in that order); ValueError with ``what`` in the message otherwise."""
+    out: list[float] = []
+    for item in re.split(r"[,;\s]+", str(text or "").strip()):
+        if not item:
+            continue
+        try:
+            value = float(item)
+        except ValueError:
+            raise ValueError(f"{what}: '{item}' is not a number") from None
+        if value < 0:
+            raise ValueError(f"{what}: {item} is negative")
+        if value not in out:
+            out.append(value)
+    if not out:
+        raise ValueError(f"{what}: give at least one value")
+    return out
+
+
+def judge_mask(result: dict[str, Any], max_noise: float, max_inflation: float) -> dict[str, Any]:
+    """What the FSC of the half maps says about a mask (``result`` from :func:`cryoplug.mrc.half_map_fsc`): the
+    resolutions, the correlation of the noise the mask induces (the phase-randomised FSC beyond the randomisation
+    point) and how much the uncorrected masked FSC overstates the corrected one."""
+    freqs = result["frequency"]
+    curves, res = result["curves"], result["resolution"]
+    rand = curves.get("phase_randomized") or []
+    start = len(freqs)
+    if result.get("randomized_from") and rand:
+        start = next((i for i, f in enumerate(freqs) if f >= 1.0 / result["randomized_from"]), len(freqs)) + 2
+    noise = float(max(rand[start:], default=0.0))
+    masked, corrected = res.get("masked", res["unmasked"]), res.get("corrected", res["unmasked"])
+    inflation = 100.0 * (corrected - masked) / corrected if corrected else 0.0
+    too_tight, inflates = noise > max_noise, inflation > max_inflation
+    verdict = "too tight (noise correlation)" if too_tight else "inflates the FSC" if inflates else "ok"
+    return {"res_unmasked": res["unmasked"], "res_masked": masked, "res_corrected": corrected, "noise": noise,
+            "inflation": inflation, "safe": not (too_tight or inflates), "verdict": verdict}
+
+
+def choose_mask(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """The mask kept: among the safe ones, the best corrected resolution, the largest edge (dilation + soft edge)
+    within 1 % of it; when none is safe, the one correlating the least noise."""
+    safe = [c for c in candidates if c["safe"]]
+    if not safe:
+        return min(candidates, key=lambda c: (c["noise"], c["inflation"]))
+    best = min(c["res_corrected"] for c in safe)
+    pool = [c for c in safe if c["res_corrected"] <= best * 1.01]
+    return max(pool, key=lambda c: (c["dilate"] + c["soft"], -c["res_corrected"]))
+
+
+@register
+class MaskEnhanced(JobType):
+    name = "mask_enhanced"
+    title = "Mask enhanced (validated by the FSC)"
+    category = "Map processing"
+    software = ["CryoPlug"]
+    cpus = 2
+    description = ("Masks made from the map at several thresholds, dilations and soft edges, each scored by the "
+                   "gold-standard FSC of the half maps it gives (masked, corrected by phase randomisation): the tightest "
+                   "mask that does not correlate the noise nor inflate the FSC is kept, with its FSC curves. The mask for "
+                   "post-processing, local refinement and the deposition.")
+    inputs = [Slot("half_maps", ("half_maps",), "Half maps", help="Unfiltered half maps: their FSC scores every mask."),
+              Slot("map", ("map",), "Map", required=False,
+                   help="Thresholded for the masks (default: the average of the half maps).")]
+    params = [
+        Param("lowpass", "float", 15.0, label="Low-pass before threshold", unit="Å", min=0.0,
+              help="Smooths the density so that the masks follow the molecule rather than the noise."),
+        Param("mass_kda", "float", 0.0, label="Expected mass", unit="kDa", min=0.0,
+              help="0 = Otsu's threshold; otherwise the level enclosing this mass is the automatic level (×1)."),
+        Param("thresholds", "str", "0.5, 1, 2", label="Threshold multipliers",
+              help="Multiples of the automatic level, each giving a mask core (lower = larger core)."),
+        Param("dilations", "str", "2, 4, 8", label="Dilations", unit="Å", help="Each core is extended by these distances."),
+        Param("softs", "str", "3, 6, 10", label="Soft edges", unit="Å", help="Raised-cosine fall-off widths beyond the dilation."),
+        Param("dust", "float", 10.0, label="Remove blobs lighter than", unit="kDa", min=0.0),
+        Param("max_noise", "float", 0.2, label="Noise correlation allowed", min=0.0, max=1.0,
+              help="Largest value of the phase-randomised FSC beyond the randomisation point: above it the mask "
+                   "correlates the noise of the two half maps (too tight) and is not chosen."),
+        Param("max_inflation", "float", 10.0, label="Inflation allowed", unit="%", min=0.0,
+              help="How much better (in %) the uncorrected masked resolution may be than the corrected one: beyond, the "
+                   "mask is flagged as inflating the FSC."),
+        Param("keep_masks", "bool", False, label="Keep every mask", advanced=True,
+              help="Write all the masks tried (one file each) and offer them in 3D."),
+    ]
+    outputs = [OutputDef("mask", "mask", "Mask"), OutputDef("fsc", "fsc", "Half-map FSC (mask kept)"),
+               OutputDef("masks", "files", "All the masks tried")]
+
+    @classmethod
+    def validate(cls, params: dict[str, Any], connected: dict[str, str]) -> list[str]:
+        problems = []
+        for key, what in (("thresholds", "Threshold multipliers"), ("dilations", "Dilations"), ("softs", "Soft edges")):
+            try:
+                parse_numbers(params.get(key, ""), what)
+            except ValueError as exc:
+                problems.append(str(exc))
+        return problems
+
+    def run(self, ctx: JobContext) -> None:
+        from cryoplug import masks as mk
+        from cryoplug.imaging import write_png
+        from cryoplug.jobs.decisions import DecisionMap
+        from cryoplug.jobs.relion import report_fsc
+        from cryoplug.mrc import half_map_fsc
+        try:
+            mk.ndimage()
+        except ImportError as exc:
+            raise JobError(str(exc)) from None
+        p = ctx.params
+        hm = ctx.require("half_maps")
+        half_a, half_b = MapVolume.read(hm.files[0]), MapVolume.read(hm.files[1])
+        if half_a.data.shape != half_b.data.shape:
+            raise JobError("The two half maps do not have the same box")
+        m = ctx.input("map")
+        vol = MapVolume.read(m.path) if m else half_a.like((half_a.data + half_b.data) / 2)
+        if vol.data.shape != half_a.data.shape:
+            raise JobError(f"The map box {vol.shape_xyz} differs from the half maps' {half_a.shape_xyz}")
+        thresholds = parse_numbers(p["thresholds"], "Threshold multipliers")
+        dilations, softs = parse_numbers(p["dilations"], "Dilations"), parse_numbers(p["softs"], "Soft edges")
+        voxel = vol.voxel
+        max_noise, max_inflation = float(p["max_noise"]), float(p["max_inflation"])
+
+        flow = DecisionMap(ctx, note="The masks tried (one box per threshold, dilation + soft edge inside), each scored by "
+                                     "the FSC of the half maps it gives; the one kept. Click a tile for its resolutions.")
+        flow.add("input", "input", "Half maps", icon="map", lines=[Path(hm.files[0]).name, Path(hm.files[1]).name],
+                 view=[{"kind": "map", "path": hm.files[0], "label": "half map 1"}, {"kind": "map", "path": hm.files[1], "label": "half map 2"}])
+        ctx.progress(0.02, "Low-pass filtering and automatic level")
+        smooth = mk.smooth_map(vol, p["lowpass"])
+        values = mk.sample_values(smooth)
+        if p["mass_kda"] > 0:
+            level0 = mk.level_for_mass(values, smooth.size, p["mass_kda"] * 1000.0, float(np.prod(voxel)))
+            how = f"encloses {mk.format_mass(p['mass_kda'])}"
+        else:
+            level0 = mk.otsu_threshold(values)
+            how = "Otsu's method"
+        flow.add("level", "decision", "Automatic level", parents=["input"], icon="sliders",
+                 lines=[f"{level0:.4g} ({how})", f"low-pass {p['lowpass']:g} Å · multipliers {', '.join(f'{t:g}' for t in thresholds)}"])
+        base = half_map_fsc(half_a, half_b)
+        ctx.add_highlight("Unmasked", f"{base['resolution']['unmasked']:.2f} Å")
+        live = ctx.path("live")
+        live.mkdir(exist_ok=True)
+        if p["keep_masks"]:
+            ctx.path("masks").mkdir(exist_ok=True)
+        candidates: list[dict[str, Any]] = []
+        total = len(thresholds) * len(dilations) * len(softs)
+        for t in thresholds:
+            level = t * level0
+            gid = f"group:{t:g}"
+            flow.add(gid, "group", f"Threshold ×{t:g} ({level:.4g}) · {len(dilations) * len(softs)} masks", parents=["level"], icon="grid")
+            core = smooth >= level
+            core, _removed = mk.remove_islands(core, voxel, p["dust"])
+            if not core.any():
+                ctx.warn(f"Threshold ×{t:g} ({level:.4g}) gives an empty core: skipped")
+                flow.update(gid, status="failed")
+                continue
+            dist = mk.distance_from(core, voxel)
+            for d in dilations:
+                for s in softs:
+                    i = len(candidates)
+                    label = f"×{t:g} · {d:g}+{s:g} Å"
+                    node = f"mask:{t:g}:{d:g}:{s:g}"
+                    flow.add(node, "run", f"{d:g} + {s:g} Å", group=gid, status="running", lines=["FSC…"], icon="cube")
+                    ctx.progress(0.05 + 0.85 * i / total, f"Mask {i + 1}/{total}: threshold ×{t:g}, dilation {d:g} Å, soft edge {s:g} Å")
+                    mask = np.where(dist <= d, 1.0, 0.0).astype(np.float32)
+                    if s > 0:
+                        band = (dist > d) & (dist < d + s)
+                        mask[band] = 0.5 + 0.5 * np.cos(np.pi * (dist[band] - d) / s)
+                    result = half_map_fsc(half_a, half_b, half_a.like(mask))
+                    stats = mk.statistics(mask, voxel)
+                    cand = {"label": label, "threshold": t, "level": level, "dilate": d, "soft": s, "node": node,
+                            "mass_kda": stats["mass_kda"], "fraction": stats["fraction"], "result": result,
+                            **judge_mask(result, max_noise, max_inflation)}
+                    if p["keep_masks"]:
+                        cand["path"] = str(vol.like(mask).write(ctx.path("masks", f"mask_{i + 1:02d}.mrc")))
+                    cand["png"] = str(write_png(live / f"mask_{i + 1:02d}.png", mk.overlay_slices(vol.data, mask, mk.centroid(mask), size=200)))
+                    candidates.append(cand)
+                    flow.update(node, status="done" if cand["safe"] else "discarded",
+                                lines=[f"{cand['res_corrected']:.2f} Å corrected", cand["verdict"] if not cand["safe"]
+                                       else f"noise {cand['noise']:.2f} · {mk.format_mass(cand['mass_kda'])}"],
+                                detail=self._summary(cand), view=[{"kind": "mask", "path": cand["path"], "label": label}] if p["keep_masks"] else [])
+                    ctx.log(f"Mask {label}: {self._summary(cand)}")
+                    self._live(ctx, candidates, cand)
+        if not candidates:
+            raise JobError("No mask could be made: lower the threshold multipliers or the expected mass")
+
+        best = choose_mask(candidates)
+        flow.mark(best["node"], [c["node"] for c in candidates])
+        safe = [c for c in candidates if c["safe"]]
+        if not safe:
+            ctx.warn("Every mask correlates the noise of the half maps or inflates the FSC: the least harmful one is kept. "
+                     "Raise the dilations and soft edges, or lower the threshold multipliers.")
+        why = (f"best corrected resolution among the {len(safe)} safe masks, the largest edge within 1 % of it" if safe
+               else "no safe mask: the smallest noise correlation")
+        flow.add("best", "decision", f"Mask {best['label']} kept", parents=[best["node"]], status="chosen" if safe else "warning",
+                 icon="target", lines=[f"{best['res_corrected']:.2f} Å corrected · {mk.format_mass(best['mass_kda'])}", why],
+                 detail=self._summary(best))
+        ctx.log(f"Mask {best['label']} kept: {why}")
+
+        # the mask kept, its FSC in CryoPlug's format, the pictures
+        ctx.progress(0.95, "Writing the mask kept")
+        core = smooth >= best["level"]
+        core, _removed = mk.remove_islands(core, voxel, p["dust"])
+        mask = mk.soft_edge(core, voxel, best["dilate"], best["soft"])
+        out = vol.like(mask).write(ctx.path("mask.mrc"))
+        image = write_png(ctx.path("mask_sections.png"), mk.overlay_slices(vol.data, mask, mk.centroid(mask)))
+        ctx.add_image("Sections through the centre of the mask kept (XY, XZ, YZ): map in grey, mask in orange", image)
+        res = best["result"]
+        report_fsc(ctx, res["frequency"], res["curves"], "corrected", None, "Half-map FSC with the mask kept")
+        meta = {**ctx.inherited_meta("half_maps"), "source": "map_density", "threshold": round(float(best["level"]), 6),
+                "dilation": best["dilate"], "soft_edge": best["soft"], "mass_kda": round(best["mass_kda"], 1),
+                "resolution": round(best["res_corrected"], 3), "fsc_validated": True}
+        ctx.add_output("mask", "mask", out, f"Mask ({best['label']}, FSC-validated)", meta=meta, thumbnail=image)
+        if p["keep_masks"]:
+            ctx.add_output("masks", "files", [c["path"] for c in candidates], "All the masks tried")
+        ctx.add_highlight("Resolution", f"{best['res_corrected']:.2f} Å")
+        ctx.add_highlight("Mask", best["label"])
+        ctx.add_highlight("Noise", f"{best['noise']:.2f}", "good" if best["safe"] else "warn")
+        flow.add("result", "result", "Mask kept", parents=["best"], status="chosen", icon="target",
+                 lines=[best["label"], f"{best['res_corrected']:.2f} Å (unmasked {best['res_unmasked']:.2f} Å)"],
+                 view=[{"kind": "mask", "path": out, "label": "mask"}, {"kind": "map", "path": hm.files[0], "label": "half map 1"}])
+        ctx.add_text("Summary", f"Mask {best['label']} kept ({why}): {self._summary(best)}.\n"
+                                f"{len(safe)} of {len(candidates)} masks safe; unmasked resolution {best['res_unmasked']:.2f} Å.\n"
+                                "A mask too tight correlates the noise of the two half maps: the phase-randomised FSC stays "
+                                "high beyond the randomisation point, and the corrected curve is not reliable. The corrected "
+                                "resolution is the one to report.")
+
+    # ----------------------------------------------------------------- helpers
+    @staticmethod
+    def _summary(c: dict[str, Any]) -> str:
+        from cryoplug.masks import format_mass
+        return (f"corrected {c['res_corrected']:.2f} Å, masked {c['res_masked']:.2f} Å, unmasked {c['res_unmasked']:.2f} Å; "
+                f"noise correlation {c['noise']:.2f}, inflation {c['inflation']:.1f} %; {format_mass(c['mass_kda'])}, "
+                f"{100 * c['fraction']:.1f} % of the box; {c['verdict']}")
+
+    def _live(self, ctx: JobContext, candidates: list[dict[str, Any]], cand: dict[str, Any]) -> None:
+        """The masks so far: the table, the FSC curves and the sections of each (sliders), the resolutions by mask."""
+        from cryoplug.masks import format_mass
+        rows = [[c["label"], f"{c['level']:.4g}", format_mass(c["mass_kda"]), f"{100 * c['fraction']:.1f}", f"{c['res_masked']:.2f}",
+                 f"{c['res_corrected']:.2f}", f"{c['noise']:.2f}", f"{c['inflation']:.1f}", "✓" if c["safe"] else c["verdict"]]
+                for c in candidates]
+        ctx.add_table("Masks compared", ["Mask", "Level", "Mass", "Box (%)", "Masked (Å)", "Corrected (Å)", "Noise", "Inflation (%)", "Verdict"],
+                      rows, key="masks",
+                      note=f"Unmasked resolution {candidates[0]['res_unmasked']:.2f} Å. Noise: the largest phase-randomised FSC "
+                           "beyond the randomisation point (a tight mask correlates the noise of the two half maps). Inflation: "
+                           "how much better the uncorrected masked resolution is than the corrected one.")
+        res = cand["result"]
+        curves = res["curves"]
+        names = {"unmasked": "Unmasked", "masked": "Masked", "corrected": "Corrected", "phase_randomized": "Phase randomised"}
+        ctx.add_plot_frame("FSC of each mask", [{"name": names[k], "x": res["frequency"], "y": curves[k]} for k in names if k in curves],
+                           cand["label"], key="mask_fsc", x_label="Resolution (Å)", y_label="FSC", x_kind="resolution",
+                           hlines=[{"y": 0.143, "label": "0.143"}, {"y": 0.5, "label": "0.5"}], y_range=[-0.1, 1.05], group="masks",
+                           note="The corrected curve is the gold-standard FSC; the phase-randomised one should fall to zero "
+                                "soon after the randomisation point.")
+        ctx.add_image_frame("Sections through each mask", cand["png"], cand["label"], key="mask_slices", group="masks",
+                            caption=f"{cand['res_corrected']:.2f} Å corrected · {format_mass(cand['mass_kda'])} · {cand['verdict']}",
+                            view=[{"kind": "mask", "path": cand["path"], "label": cand["label"]}] if cand.get("path") else [],
+                            note="Map in grey, mask in orange (XY, XZ, YZ through the centre of the mask).")
+        if len(candidates) > 1:
+            x = list(range(1, len(candidates) + 1))
+            ctx.add_plot("Resolution by mask", [{"name": "Corrected", "x": x, "y": [round(c["res_corrected"], 3) for c in candidates]},
+                                                {"name": "Masked (uncorrected)", "x": x, "y": [round(c["res_masked"], 3) for c in candidates]},
+                                                {"name": "Noise correlation", "x": x, "y": [round(c["noise"], 3) for c in candidates]}],
+                         x_label="Mask", y_label="Å (resolution) / FSC (noise)", key="masks_plot",
+                         note="Masks in the order tried: " + ", ".join(f"{i + 1} = {c['label']}" for i, c in enumerate(candidates)) + ".")

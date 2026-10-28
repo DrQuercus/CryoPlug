@@ -665,6 +665,41 @@ score) et liste les morceaux ajoutés. Les modèles de chaque essai restent disp
 Comptez le nombre d'essais × la durée d'un CryoAtom2 (≈ 30 min pour 5 000 résidus sur une A100) : **Maximum runs**
 plafonne le premier tour. Plusieurs GPU sont partagés par chaque essai, comme CryoAtom2 2.1 sait le faire.
 
+**Avec ModelAngelo.** Le paramètre *Builders* lance ModelAngelo à côté de CryoAtom2 (`both`), ou seul. Ses modèles
+sont notés exactement comme les autres, contre la carte expérimentale : le meilleur est gardé quel que soit le
+programme qui l'a construit, et ses trous sont comblés par les morceaux bien ajustés de l'autre. ModelAngelo tourne une
+fois par carte (ses essais diffèrent peu) : `build` avec une séquence protéique, `build_no_seq` sans.
+
+### La famille « enhanced » : essayer, mesurer, garder le meilleur
+
+Le même principe que CryoAtom2 enhanced — essayer des alternatives, noter chacune sur un critère **indépendant** de
+ce qu'on optimise, garder la meilleure et montrer la décision — s'applique aux autres étapes où l'on règle d'habitude
+à l'œil. Chaque job de cette famille a sa carte des décisions, ses tableaux comparatifs et ses curseurs pendant le
+calcul :
+
+- **Mask enhanced (validated by the FSC)** : des masques faits à partir de la carte pour plusieurs seuils ×
+  dilatations × bords doux ; chacun est noté par la FSC des demi-cartes qu'il donne, masquée et **corrigée par
+  randomisation des phases**. Un masque trop serré corrèle le bruit des deux demi-cartes (la FSC à phases
+  randomisées reste haute au-delà du point de randomisation) ou gonfle la résolution non corrigée ; il est écarté. Parmi
+  les masques sûrs, le job garde celui de meilleure résolution corrigée, le plus large à 1 % près. Sortie : le masque,
+  ses courbes FSC (JSON + XML EMDB), et tous les masques si on le demande.
+- **Sharpening enhanced (B-factors and methods compared)** : la carte affûtée par le facteur B estimé sur son tracé de
+  **Guinier** (l'auto-B de RELION), par les facteurs B demandés, et par les méthodes installées (LocScale, EMmerNet,
+  DeepEMhancer, EMReady2, map sharpening et modification de densité de Phenix). Chaque carte est notée avec le **même
+  modèle** : Q-score des atomes (Pintilie 2020), corrélation dans l'enveloppe du modèle, FSC carte–modèle. Le Q-score
+  est maximal quand la densité autour de chaque atome a la forme attendue à la résolution ; il baisse pour une carte
+  sur-affûtée (bruit net) comme pour une carte floue, ce qui en fait un juge honnête de l'affûtage. Les coupes de
+  chaque carte sont sous un curseur, avec les tracés de Guinier. Sans modèle, les cartes sont faites et montrées, et
+  celle du facteur B de Guinier est gardée.
+- **Refinement enhanced (Phenix, cross-validated weight)** : le poids carte / géométrie de `phenix.real_space_refine`
+  est choisi par **validation croisée sur les demi-cartes** (Brown et al. 2015) : chaque poids est essayé en affinant
+  contre la demi-carte 1, et le modèle obtenu est jugé par sa FSC contre la demi-carte 2, qu'il n'a jamais vue. L'écart
+  entre la FSC *work* et la FSC *free* mesure le sur-ajustement ; un clashscore trop haut écarte l'essai. Le poids qui
+  ajuste le mieux sans sur-ajuster sert à l'affinement final contre la carte complète.
+
+Le workflow **Validated pipeline (enhanced jobs) → deposition** enchaîne ces jobs : masque validé → construction par
+CryoAtom2 et ModelAngelo → affûtage choisi par le modèle → affinement au poids validé → validation et dépôt.
+
 ### Sessions interactives ISOLDE / Coot
 
 Le job prépare la session (modèle + cartes associées, `clipper associate`, `isolde start`) puis passe en
@@ -1182,11 +1217,11 @@ La fiche de chaque job (rôle, cas d'usage, pièges, entrées, étapes suivantes
 | Classification | 2D classification (VDAM / EM) · Select 2D classes (galerie cliquable, seuils, liste, class ranker ou carte de référence) · Amyloid initial model (RELION) · 3D classification · Heterogeneous refinement · Select 3D classes · Average power spectra (2D classes) |
 | Reconstruction | 3D initial model · 3D auto-refine · RELION local refinement · RELION signal subtraction · RELION 3D classification (focused) · RELION post-processing · RELION reconstruction |
 | Tomography | Import tilt series (RELION) · Motion correction et CTF estimation (tilt series) · Exclude tilt images · Align tilt series (IMOD, AreTomo2) · Reconstruct tomograms (RELION) · Denoise tomograms (cryoCARE) · Pick particles in tomograms · Template matching (pytom-match-pick) · Import tomogram coordinates · Extract subtomograms (RELION) · Reconstruct particle (RELION) · 3D initial model, 3D classification et 3D auto-refine (subtomograms) · CTF refinement (tomography) · Frame alignment / polishing (tomography) |
-| Map processing | Half-map FSC · Directional resolution (3D FSC, cFAR, SCF) · Local resolution (Phenix) · Create mask · Segment map into regions · Mask creation (RELION) · Helical symmetry (RELION) · Align to symmetry axes (RELION) · Symmetry search (RELION) · Align 3D maps (et poses des particules) · Mask drawn in the 3D viewer · Composite map (focused maps) · Map operations (dont rééchantillonnage) · LocScale 2 · EMmerNet · DeepEMhancer · EMReady2 · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Map sharpening (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) |
+| Map processing | Half-map FSC · Directional resolution (3D FSC, cFAR, SCF) · Local resolution (Phenix) · Create mask · Mask enhanced (validé par la FSC) · Segment map into regions · Mask creation (RELION) · Helical symmetry (RELION) · Align to symmetry axes (RELION) · Symmetry search (RELION) · Align 3D maps (et poses des particules) · Mask drawn in the 3D viewer · Composite map (focused maps) · Map operations (dont rééchantillonnage) · LocScale 2 · EMmerNet · DeepEMhancer · EMReady2 · Anisotropy correction (spIsoNet) · Density modification (Phenix) · Map sharpening (Phenix) · Auto-sharpen (Phenix) · Local anisotropic sharpening (Phenix) · Sharpening enhanced (facteurs B et méthodes comparés par le Q-score) |
 | Heterogeneity | 3D multi-body refinement (RELION) · DynaMight · cryoDRGN input check (backprojection) · cryoDRGN training · cryoDRGN-AI ab initio reconstruction · cryoDRGN continue training · cryoDRGN convergence check · cryoDRGN analysis · cryoDRGN landscape analysis · cryoDRGN trajectory · cryoDRGN volumes at particles · Select particles (latent space) · Volume series analysis · Extract volume from series |
-| Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · CryoAtom2 enhanced (meilleur de plusieurs essais) · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Fit in map (rigid body) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
+| Model building | ModelAngelo build · Identify chains (ModelAngelo HMM search) · CryoAtom2 build · CryoAtom2 enhanced (meilleur de plusieurs essais, avec ModelAngelo) · AlphaFold2 (ColabFold) · Complex prediction (Boltz-2) · Process predicted model (Phenix) · Dock in map (Phenix) · Fit in map (rigid body) · Rigid-body fit (ChimeraX) · Ligand restraints (eLBOW) |
 | Interactive | ISOLDE session · Coot session |
-| Refinement | CTF refinement (RELION) · Bayesian polishing (RELION) · Real-space refinement (Phenix) · Refinement (Servalcat) · Add waters (phenix.douse) |
+| Refinement | CTF refinement (RELION) · Bayesian polishing (RELION) · Real-space refinement (Phenix) · Refinement enhanced (Phenix, poids validé sur les demi-cartes) · Refinement (Servalcat) · Add waters (phenix.douse) |
 | Validation | Local resolution (RELION) · ResLog analysis (RELION) · Comprehensive validation (Phenix) · MolProbity · EMRinger · Map-model validation (Q-score, FSC) · Sequence register check (checkMySequence) · wwPDB validation report (OneDep) |
 | Deposition | Pre-deposition checks · Deposition package |
 | Utilities | Join star files (RELION) · Subset selection (RELION) · Particle sets (intersection, difference) · Curate particles (statistics) · Check particles (corrupt images) · Re-centre on a region · Simulate particles (RELION) · Restack particles · Rebalance orientations · Downsample particles · Symmetry expansion (RELION) · Optics groups (beam shift, file names) · Model operations · Merge models · Render images (ChimeraX) · Custom command |
