@@ -404,8 +404,9 @@ class PhenixRefineEnhanced(JobType):
         path.write_text(json.dumps(report, indent=1, default=float))
         ctx.add_output("report", "report", path, "Cross-validation of the map weight",
                        meta={"weight": best["label"], "fsc_free_0.5": final["free"]["resolution_0.5"], "gap": final["gap"]})
-        if ctx.params["keep_trials"]:
-            ctx.add_output("trials", "files", [t["model"] for t in trials], "Models of the trials (against half map 1)")
+        if ctx.params["keep_trials"]:  # one file per weight at the top of the folder: the trials are named alike inside
+            files = [shutil.copyfile(t["model"], ctx.path("trials", f"model_weight_{t['label']}{Path(t['model']).suffix}")) for t in trials]
+            ctx.add_output("trials", "files", files, "Models of the trials (against half map 1)")
         else:
             shutil.rmtree(ctx.path("trials"), ignore_errors=True)
         lines = [f"Weight {best['label']} kept: " + "; ".join(why) + ".",

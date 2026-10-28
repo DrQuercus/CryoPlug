@@ -887,7 +887,7 @@ class CryoAtomEnhanced(JobType):
         ctx.add_highlight("Q-score", f"{s['q_mean']:.3f}")
         ctx.add_highlight("CC (mask)", f"{s['cc_mask']:.3f}", "good" if s["cc_mask"] >= 0.7 else "warn" if s["cc_mask"] >= 0.5 else "bad")
         ctx.add_highlight("Runs", runs)
-        ctx.add_highlight("Best run", f"{PRESETS[best['setting']][0]} · {best['map_short']}")
+        ctx.add_highlight("Best run", PRESETS[best["setting"]][0] + ("" if best["map"] == "map" else f" · {best['map_short']}"))
 
     def _run_rows(self, best: dict[str, Any] | None) -> list[list[Any]]:
         rows = []

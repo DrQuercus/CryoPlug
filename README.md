@@ -697,6 +697,12 @@ calcul :
   entre la FSC *work* et la FSC *free* mesure le sur-ajustement ; un clashscore trop haut écarte l'essai. Le poids qui
   ajuste le mieux sans sur-ajuster sert à l'affinement final contre la carte complète.
 
+![Sharpening enhanced : la carte des décisions, du facteur B de Guinier à la carte gardée](docs/images/sharpen_enhanced_decision_map.png)
+
+![Sharpening enhanced : les cartes comparées, et les coupes de chacune sous un curseur](docs/images/sharpen_enhanced_sections.png)
+
+![Refinement enhanced : les poids essayés contre la demi-carte 1, jugés par la demi-carte 2](docs/images/refine_enhanced_decision_map.png)
+
 Le workflow **Validated pipeline (enhanced jobs) → deposition** enchaîne ces jobs : masque validé → construction par
 CryoAtom2 et ModelAngelo → affûtage choisi par le modèle → affinement au poids validé → validation et dépôt.
 
