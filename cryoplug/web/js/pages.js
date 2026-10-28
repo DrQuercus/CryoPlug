@@ -10,6 +10,16 @@ const me = () => state.info.user || { builtin: true, role: 'admin' };
 const isAdmin = () => me().builtin || me().role === 'admin';
 const accounts = () => state.info.auth === 'users';
 const canManage = (p) => isAdmin() || p.owner === me().username;
+export const canManageProject = canManage;
+
+// How the project cards are filtered and ordered (kept while the page is open).
+const P = { filter: '', sort: 'updated' };
+const PROJECT_SORTS = {
+  updated: { label: 'Last updated first', compare: (a, b) => (b.updated_at || 0) - (a.updated_at || 0) },
+  created: { label: 'Newest first (number)', compare: (a, b) => parseInt(b.uid.slice(1), 10) - parseInt(a.uid.slice(1), 10) },
+  title: { label: 'By title (A–Z)', compare: (a, b) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' }) },
+  jobs: { label: 'Most jobs first', compare: (a, b) => (b.num_jobs || 0) - (a.num_jobs || 0) },
+};
 
 // ----------------------------------------------------------------- projects
 export async function renderProjects(content) {
@@ -30,7 +40,7 @@ export async function renderProjects(content) {
     toast(`Attached as ${proj.uid} “${proj.title}”${proj.skipped?.length ? ` (${proj.skipped.length} folders without a job record skipped)` : ''}`, 'ok', 7000);
     navigate(`#/p/${proj.uid}`);
   };
-  const cards = projects.map((p) => {
+  const card = (p) => {
     const open = () => navigate(`#/p/${p.uid}`);
     const more = h('button', { class: 'card-more icon-btn', type: 'button', title: 'Actions', 'aria-label': `Actions for ${p.uid}`, 'aria-haspopup': 'menu',
       onclick: (e) => menu(e) }, icon('more'));
@@ -39,6 +49,7 @@ export async function renderProjects(content) {
       e.stopPropagation();
       popupMenu(more, [
         { label: 'Open', ic: 'next', action: open },
+        canManage(p) ? { label: 'Rename or describe…', ic: 'edit', action: () => editProjectDialog(p, () => renderProjects(content)) } : null,
         accounts() && canManage(p) ? { label: 'Share…', ic: 'share', action: () => shareDialog(p, () => renderProjects(content)) } : null,
         { label: 'Copy folder path', ic: 'folder', action: () => copyText(p.dir) },
         ...(canManage(p) ? [{ separator: true }, { label: 'Detach (keep the folder)…', ic: 'trash', danger: true, action: () => remove(p) }] : []),
@@ -60,15 +71,56 @@ export async function renderProjects(content) {
     people,
     h('div', { class: 'card-foot' }, h('span', { title: p.disk_bytes ? 'Disk used by the job folders' : null },
       `${p.num_jobs} job${p.num_jobs === 1 ? '' : 's'}${p.disk_bytes ? ` · ${fmtSize(p.disk_bytes)}` : ''}`), h('span', {}, `updated ${ago(p.updated_at)}`)));
-  });
+  };
+  // the cards, filtered and ordered (the tools appear once there are a few projects)
+  const area = h('div', { class: 'cards projects' });
+  const draw = () => {
+    const q = P.filter.trim().toLowerCase();
+    const shown = projects.filter((p) => !q || `${p.uid} ${p.title} ${p.description || ''} ${p.dir} ${p.owner || ''}`.toLowerCase().includes(q))
+      .sort((PROJECT_SORTS[P.sort] || PROJECT_SORTS.updated).compare);
+    clear(area, shown.length ? shown.map(card) : h('div', { class: 'empty', style: { gridColumn: '1 / -1' } }, `No project matches “${P.filter.trim()}”.`));
+  };
+  const tools = projects.length >= 4 ? [
+    h('label', { class: 'search-field', title: 'Filter by number, title, description or folder' }, icon('search'),
+      h('input', { type: 'search', placeholder: 'Filter projects', value: P.filter, 'aria-label': 'Filter projects', oninput: (e) => { P.filter = e.target.value; draw(); } })),
+    h('button', { class: 'btn', type: 'button', 'aria-haspopup': 'menu', title: `Order of the projects: ${PROJECT_SORTS[P.sort].label}`,
+      onclick: (e) => popupMenu(e.currentTarget, Object.entries(PROJECT_SORTS).map(([key, s]) => ({
+        label: s.label, ic: key === P.sort ? 'check' : 'blank', action: () => { P.sort = key; renderProjects(content); } }))) },
+    icon('sort'), h('span', { class: 'lbl' }, PROJECT_SORTS[P.sort].label.split(' ')[0] === 'By' ? 'Title' : PROJECT_SORTS[P.sort].label.split(' ')[0]), icon('chevron', 'chev')),
+  ] : [];
   clear(content,
     h('div', { class: 'toolbar' }, btn('New project', () => newProjectDialog(), { cls: 'primary', ic: 'plus' }),
       btn('Attach a project folder', () => attach(), { ic: 'folder',
-        title: 'A CryoPlug project folder detached from another CryoPlug, moved, or whose database was lost' }), h('span', { class: 'grow' }),
+        title: 'A CryoPlug project folder detached from another CryoPlug, moved, or whose database was lost' }),
+      h('span', { class: 'toolbar-gap' }), tools, h('span', { class: 'grow' }),
       h('span', { class: 'muted small', title: state.info.projects_root }, `Server ${state.info.hostname} · projects in ${shortPath(state.info.projects_root, 50)}`)),
-    projects.length ? h('div', { class: 'cards projects' }, cards) : h('div', { class: 'empty' }, h('h3', {}, 'Welcome to CryoPlug'),
+    projects.length ? area : h('div', { class: 'empty' }, h('h3', {}, 'Welcome to CryoPlug'),
       h('p', {}, 'Create a project to post-process a CryoSPARC map: sharpening, model building, refinement, validation and deposition.'),
       btn('New project', () => newProjectDialog(), { cls: 'primary', ic: 'plus' })));
+  draw();
+}
+
+// New title and description of a project (the folder keeps its name).
+export function editProjectDialog(project, onDone) {
+  const title = h('input', { type: 'text', id: 'ep-title', value: project.title });
+  const desc = h('textarea', { id: 'ep-desc', rows: 3, placeholder: 'Sample, dataset, aim… (shown under the project title)' });
+  desc.value = project.description || ''; // a textarea takes its text as a property, not an attribute
+  const save = async () => {
+    if (!title.value.trim()) { toast('Give the project a title', 'error'); title.focus(); return; }
+    let updated;
+    try { updated = await guard(api.updateProject(project.uid, { title: title.value.trim(), description: desc.value.trim() }), 'Project saved'); } catch { return; }
+    m.close();
+    onDone(updated);
+  };
+  title.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  const m = modal({
+    title: `${project.uid} · rename or describe`,
+    body: h('div', {},
+      h('div', { class: 'field' }, h('label', { for: 'ep-title' }, 'Title'), title),
+      h('div', { class: 'field' }, h('label', { for: 'ep-desc' }, 'Description'), desc,
+        h('div', { class: 'help' }, `The folder keeps its name (${shortPath(project.dir, 60)}).`))),
+    footer: [btn('Cancel', () => m.close()), btn('Save', save, { cls: 'primary' })],
+  });
 }
 
 // Members of a project, as seen by the user ("shared with you", "alice", "3 members").

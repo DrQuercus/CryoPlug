@@ -364,15 +364,45 @@ function fileControls(prm, input, set, row) {
   });
 }
 
+// The job types used last in this browser, first in the picker.
+const RECENT_TYPES_KEY = 'cryoplug.recentTypes';
+export function recentTypes() {
+  try { return JSON.parse(localStorage.getItem(RECENT_TYPES_KEY) || '[]'); } catch { return []; }
+}
+function rememberType(name) {
+  const list = [name, ...recentTypes().filter((n) => n !== name)].slice(0, 8);
+  try { localStorage.setItem(RECENT_TYPES_KEY, JSON.stringify(list)); } catch { /* storage unavailable */ }
+}
+
 function renderTypePicker(p) {
   const b = state.builder;
   const search = h('input', { type: 'search', placeholder: 'Search job types (e.g. locscale, isolde, validation)…', value: b.search,
     oninput: (e) => { b.search = e.target.value; renderList(); } });
   const list = h('div', { class: 'type-list' });
   const from = b.prefillFrom;
+  const typeItem = (t) => {
+    const choose = () => { applyType(t.name); panel().scrollTop = 0; renderBuilder(); };
+    return h('div', { class: 'type-item', tabindex: 0, role: 'button', onclick: choose,
+      onkeydown: (e) => { if (e.key === 'Enter') choose(); } },
+    h('span', { class: `tooldot ${t.tool_status}`, title: t.tool ? `${t.tool}: ${t.tool_status}` : 'built-in' }),
+    h('div', { style: { minWidth: 0, flex: 1 } }, h('div', { class: 't' }, t.title),
+      h('div', { class: 'd', title: t.help?.purpose || t.description }, t.help?.purpose || t.description)),
+    t.gpu ? h('span', { class: 'tag' }, 'GPU') : null,
+    t.interactive ? h('span', { class: 'tag' }, 'interactive') : null,
+    h('button', { class: 'icon-btn', type: 'button', title: 'Aide : quand utiliser ce job', 'aria-label': `Aide ${t.title}`,
+      onclick: (e) => { e.stopPropagation(); helpModal(t, { onUse: choose, onNext: (n) => { applyType(n); panel().scrollTop = 0; renderBuilder(); } }); },
+    }, h('b', { 'aria-hidden': 'true', style: { width: '18px', textAlign: 'center' } }, '?')));
+  };
   function renderList() {
     const q = b.search.trim().toLowerCase();
     const items = [];
+    if (!q && !from) {
+      const recent = recentTypes().map((n) => state.types[n]).filter((t) => t && !(t.admin_only && restricted()));
+      if (recent.length) {
+        items.push(h('div', { class: 'cat' }, 'Recently used'));
+        for (const t of recent) items.push(typeItem(t));
+      }
+    }
     for (const cat of state.info.categories) {
       let types = state.jobtypes.filter((t) => t.category === cat && !(t.admin_only && restricted()));
       if (from) {
@@ -385,19 +415,7 @@ function renderTypePicker(p) {
       }
       if (!types.length) continue;
       items.push(h('div', { class: 'cat' }, CATEGORY_FR[cat] && CATEGORY_FR[cat] !== cat ? `${cat} · ${CATEGORY_FR[cat]}` : cat));
-      for (const t of types) {
-        const choose = () => { applyType(t.name); panel().scrollTop = 0; renderBuilder(); };
-        items.push(h('div', { class: 'type-item', tabindex: 0, role: 'button', onclick: choose,
-          onkeydown: (e) => { if (e.key === 'Enter') choose(); } },
-        h('span', { class: `tooldot ${t.tool_status}`, title: t.tool ? `${t.tool}: ${t.tool_status}` : 'built-in' }),
-        h('div', { style: { minWidth: 0, flex: 1 } }, h('div', { class: 't' }, t.title),
-          h('div', { class: 'd', title: t.help?.purpose || t.description }, t.help?.purpose || t.description)),
-        t.gpu ? h('span', { class: 'tag' }, 'GPU') : null,
-        t.interactive ? h('span', { class: 'tag' }, 'interactive') : null,
-        h('button', { class: 'icon-btn', type: 'button', title: 'Aide : quand utiliser ce job', 'aria-label': `Aide ${t.title}`,
-          onclick: (e) => { e.stopPropagation(); helpModal(t, { onUse: choose, onNext: (n) => { applyType(n); panel().scrollTop = 0; renderBuilder(); } }); },
-        }, h('b', { 'aria-hidden': 'true', style: { width: '18px', textAlign: 'center' } }, '?'))));
-      }
+      for (const t of types) items.push(typeItem(t));
     }
     clear(list, items.length ? items : h('div', { class: 'muted' }, 'No matching job type.'));
   }
@@ -422,6 +440,7 @@ async function submit(queue) {
   try {
     job = b.editing ? await guard(api.updateJob(puid, b.editing.uid, body)) : await guard(api.createJob(puid, { ...body, type: b.type }));
   } catch { return; /* toast already shown, keep the form */ }
+  if (!b.editing) rememberType(b.type);
   state.builder = null;
   let queued = false;
   if (queue) {

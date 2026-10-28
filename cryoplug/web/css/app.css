@@ -935,7 +935,7 @@ td .path .icon-btn svg { width: 13px; height: 13px; }
 @media (max-width: 900px) {
   .sidebar { width: 62px; }
   .nav-link span, .brand span { font-size: 10px; }
-  .panel, .panel.wide { position: fixed; inset: 52px 0 0 62px; width: auto; z-index: 20; }
+  .panel, .panel.wide { position: fixed; inset: 52px 0 0 62px; width: auto !important; z-index: 20; }
   .content { padding: 14px 16px 40px; }
 }
 
@@ -1299,3 +1299,48 @@ button.tag-chip:hover { border-color: var(--tc); color: var(--ink-1); }
 .tm-z { min-width: 64px; color: var(--ink-2); }
 .tm-canvas { cursor: crosshair; }
 .tmv .tm-canvas { cursor: grab; }
+/* search button of the sidebar (a nav link that is a button) */
+.nav-btn { border: 0; border-left: 3px solid transparent; background: none; font: inherit; cursor: pointer; width: 100%; }
+/* command palette (Ctrl/⌘ + K) */
+.palette-backdrop { padding-top: 9vh; }
+.palette { width: min(640px, 100%); background: var(--surface-1); border-radius: 12px; box-shadow: 0 24px 70px rgba(0, 0, 0, .35);
+  overflow: hidden; display: flex; flex-direction: column; max-height: 72vh; }
+.palette-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.palette-head svg.ic { width: 18px; height: 18px; color: var(--ink-3); flex: none; }
+.palette-input, .palette-input:focus { flex: 1; border: 0; background: none; font-size: 16px; padding: 4px 0; outline: none; box-shadow: none;
+  color: var(--ink-1); width: auto; }
+.palette-list { overflow: auto; padding: 6px; min-height: 60px; }
+.palette-group { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); padding: 8px 10px 4px; font-weight: 600; }
+.palette-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 0; background: none; padding: 7px 10px;
+  border-radius: 7px; cursor: pointer; font: inherit; color: var(--ink-1); }
+.palette-item.on { background: var(--accent-wash); }
+.palette-item svg.ic { width: 16px; height: 16px; color: var(--ink-3); flex: none; }
+.palette-label { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.palette-sub { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.palette-hint { font-size: 11px; color: var(--ink-3); flex: none; }
+.palette-foot { padding: 6px 14px; border-top: 1px solid var(--border); }
+kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--surface-2); }
+/* the side panel resized by its left edge (hidden with the panel, and when it covers the cards or the window is narrow) */
+.panel-resizer { position: relative; width: 7px; margin: 0 -3px 0 -4px; flex-shrink: 0; cursor: col-resize; z-index: 4; }
+.panel-resizer::after { content: ""; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background .15s; }
+.panel-resizer:hover::after, .panel-resizer.on::after { background: var(--accent); }
+.workspace:has(> .panel[hidden]) > .panel-resizer, .workspace:has(> .panel.wide) > .panel-resizer { display: none; }
+@media (max-width: 900px) { .panel-resizer { display: none; } }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing iframe { pointer-events: none; }
+/* job panel: the arrows to the previous / next job, the Sections menu of long reports, the log tools */
+.panel-title .icon-btn:disabled { opacity: .3; cursor: default; }
+.tabs .sections-btn { margin-left: auto; align-self: center; margin-bottom: 2px; }
+.tabs .sections-btn .ic.chev { width: 12px; height: 12px; margin-left: -2px; color: var(--ink-3); }
+.log-bar { gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.log-bar .search-field { flex: 1 1 120px; max-width: 200px; }
+.log-bar .search-field input { padding-top: 4px; padding-bottom: 4px; font-size: 12.5px; }
+.log-bar .link-btn.small { font-size: 12px; color: var(--warn-ink); }
+.btn.small.icon-only { padding: 3px 6px; }
+/* the project toolbar when the content is narrow (the panel open): the filter field takes a row of its own */
+@container (max-width: 760px) { .toolbar .search-field { flex-basis: 100%; max-width: none; } }
+/* project description with its edit button; projects page tools */
+.project-desc { display: flex; align-items: flex-start; gap: 6px; }
+.project-desc .icon-btn { padding: 2px; margin: -2px 0; color: var(--ink-3); opacity: 0; transition: opacity .15s; }
+.project-desc:hover .icon-btn, .project-desc .icon-btn:focus-visible { opacity: 1; }
+.project-desc.add { color: var(--ink-3); }

@@ -22,7 +22,7 @@ import {
 } from './ui.js';
 
 const D = { puid: null, uid: null, job: null, mode: 'panel', tab: 'overview', log: '', logOffset: 0, filesSub: '', autoscroll: true, busy: false, again: false,
-  wide: false, frameSel: {}, frameViews: [], warningsOpen: null, flows: {} };
+  wide: false, frameSel: {}, frameViews: [], warningsOpen: null, flows: {}, logFilter: '', logProblems: false };
 const container = () => document.getElementById(D.mode === 'page' ? 'content' : 'panel');
 
 // mode: 'panel' (right side) or 'page' (main area, next to the job builder).
@@ -72,6 +72,24 @@ export function detailUid() {
 
 export function detailMode() {
   return D.uid ? D.mode : null;
+}
+
+// The jobs before and after the one open, in the order of the cards shown (or all the jobs, newest first, when the
+// open job is filtered out).
+function neighbours() {
+  const order = state.cardOrder.includes(D.uid) ? state.cardOrder : [...state.jobs].sort((a, b) => b.num - a.num).map((j) => j.uid);
+  const i = order.indexOf(D.uid);
+  return { prev: i > 0 ? order[i - 1] : null, next: i >= 0 && i + 1 < order.length ? order[i + 1] : null };
+}
+
+// Open the next (dir 1) or previous (dir -1) job: the J / K keys, the arrows of the panel header.
+export function stepJob(dir) {
+  if (!D.uid || !state.project) return false;
+  const { prev, next } = neighbours();
+  const uid = dir > 0 ? next : prev;
+  if (!uid) return false;
+  navigate(jobHref(uid));
+  return true;
 }
 
 // Outputs of a job shown next to the builder can be connected only to the builder's current job type.
@@ -168,8 +186,11 @@ function renderHeaderOnly() {
       title: 'Use the outputs of the last iteration written, as if the job had finished there (CryoSPARC’s Mark as complete)' }));
   }
   if (['failed', 'killed'].includes(job.status)) {
-    add('clear', btn('Clear', () => jobOps.clear(job), { ic: 'undo', title: 'Delete its outputs and go back to building: fix the parameters, then queue again' }));
-    add('clone', btn('Clone', () => jobOps.clone(job), { ic: 'copy', title: 'A copy with the same inputs and parameters' }));
+    const again = !state.types[job.type]?.continuable;
+    add('rerun', btn('Run again', () => jobOps.rerun(job), { cls: again ? 'primary' : '', ic: 'refresh',
+      title: 'Delete what it wrote and queue it again, same inputs and parameters' }));
+    add('editagain', btn('Edit…', () => jobOps.editAgain(job), { ic: 'edit',
+      title: 'Delete what it wrote, then change its parameters or inputs before queueing it again' }));
   }
   const view = job.status === 'completed' ? jobViewItems(job) : [];
   if (view.length > 0) add('view', h('a', { class: 'btn', href: viewerUrl(view), target: '_blank', rel: 'noopener', title: 'Open the maps and models of this job in the 3D viewer' }, icon('eye'), 'View 3D'));
@@ -193,6 +214,10 @@ function renderHeaderOnly() {
     h('div', { class: 'panel-title' },
       page ? btn('Jobs', () => navigate(closeHref()), { cls: 'small', ic: 'back', title: 'Back to the job cards (the builder stays open)' }) : null,
       h('span', { class: 'uid' }, job.uid), titleEl, statusChip(job.status),
+      h('button', { class: 'icon-btn', 'aria-label': 'Previous job', title: 'Previous job (K)', disabled: !neighbours().prev,
+        onclick: () => stepJob(-1) }, icon('up')),
+      h('button', { class: 'icon-btn', 'aria-label': 'Next job', title: 'Next job (J)', disabled: !neighbours().next,
+        onclick: () => stepJob(1) }, icon('chevron')),
       page ? null : h('button', { class: 'icon-btn', 'aria-label': D.wide ? 'Narrow the panel' : 'Widen the panel',
         title: D.wide ? 'Back to the side' : 'Widen over the job cards (galleries, micrographs)',
         onclick: () => { setWide(!D.wide); renderHeaderOnly(); } }, icon(D.wide ? 'shrink' : 'expand')),
@@ -205,7 +230,27 @@ function renderHeaderOnly() {
     h('div', { class: 'tabs', role: 'tablist' }, ['overview', 'log', 'files'].map((t) => h('button', {
       class: D.tab === t ? 'on' : '', role: 'tab', 'aria-selected': D.tab === t ? 'true' : 'false',
       onclick: () => { D.tab = t; if (t === 'log') { D.log = ''; D.logOffset = 0; } render(); if (t === 'log') pollLog(); },
-    }, t[0].toUpperCase() + t.slice(1)))));
+    }, t[0].toUpperCase() + t.slice(1))),
+    D.tab === 'overview' && (job.report?.sections || []).length >= 2 ? h('button', { class: 'btn small sections-btn', type: 'button', 'aria-haspopup': 'menu',
+      title: 'Go to a section of the report', onclick: (e) => sectionsMenu(e.currentTarget) }, icon('list'), 'Sections', icon('chevron', 'chev')) : null));
+}
+
+// The sections of the overview as they are drawn (outputs, every section of the report, inputs, parameters): a menu
+// that scrolls to one, for the long reports of RELION jobs.
+function sectionsMenu(anchor) {
+  const heads = [...(bodyEl?.querySelectorAll('.section > h4, .section .box > h4, .plot-title, .section h4') || [])]
+    .filter((el, i, all) => el.textContent.trim() && all.indexOf(el) === i);
+  const seen = new Set();
+  const items = [];
+  for (const el of heads) {
+    const label = el.textContent.trim();
+    if (seen.has(label)) continue;
+    seen.add(label);
+    items.push({ label, action: () => {
+      el.closest('.section, .box')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } });
+  }
+  popupMenu(anchor, items.length ? items : [{ label: 'No section yet', disabled: true }]);
 }
 
 async function act(promise, msg) {
@@ -232,6 +277,25 @@ const jobOps = {
     act(api.clearJob(state.project.uid, job.uid), 'Cleared');
   },
   resume: (job) => act(api.resumeJob(state.project.uid, job.uid), 'Queued again from its last iteration'),
+  async rerun(job) {
+    const what = job.status === 'completed' ? 'Its outputs and files are deleted first.' : 'What it wrote is deleted first.';
+    if (!(await confirmDialog('Run again', `Queue ${job.uid} (${job.title}) again with the same inputs and parameters?\n${what}`, 'Run again',
+      job.status === 'completed'))) return;
+    const puid = state.project.uid;
+    try {
+      await guard(api.clearJob(puid, job.uid));
+      await guard(api.queueJob(puid, job.uid), 'Queued again');
+    } catch { /* shown */ }
+    await refreshJobs();
+    await refreshDetail(true);
+  },
+  async editAgain(job) {
+    if (!(await confirmDialog('Edit and run again', `Delete what ${job.uid} wrote and open its parameters?\nQueue it again once they are changed.`, 'Edit'))) return;
+    let cleared;
+    try { cleared = await guard(api.clearJob(state.project.uid, job.uid)); } catch { return; }
+    await refreshJobs();
+    jobOps.edit(cleared);
+  },
   async trim(job) {
     if (!(await confirmDialog('Clear intermediate results', `Delete the files of every iteration of ${job.uid} but the last one?`
       + '\nIts outputs, report and Resume are kept; the earlier iterations cannot be looked at again.', 'Clear', true))) return;
@@ -293,7 +357,11 @@ export function jobMenuItems(job, anchor, { withOpen = false } = {}) {
   if (['failed', 'killed'].includes(job.status) && state.types[job.type]?.completable) {
     items.push({ key: 'complete', label: 'Mark as complete (last iteration)', ic: 'check', action: () => jobOps.complete(job) });
   }
-  if (['completed', 'failed', 'killed'].includes(job.status)) items.push({ key: 'clear', label: 'Clear (back to building)', ic: 'undo', action: () => jobOps.clear(job) });
+  if (['completed', 'failed', 'killed'].includes(job.status)) {
+    items.push({ key: 'rerun', label: 'Run again…', ic: 'refresh', action: () => jobOps.rerun(job) });
+    items.push({ key: 'editagain', label: 'Edit and run again…', ic: 'edit', action: () => jobOps.editAgain(job) });
+    items.push({ key: 'clear', label: 'Clear (back to building)', ic: 'undo', action: () => jobOps.clear(job) });
+  }
   if (['completed', 'failed', 'killed'].includes(job.status) && state.types[job.type]?.intermediate) {
     items.push({ key: 'trim', label: 'Clear intermediate results…', ic: 'disk', action: () => jobOps.trim(job) });
   }
@@ -855,31 +923,70 @@ function interactivePanel(job) {
 // ---------------------------------------------------------------------- log
 let logPre = null;
 
+let logCounts = null; // the "2 warnings · 1 error" of the log tab
+
 function renderLog(body) {
   logPre = h('pre', { class: 'log', 'aria-live': 'off' });
   const auto = h('input', { type: 'checkbox', id: 'log-auto', checked: D.autoscroll, onchange: (e) => { D.autoscroll = e.target.checked; } });
+  const problems = h('input', { type: 'checkbox', id: 'log-problems', checked: D.logProblems,
+    onchange: (e) => { D.logProblems = e.target.checked; paintLog(D.log, true); } });
+  const filter = h('input', { type: 'search', placeholder: 'Filter lines', value: D.logFilter, 'aria-label': 'Filter the log lines',
+    oninput: (e) => { D.logFilter = e.target.value; paintLog(D.log, true); } });
+  logCounts = h('button', { type: 'button', class: 'link-btn small', title: 'Show only the warnings and errors',
+    onclick: () => { D.logProblems = !D.logProblems; problems.checked = D.logProblems; paintLog(D.log, true); } });
   clear(body,
-    h('div', { class: 'row', style: { marginBottom: '8px' } },
-      h('label', { class: 'row small', for: 'log-auto' }, auto, 'Follow'), h('span', { class: 'grow' }),
-      h('a', { class: 'btn small', href: api.fileUrl(state.project.uid, `${D.uid}/job.log`), target: '_blank', rel: 'noopener' }, 'Open raw log')),
+    h('div', { class: 'row log-bar' },
+      h('label', { class: 'search-field', title: 'Only the lines containing this text' }, icon('search'), filter),
+      h('label', { class: 'row small', for: 'log-problems', title: 'Only the warnings, errors and commands' }, problems, 'Problems only'),
+      logCounts,
+      h('span', { class: 'grow' }),
+      h('label', { class: 'row small', for: 'log-auto', title: 'Keep the end of the log in view while the job runs' }, auto, 'Follow'),
+      h('button', { class: 'icon-btn', type: 'button', title: 'Top of the log', 'aria-label': 'Top of the log',
+        onclick: () => { D.autoscroll = false; auto.checked = false; logPre.scrollTop = 0; } }, icon('up')),
+      h('button', { class: 'icon-btn', type: 'button', title: 'End of the log', 'aria-label': 'End of the log',
+        onclick: () => { logPre.scrollTop = logPre.scrollHeight; } }, icon('chevron')),
+      h('a', { class: 'btn small', href: api.fileUrl(state.project.uid, `${D.uid}/job.log`), target: '_blank', rel: 'noopener', title: 'The whole file in a tab' }, 'Raw log'),
+      h('a', { class: 'btn small icon-only', href: api.fileUrl(state.project.uid, `${D.uid}/job.log`, true), title: 'Download job.log', 'aria-label': 'Download the log' }, icon('download'))),
     logPre);
   paintLog(D.log, true);
+}
+
+const logClass = (line) => (/ERROR|Traceback|exited with code/.test(line) ? 'err' : /WARNING/.test(line) ? 'warn' : /^\[[^\]]+\] \$ /.test(line) ? 'cmd' : '');
+
+// Warnings and errors in the whole log, shown next to the filter.
+function countLog() {
+  if (!logCounts) return;
+  let warn = 0;
+  let err = 0;
+  for (const line of D.log.split('\n')) {
+    const cls = logClass(line);
+    if (cls === 'err') err += 1; else if (cls === 'warn') warn += 1;
+  }
+  const parts = [];
+  if (err) parts.push(`${err} error${err > 1 ? 's' : ''}`);
+  if (warn) parts.push(`${warn} warning${warn > 1 ? 's' : ''}`);
+  logCounts.textContent = parts.join(' · ');
+  logCounts.hidden = !parts.length;
 }
 
 function paintLog(text, reset) {
   if (!logPre) return;
   if (reset) logPre.replaceChildren();
+  const q = D.logFilter.trim().toLowerCase();
   const frag = document.createDocumentFragment();
+  let kept = 0;
   for (const line of text.split(/(?<=\n)/)) {
     if (!line) continue;
-    let cls = '';
-    if (/ERROR|Traceback|exited with code/.test(line)) cls = 'err';
-    else if (/WARNING/.test(line)) cls = 'warn';
-    else if (/^\[[^\]]+\] \$ /.test(line)) cls = 'cmd';
+    const cls = logClass(line);
+    if (D.logProblems && !cls) continue;
+    if (q && !line.toLowerCase().includes(q)) continue;
+    kept += 1;
     frag.appendChild(cls ? h('span', { class: cls }, line) : document.createTextNode(line));
   }
+  if (reset && !kept && (q || D.logProblems) && D.log) frag.appendChild(h('span', { class: 'muted' }, q ? `No line contains “${D.logFilter.trim()}”` : 'No warning, error or command'));
   logPre.appendChild(frag);
   if (D.autoscroll) logPre.scrollTop = logPre.scrollHeight;
+  countLog();
 }
 
 async function pollLog() {

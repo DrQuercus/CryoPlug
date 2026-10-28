@@ -11,6 +11,7 @@ import {
 } from './ui.js';
 import { compareJobs } from './compare.js';
 import { currentWorkspace, inWorkspace, tagChip, tagsDialog, workspaceButton, workspacesDialog } from './workspaces.js';
+import { canManageProject, editProjectDialog } from './pages.js';
 
 const STATUSES = ['building', 'queued', 'launched', 'running', 'waiting', 'completed', 'failed', 'killed'];
 
@@ -85,9 +86,24 @@ export function renderProject(content) {
         + '(or drop them on the page)', onclick: () => importFromComputer() }, icon('upload'), h('span', { class: 'lbl' }, 'Upload')),
       h('span', { class: 'toolbar-gap' }), tagFilter, search, statusSel, catSel, state.view === 'cards' ? sortButton(content) : null),
     ws ? (ws.description ? h('p', { class: 'project-desc' }, h('b', {}, `${ws.uid} `), ws.description) : null)
-      : p.description ? h('p', { class: 'project-desc' }, p.description) : null,
+      : projectDescription(p, rerender),
     h('div', { id: 'jobs-area' }));
   renderJobs();
+}
+
+// The description of the project under the toolbar, with its edit button (a link to add one when there is none).
+function projectDescription(p, rerender) {
+  if (!canManageProject(p)) return p.description ? h('p', { class: 'project-desc' }, p.description) : null;
+  const edit = () => editProjectDialog(p, (updated) => {
+    state.project = updated;
+    document.dispatchEvent(new CustomEvent('cryoplug-workspace')); // the breadcrumb shows the new title
+    rerender();
+  });
+  if (!p.description) {
+    return h('p', { class: 'project-desc add' }, h('button', { class: 'link-btn small', type: 'button', onclick: edit }, 'Add a description…'));
+  }
+  return h('p', { class: 'project-desc' }, h('span', {}, p.description),
+    h('button', { class: 'icon-btn', type: 'button', title: 'Rename or describe the project', 'aria-label': 'Rename or describe the project', onclick: edit }, icon('edit')));
 }
 
 const workspaceJobs = () => state.jobs.filter(inWorkspace);
@@ -484,7 +500,7 @@ function outputType(ref) {
 }
 
 // ---------------------------------------------------------------- workflows
-async function workflowDialog() {
+export async function workflowDialog() {
   let workflows;
   try { workflows = await guard(api.workflows()); } catch { return; }
   const body = h('div', {});

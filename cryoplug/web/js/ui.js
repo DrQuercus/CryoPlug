@@ -227,7 +227,7 @@ export function popupMenu(anchor, items, at = null) {
   const outside = (e) => { if (!menu.contains(e.target)) close(); };
   const buttons = () => [...menu.querySelectorAll('button:not(:disabled)')];
   const onKey = (e) => {
-    if (e.key === 'Escape') { close(); anchor?.focus?.(); return; }
+    if (e.key === 'Escape') { e.stopPropagation(); close(); anchor?.focus?.(); return; } // the page's Escape (close the panel) is not meant
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     e.preventDefault();
     const list = buttons();

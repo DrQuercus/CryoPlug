@@ -1,9 +1,10 @@
 // CryoPlug single-page application: router, polling and layout.
 import { api } from './api.js';
 import { closeBuilder, openBuilder, refreshBuilderInputs, renderBuilder } from './builder.js';
-import { closeDetail, detailIsLive, detailMode, detailUid, openDetail, refreshDetail } from './detail.js';
+import { closeDetail, detailIsLive, detailMode, detailUid, openDetail, refreshDetail, stepJob } from './detail.js';
 import { installFileDrop } from './importer.js';
 import { checkNotifications, installNotifications } from './notify.js';
+import { installPalette } from './palette.js';
 import { renderHelp, renderProjects, renderTools } from './pages.js';
 import { clearSelection, renderJobs, renderProject, selectAllShown } from './project.js';
 import { currentWorkspace, leaveWorkspaces, loadWorkspaces } from './workspaces.js';
@@ -223,6 +224,8 @@ const SHORTCUTS = [
   ['T · F', 'Tree view: centre on the selected jobs · show the whole tree'],
   ['+ · − · 0', 'Tree view: zoom in · out · actual size (or the mouse wheel; Shift + wheel moves the tree)'],
   ['Arrows (on a job of the tree)', 'Move to an input, a job using it, or along the row'],
+  ['Ctrl/⌘ + K', 'Search: open a job, a project or a page, start a job of a type, run an action'],
+  ['J · K', 'Next · previous job while one is open'],
   ['Ctrl/⌘ + A', 'Select all the jobs shown'],
   ['Ctrl/⌘ + click · Shift + click', 'Add a job / a range of jobs to the selection'],
   ['Space (on a card)', 'Add the card to the selection'],
@@ -236,6 +239,7 @@ function shortcutsDialog() {
     body: h('table', { class: 'data' }, h('tbody', {}, SHORTCUTS.map(([k, d]) => h('tr', {}, h('td', { class: 'mono' }, k), h('td', {}, d))))),
   });
 }
+document.addEventListener('cryoplug-shortcuts', shortcutsDialog); // from the command palette
 
 document.addEventListener('keydown', (e) => {
   if (e.defaultPrevented || document.querySelector('.modal-backdrop, .menu')) return;
@@ -268,10 +272,51 @@ document.addEventListener('keydown', (e) => {
     state.view = state.view === 'graph' ? 'cards' : 'graph';
     localStorage.setItem('cryoplug.view', state.view);
     renderProject(content);
+  } else if (['j', 'J', 'k', 'K'].includes(e.key) && detailUid()) {
+    if (stepJob(e.key.toLowerCase() === 'j' ? 1 : -1)) e.preventDefault();
   } else if (state.view === 'graph' && !r.inspect && treeKey(e)) {
     e.preventDefault();
   }
 });
+
+// ------------------------------------------------------------------ side panel width
+// The side panel (job details, job builder) is dragged wider or narrower by its left edge, remembered in this browser;
+// a double-click gives the default width back.
+const PANEL_WIDTH_KEY = 'cryoplug.panelWidth';
+function installPanelResizer() {
+  const handle = h('div', { class: 'panel-resizer', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize the panel',
+    title: 'Drag to resize the panel · double-click: default width' });
+  panel.parentNode.insertBefore(handle, panel);
+  const apply = (w) => { panel.style.width = w ? `${w}px` : ''; };
+  let saved = 0;
+  try { saved = parseInt(localStorage.getItem(PANEL_WIDTH_KEY) || '0', 10) || 0; } catch { /* storage unavailable */ }
+  if (saved) apply(saved);
+  const clamp = (w) => Math.round(Math.max(380, Math.min(w, window.innerWidth * 0.75, window.innerWidth - 360)));
+  let drag = null;
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    drag = { x: e.clientX, w: panel.getBoundingClientRect().width };
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('on');
+    document.body.classList.add('resizing');
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', (e) => { if (drag) apply(clamp(drag.w + (drag.x - e.clientX))); });
+  const end = (e) => {
+    if (!drag) return;
+    drag = null;
+    handle.classList.remove('on');
+    document.body.classList.remove('resizing');
+    if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);
+    try { localStorage.setItem(PANEL_WIDTH_KEY, String(Math.round(panel.getBoundingClientRect().width))); } catch { /* storage unavailable */ }
+  };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+  handle.addEventListener('dblclick', () => {
+    apply(0);
+    try { localStorage.removeItem(PANEL_WIDTH_KEY); } catch { /* storage unavailable */ }
+  });
+}
 
 // ------------------------------------------------------------------ polling
 // The cards (or the tree), the builder's inputs and the job details follow any change of the job list; under a drag,
@@ -347,6 +392,8 @@ async function start() {
   window.addEventListener('hashchange', () => { route().catch((e) => guard(Promise.reject(e))); });
   installFileDrop(); // files dragged from the computer onto a project: import them
   installNotifications(); // the bell: notified when jobs finish
+  installPalette(); // Ctrl/⌘ + K: search and go to
+  installPanelResizer();
   await route();
   restoreScroll();
   setInterval(poll, 2500);

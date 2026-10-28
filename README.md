@@ -340,8 +340,21 @@ section 6). La commande affiche les jobs d'import à créer.
 - **Espace disque** : taille de chaque job (détail), du projet (en haut à droite, page des projets) ; *Clear
   intermediate results* / *Free space* supprime les itérations RELION intermédiaires (la dernière, les sorties et
   *Resume* restent) ; *Mark as complete* termine un run arrêté avec sa dernière itération.
-- **N** nouveau job, **/** filtrer, **G** cartes ⇄ arbre, **Échap** vide la sélection ou ferme le détail,
-  **?** liste des raccourcis.
+- **Ctrl/⌘ + K** (ou le bouton **Search** de la barre latérale) ouvre la **palette** : tapez quelques lettres pour
+  ouvrir un job du projet (numéro, titre, type, étiquette), aller à un projet ou à une page, lancer un job d'un type
+  donné (le constructeur s'ouvre), ou une action (nouveau job, workflow, envoi de fichiers, cartes ⇄ arbre, thème).
+  Flèches, Entrée, Échap ; ce qui a servi en dernier vient en tête.
+- **N** nouveau job, **/** filtrer, **G** cartes ⇄ arbre, **J / K** job suivant / précédent quand un job est ouvert
+  (aussi les flèches de l'en-tête du panneau), **Échap** vide la sélection ou ferme le détail, **?** liste des
+  raccourcis.
+- Le **panneau** de droite (détail d'un job, constructeur) se redimensionne en tirant son bord gauche (double-clic :
+  largeur d'origine). Dans le détail d'un job, **Sections** saute à une partie du rapport ; l'onglet **Log** filtre
+  les lignes, ne montre que les avertissements et erreurs (comptés) et va au début ou à la fin. Un job échoué se
+  relance d'un clic (**Run again** : mêmes entrées et paramètres) ou s'édite avant (**Edit…**).
+- Le titre et la description d'un projet se changent depuis le menu **⋯** de sa carte (*Rename or describe…*) ou
+  le crayon à côté de la description ; la page des projets se filtre et se trie dès qu'il y en a quelques-uns.
+
+![La palette (Ctrl/⌘ + K) : jobs du projet, puis types de jobs à lancer](docs/images/palette.png)
 - Le bouton de **tri** (à droite des filtres) change l'ordre des cartes : les plus récents ou les plus anciens
   d'abord, la dernière activité, par statut (en cours, en attente, en file, échoués…), par catégorie et type de job,
   par titre, ou par durée d'exécution. Le choix est gardé par le navigateur.

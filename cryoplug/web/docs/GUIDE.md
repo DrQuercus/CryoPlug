@@ -105,7 +105,23 @@ sélectionnés, met leurs résultats clés côte à côte et ouvre leurs cartes 
 les entrées qui relient les jobs sélectionnés relient leurs copies (pour refaire une partie du pipeline avec
 d'autres réglages), les autres entrées restent branchées sur les mêmes jobs. Quand un job est ouvert, ses entrées
 sont entourées en violet et les jobs qui l'utilisent en vert. Touches : **N** nouveau job, **/** filtrer,
-**G** cartes ⇄ arbre, **Échap** fermer, **?** liste des raccourcis.
+**G** cartes ⇄ arbre, **J / K** job suivant / précédent, **Échap** fermer, **?** liste des raccourcis.
+
+**Chercher et aller à (Ctrl/⌘ + K).** La palette, aussi derrière le bouton **Search** de la barre latérale, cherche
+dans les jobs du projet ouvert (numéro, titre, type, étiquettes, notes), les projets, les types de jobs (choisir
+l'un d'eux ouvre le constructeur) et les pages, et lance les actions courantes (nouveau job, workflow, envoi de
+fichiers, cartes ⇄ arbre, thème, notifications). Tapez quelques lettres (plusieurs mots : tous doivent être
+trouvés), flèches puis Entrée. Sans rien taper, elle propose ce qui a servi en dernier, puis les jobs récents.
+
+**Le panneau de droite.** Tirez son bord gauche pour l'élargir ou le rétrécir (la largeur est gardée par le
+navigateur, double-clic pour revenir à l'origine) ; le bouton en haut à droite l'étend sur toute la page. Dans le
+détail d'un job, les flèches de l'en-tête (ou **J** / **K**) passent au job suivant ou précédent dans l'ordre des
+cartes ; **Sections** saute à une partie du rapport (sorties, graphiques, entrées, paramètres). L'onglet **Log**
+filtre les lignes par un texte, ne garde que les avertissements, erreurs et commandes (*Problems only*, avec leur
+compte), et va au début ou à la fin du journal. Un job échoué se relance en un clic avec **Run again** (ce qu'il a
+écrit est supprimé, puis il repart avec les mêmes entrées et paramètres) ou se corrige avant avec **Edit…**.
+Le titre et la description d'un projet se changent depuis le menu de sa carte (*Rename or describe…*) ou le crayon
+à côté de la description sur la page du projet.
 
 ### Suivre un job pendant qu'il tourne (tableau de bord)
 
