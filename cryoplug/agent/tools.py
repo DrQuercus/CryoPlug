@@ -1333,6 +1333,68 @@ def wait_for_jobs(s: Session, a: Args) -> str:
     return "\n".join(lines)
 
 
+CLEANUP_OPTIONS = _object("Cleanup options: {preprocessing: true|false|{motioncorr, ctf, extract, downsample, restack, "
+                          "tomograms, denoise: true|false}, intermediate: true|false, nonfinal: ''|'clear'|'delete', "
+                          "killed: ''|'clear'|'delete', failed: ''|'clear'|'delete', exclude: [job ids left alone]}. "
+                          "Omitted: preprocessing and intermediate results cleared, killed and failed jobs deleted, "
+                          "non-final jobs left.")
+
+
+def _cleanup_lines(plan: dict[str, Any]) -> list[str]:
+    s = plan["summary"]
+    labels = plan["labels"]["actions"]
+    lines = [f"{plan['project']}: {plan['jobs']} jobs, {size(plan['disk_bytes'])} of job folders, "
+             f"{size(plan['intermediate_bytes'])} of intermediate results"
+             + (f"; {plan['unmeasured']} folders never measured" if plan.get("unmeasured") else "") + "."]
+    for action in ("clear", "intermediate", "delete"):
+        lines.append(f"{labels[action]}: {s[action]['jobs']} jobs, {size(s[action]['bytes'])}")
+    lines.append(f"Total: {s['total']['jobs']} jobs, {size(s['total']['bytes'])}")
+    finals = plan.get("finals") or []
+    lines.append(f"Final results: {', '.join(finals)} ({plan['kept']} jobs kept with everything upstream)." if finals
+                 else "No job is marked as a final result (update_job final=true): every finished job counts as non-final.")
+    for e in plan["entries"]:
+        extra = f", iteration {e['last_iteration']} kept" if e.get("last_iteration") else ""
+        extra += " (cleared, not deleted: a job it feeds stays)" if e.get("downgraded") else ""
+        lines.append(f"- {e['uid']} {e['title']} [{e['type']}, {e['status']}, {size(e['disk_bytes'])}]: {labels[e['action']]} "
+                     f"({e['category']}, saves {size(e['savings'])}{extra})")
+    for x in plan.get("protected") or []:
+        lines.append(f"- {x['uid']}: left alone ({x['reason']})")
+    return lines
+
+
+@tool("estimate_cleanup", "Estimate a cleanup of a project's storage", """
+What a cleanup of the project's disk space would clear or delete, job by job, and the space given back: the
+preprocessing results that can be made again from the movies (corrected micrographs, CTF, particle stacks), the
+intermediate iterations of RELION runs (all but the last), the jobs killed or failed, and the non-final jobs (neither
+marked as a final result with update_job final=true, nor upstream of one). Nothing is changed: show the result to the
+person before cleanup_project.""",
+      {"project": PROJECT, "options": CLEANUP_OPTIONS}, ("project",), read_only=True)
+def estimate_cleanup(s: Session, a: Args) -> str:
+    p = s.project(a.str("project"))
+    plan = s.post(f"/api/projects/{p['uid']}/cleanup/estimate", {"options": a.dict("options") or None})
+    return "\n".join(_cleanup_lines(plan) + ["Nothing is changed by this estimate."])
+
+
+@tool("cleanup_project", "Clean up a project's storage", """
+Apply a cleanup (see estimate_cleanup for the options and what they do): cleared jobs lose their files and go back to
+building (their parameters stay; run them again to make the results), deleted jobs are gone for good, trimmed jobs
+keep their last iteration and their outputs. Ask the person first, with the estimate; ``confirm`` is the project id
+typed again.""",
+      {"project": PROJECT, "options": CLEANUP_OPTIONS, "confirm": _string("The project id (P1), typed again to confirm.")},
+      ("project", "confirm"), read_only=False, destructive=True, idempotent=False)
+def cleanup_project(s: Session, a: Args) -> str:
+    p = s.project(a.str("project"))
+    if a.str("confirm").strip() != p["uid"]:
+        raise ToolError(f"confirm must be the project id ({p['uid']}): nothing was done")
+    res = s.post(f"/api/projects/{p['uid']}/cleanup", {"options": a.dict("options") or None, "confirm": p["uid"]})
+    parts = [f"{len(res['deleted'])} deleted" + (f" ({', '.join(res['deleted'])})" if res["deleted"] else ""),
+             f"{len(res['cleared'])} cleared" + (f" ({', '.join(res['cleared'])})" if res["cleared"] else ""),
+             f"{len(res['trimmed'])} trimmed of their intermediate results" + (f" ({', '.join(res['trimmed'])})" if res["trimmed"] else "")]
+    lines = [f"{p['uid']} cleaned up: " + "; ".join(parts) + f". {size(res['freed_bytes'])} freed."]
+    lines += [f"- {e['uid']}: {e['error']}" for e in res.get("errors") or []]
+    return "\n".join(lines)
+
+
 @tool("kill_job", "Stop a job", """
 Stop a running job (or take a queued job out of the queue, back to building). Ask the person first unless they
 asked for it: the work done so far is lost.""",

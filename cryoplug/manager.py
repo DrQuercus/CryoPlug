@@ -15,6 +15,7 @@ from typing import Any, BinaryIO
 
 from cryoplug import __version__
 from cryoplug import tools as toolmod
+from cryoplug.cleanup import Planner, intermediate_files, used_files
 from cryoplug.config import SLURM_MEM_RE, SLURM_TIME_RE, Config, LaneConfig
 from cryoplug.db import JOB_COLUMNS, Database
 from cryoplug.jobs import get_job_type
@@ -73,6 +74,7 @@ class Manager:
         self.db = Database(config.db_path)
         self.lock = threading.RLock()
         self.monitor = None  # set by the server: live GPU usage for the automatic GPU choice
+        self._measuring: dict[str, dict[str, Any]] = {}  # project uid -> progress of a measurement of its folders
         self.file_lanes = list(config.lanes)  # [[lanes]] of the configuration file
         stored = self.db.get_meta("lanes")
         if stored:  # edited in Settings › Compute: they take precedence
@@ -599,6 +601,8 @@ class Manager:
                 updates["workspaces"] = self._clean_workspaces(puid, fields["workspaces"])
             if fields.get("tags") is not None:
                 updates["tags"] = clean_tags(fields["tags"])
+            if fields.get("final") is not None:
+                updates["final"] = 1 if fields["final"] else 0
             for key in ("params", "inputs", "lane", "requested"):
                 if key in fields and fields[key] is not None and job["status"] != "building":
                     raise ManagerError("Parameters and inputs can only be changed while the job is in building state (clear it first)")
@@ -835,15 +839,7 @@ class Manager:
             if job["status"] not in ("completed", "failed", "killed"):
                 raise ManagerError(f"Only a job that is over can be cleaned (status: {job['status']})")
             pdir, jdir = self.project_dir(puid), self.job_dir(puid, juid)
-            used = {(pdir / f).resolve() for o in job["outputs"] for f in [o.get("path"), o.get("thumbnail"), *(o.get("files") or [])] if f}
-            pattern = re.compile(jt.intermediate)
-            found = []
-            for f in jdir.iterdir() if jdir.exists() else []:
-                m = pattern.fullmatch(f.name)
-                if m and f.is_file() and not f.is_symlink():
-                    found.append((int(m.group("it")), f))
-            last = max((it for it, _ in found), default=0)
-            doomed = [f for it, f in found if it < last and f.resolve() not in used]
+            doomed, _, last = intermediate_files(jdir, jt.intermediate, used_files(pdir, job))
             freed = 0
             for f in doomed:
                 try:
@@ -879,6 +875,58 @@ class Manager:
                 continue
             time.sleep(pause)
         return measured
+
+    def measure_project(self, puid: str, wait: bool = False) -> dict[str, Any]:
+        """Every job folder of the project measured again (CryoSPARC's "Calculate project size"), in the background
+        unless ``wait``; returns the progress."""
+        self.project(puid)
+        with self.lock:
+            if puid in self._measuring:
+                return self.measuring_progress(puid)
+            jobs = [j["uid"] for j in self.db.list_jobs(puid) if j["status"] in ("completed", "failed", "killed")]
+            self._measuring[puid] = {"done": 0, "total": len(jobs), "started": time.time()}
+
+        def work() -> None:
+            try:
+                for i, juid in enumerate(jobs):
+                    try:
+                        self.measure_job(puid, juid)
+                    except Exception:  # noqa: BLE001 - a job deleted meanwhile
+                        pass
+                    self._measuring[puid]["done"] = i + 1
+                self.db.set_meta(f"measured:{puid}", time.time())
+            finally:
+                self._measuring.pop(puid, None)
+
+        if wait:
+            work()
+            return {"measuring": False, "done": len(jobs), "total": len(jobs)}
+        threading.Thread(target=work, name=f"measure-{puid}", daemon=True).start()
+        return self.measuring_progress(puid)
+
+    def measuring_progress(self, puid: str) -> dict[str, Any]:
+        prog = self._measuring.get(puid)
+        if not prog:
+            return {"measuring": False}
+        return {"measuring": True, "done": prog["done"], "total": prog["total"], "started": prog["started"]}
+
+    def cleanup_plan(self, puid: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        """What a cleanup with these options would clear or delete, job by job, with the space given back (CryoSPARC's
+        Clean Up Data estimate). Nothing is changed."""
+        self.project(puid)
+        try:
+            return Planner(self, puid, options).plan()
+        except ValueError as exc:
+            raise ManagerError(str(exc)) from None
+
+    def cleanup_project(self, puid: str, options: dict[str, Any] | None, confirm: str) -> dict[str, Any]:
+        """The cleanup applied: the jobs of the plan deleted (children first), cleared or trimmed of their intermediate
+        results; ``confirm`` must be the project id."""
+        self.project(puid)
+        try:
+            return Planner(self, puid, options).execute(confirm)
+        except ValueError as exc:
+            raise ManagerError(str(exc)) from None
 
     def dependents(self, puid: str, juid: str) -> list[str]:
         return [j["uid"] for j in self.db.list_jobs(puid) if any(r["job"] == juid for r in j["inputs"].values())]

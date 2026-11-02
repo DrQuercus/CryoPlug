@@ -368,6 +368,31 @@ ouvre les cartes d'une itération pendant que le job continue. CryoAtom2 enhance
 le tableau des essais, le meilleur modèle à ce stade avec ses scores, et sa carte des décisions qui grandit à chaque
 essai. Détails : guide, *Suivre un job pendant qu'il tourne*.
 
+### Espace disque et nettoyage d'un projet (Clean up project data)
+
+Chaque job affiche la taille de son dossier (détail, « Disk usage »), chaque projet la sienne (en haut de la page et
+sur la page des projets, tri *Largest on disk first*). Le bouton **Clean up** de la barre d'un projet (ou la
+palette ⌘K › *Clean up project data…*) ouvre l'outil de nettoyage, calqué sur *Clean Up Data* de CryoSPARC :
+
+1. **Clear preprocessing jobs** : les résultats qu'on peut refaire à partir des films — micrographies corrigées,
+   CTF, extractions, particules sous-échantillonnées ou réempilées, tomogrammes, micrographies débruitées. Les
+   fichiers sont supprimés et le job repasse en *building* (paramètres et entrées conservés : *Queue* le refait).
+2. **Clear intermediate results** : les fichiers de toutes les itérations RELION sauf la dernière (les sorties, le
+   rapport et *Resume* sont gardés).
+3. **Clear / Delete non-final jobs** : les jobs qui ne sont ni marqués **résultat final** (menu du job › *Mark as
+   final result*, étoile sur la carte) ni en amont d'un tel job. Marquez d'abord vos résultats finaux : tout ce qui
+   y mène est gardé, le reste est effaçable ou supprimable.
+4. **Clear / Delete killed jobs** et 5. **failed jobs**.
+
+L'onglet *Estimate* donne, pour chaque action (effacer, effacer les itérations, supprimer), les jobs touchés et
+l'espace rendu ; les autres onglets listent les jobs de chaque catégorie, chacun décochable. Un job qui alimente un job
+qui reste n'est jamais supprimé (il est effacé à la place) ; les jobs en cours et leurs parents sont laissés. Le
+nettoyage ne part qu'après avoir retapé l'identifiant du projet, et seulement par son propriétaire ou un
+administrateur. *Calculate project size* remesure tous les dossiers (en arrière-plan) quand les tailles datent.
+Pour un agent IA : `estimate_cleanup` puis `cleanup_project` (avec `confirm`).
+
+![Clean up project data : les options à gauche, l'estimation et les jobs touchés à droite, l'identifiant du projet à retaper](docs/images/cleanup.png)
+
 ### Vue en arbre
 
 - Comme le *Tree View* de CryoSPARC : les cartes des jobs (vignette, statut, résultat ou progression) de haut

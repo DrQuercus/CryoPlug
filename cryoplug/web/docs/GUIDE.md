@@ -162,6 +162,26 @@ Les **étiquettes** (*Tags…*, dans les mêmes menus) marquent les jobs (« mei
 « dataset 2 ») ; elles s'affichent sur les cartes, un clic sur l'une n'affiche que les jobs qui la portent, et
 le filtre texte les cherche aussi. Le détail d'un job montre ses étiquettes et ses workspaces sous les notes.
 
+### Nettoyer un projet (espace disque)
+
+Les dossiers de jobs grossissent vite : micrographies corrigées, piles de particules, itérations RELION. Le bouton
+**Clean up** de la barre d'un projet ouvre l'outil de nettoyage, le même que *Clean Up Data* de CryoSPARC :
+
+- **Marquez d'abord vos résultats finaux** (menu du job › *Mark as final result* ; une étoile apparaît sur la carte
+  et dans le panneau). Tout ce qui mène à un résultat final est gardé par les options « non-final » ; le reste
+  (essais, branches abandonnées) peut être effacé ou supprimé.
+- Cochez les options : *preprocessing* (résultats refaisables à partir des films ; le job repasse en *building*),
+  *intermediate results* (toutes les itérations sauf la dernière), *non-final*, *killed*, *failed* ; pour les trois
+  derniers, *Clear* vide le dossier et garde le job, *Delete* supprime le job.
+- Lisez l'onglet **Estimate** (jobs touchés, espace rendu par action) et les onglets par catégorie, où chaque job
+  peut être décoché. Les jobs en cours et ceux qu'ils utilisent sont laissés ; un job qui alimente un job conservé est
+  effacé plutôt que supprimé.
+- Retapez l'identifiant du projet, puis **Cleanup**. Seul le propriétaire du projet (ou un administrateur) peut
+  lancer le nettoyage ; tout le monde peut voir l'estimation.
+
+*Calculate project size* remesure tous les dossiers (en arrière-plan) si les tailles affichées sont anciennes. Une fois
+un job de prétraitement effacé, *Queue* le refait à l'identique quand on en a de nouveau besoin.
+
 ### Vue en arbre (Tree)
 
 Comme le *Tree View* de CryoSPARC, le bouton **Tree** (en haut à droite, ou touche **G**) dessine le

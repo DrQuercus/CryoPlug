@@ -19,6 +19,7 @@ const PROJECT_SORTS = {
   created: { label: 'Newest first (number)', compare: (a, b) => parseInt(b.uid.slice(1), 10) - parseInt(a.uid.slice(1), 10) },
   title: { label: 'By title (A–Z)', compare: (a, b) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' }) },
   jobs: { label: 'Most jobs first', compare: (a, b) => (b.num_jobs || 0) - (a.num_jobs || 0) },
+  size: { label: 'Largest on disk first', compare: (a, b) => (b.disk_bytes || 0) - (a.disk_bytes || 0) },
 };
 
 // ----------------------------------------------------------------- projects

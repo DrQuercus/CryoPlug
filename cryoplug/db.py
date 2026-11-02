@@ -108,6 +108,7 @@ MIGRATIONS = (
     ("jobs", "tags", "TEXT DEFAULT '[]'"),
     ("jobs", "disk_bytes", "INTEGER"),  # size of the job folder when it last changed (None: not measured)
     ("jobs", "priority", "INTEGER DEFAULT 0"),  # queued jobs launch by priority (highest first), then in queue order
+    ("jobs", "final", "INTEGER DEFAULT 0"),  # a final result: the cleanup keeps it and everything upstream of it
 )
 
 JSON_FIELDS = {"params", "inputs", "outputs", "resources", "highlights", "gpus", "requested", "workspaces", "tags"}
@@ -126,7 +127,7 @@ JOB_COLUMNS = (
     "project_uid", "uid", "num", "type", "title", "status", "params", "inputs", "outputs", "lane",
     "resources", "highlights", "notes", "progress", "message", "error", "pid", "cluster_job_id",
     "gpus", "created_at", "queued_at", "started_at", "ended_at", "created_by", "requested", "workspaces", "tags",
-    "disk_bytes", "priority",
+    "disk_bytes", "priority", "final",
 )
 PROJECT_COLUMNS = ("uid", "num", "title", "description", "dir", "created_at", "updated_at", "archived", "job_counter",
                    "owner", "members")
@@ -184,6 +185,7 @@ class Database:
                 job[key] = json.loads(raw)
             else:
                 job[key] = json.loads(json.dumps(JSON_DEFAULTS[key]))
+        job["final"] = bool(job.get("final"))
         return job
 
     # ----------------------------------------------------------------- projects

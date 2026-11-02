@@ -410,7 +410,7 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
 
     @app.patch("/api/projects/{puid}/jobs/{juid}")
     def update_job(puid: str, juid: str, request: Request, body: dict = Body(...)) -> dict[str, Any]:
-        fields = {k: body.get(k) for k in ("params", "inputs", "title", "notes", "lane", "workspaces", "tags") if k in body}
+        fields = {k: body.get(k) for k in ("params", "inputs", "title", "notes", "lane", "workspaces", "tags", "final") if k in body}
         if "resources" in body:
             fields["requested"] = body.get("resources") or {}
         return manager.update_job(puid, juid, roots=roots(request), **fields)
@@ -458,6 +458,23 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
     @app.post("/api/projects/{puid}/jobs/{juid}/measure")
     def measure_job(puid: str, juid: str) -> dict[str, Any]:
         return {"disk_bytes": manager.measure_job(puid, juid)}
+
+    # ------------------------------------------------------------ storage
+    @app.post("/api/projects/{puid}/measure")
+    def measure_project(puid: str, body: dict = Body(default={})) -> dict[str, Any]:
+        """Every job folder of the project measured again, in the background ("Calculate project size")."""
+        return manager.measure_project(puid, wait=bool((body or {}).get("wait")))
+
+    @app.post("/api/projects/{puid}/cleanup/estimate")
+    def cleanup_estimate(puid: str, body: dict = Body(default={})) -> dict[str, Any]:
+        """What a cleanup with these options would clear or delete, and the space given back; nothing is changed."""
+        return manager.cleanup_plan(puid, (body or {}).get("options"))
+
+    @app.post("/api/projects/{puid}/cleanup")
+    def cleanup_project(puid: str, request: Request, body: dict = Body(...)) -> dict[str, Any]:
+        """The cleanup applied (owner or administrator), confirmed by the project id typed in ``confirm``."""
+        managed_project(request, puid)
+        return manager.cleanup_project(puid, body.get("options"), str(body.get("confirm") or ""))
 
     @app.post("/api/projects/{puid}/jobs/{juid}/complete")
     def mark_complete(puid: str, juid: str) -> dict[str, Any]:

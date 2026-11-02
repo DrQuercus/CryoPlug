@@ -214,6 +214,7 @@ function renderHeaderOnly() {
     h('div', { class: 'panel-title' },
       page ? btn('Jobs', () => navigate(closeHref()), { cls: 'small', ic: 'back', title: 'Back to the job cards (the builder stays open)' }) : null,
       h('span', { class: 'uid' }, job.uid), titleEl, statusChip(job.status),
+      job.final ? h('span', { class: 'chip final', title: 'Final result: the cleanup keeps it, with everything upstream of it' }, '★ final') : null,
       h('button', { class: 'icon-btn', 'aria-label': 'Previous job', title: 'Previous job (K)', disabled: !neighbours().prev,
         onclick: () => stepJob(-1) }, icon('up')),
       h('button', { class: 'icon-btn', 'aria-label': 'Next job', title: 'Next job (J)', disabled: !neighbours().next,
@@ -296,6 +297,14 @@ const jobOps = {
     await refreshJobs();
     jobOps.edit(cleared);
   },
+  async final(job) {
+    try {
+      await guard(api.updateJob(state.project.uid, job.uid, { final: !job.final }), job.final ? `${job.uid} is no longer a final result`
+        : `${job.uid} marked as a final result: Clean up keeps it, with everything upstream of it`);
+    } catch { return; }
+    await refreshJobs();
+    await refreshDetail(true);
+  },
   async trim(job) {
     if (!(await confirmDialog('Clear intermediate results', `Delete the files of every iteration of ${job.uid} but the last one?`
       + '\nIts outputs, report and Resume are kept; the earlier iterations cannot be looked at again.', 'Clear', true))) return;
@@ -351,6 +360,9 @@ export function jobMenuItems(job, anchor, { withOpen = false } = {}) {
   items.push({ key: 'clone', label: 'Clone', ic: 'copy', action: () => jobOps.clone(job) });
   items.push({ key: 'workspaces', label: 'Workspaces…', ic: 'workspace', action: () => workspacesDialog([job], () => {}) });
   items.push({ key: 'tags', label: 'Tags…', ic: 'tag', action: () => tagsDialog([job], () => {}) });
+  if (job.status === 'completed' || job.final) {
+    items.push({ key: 'final', label: job.final ? 'Unmark final result' : 'Mark as final result', ic: 'star', action: () => jobOps.final(job) });
+  }
   if (['failed', 'killed'].includes(job.status) && state.types[job.type]?.continuable) {
     items.push({ key: 'resume', label: 'Resume from the last iteration', ic: 'play', action: () => jobOps.resume(job) });
   }

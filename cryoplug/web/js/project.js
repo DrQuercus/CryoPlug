@@ -12,6 +12,7 @@ import {
 import { compareJobs } from './compare.js';
 import { currentWorkspace, inWorkspace, tagChip, tagsDialog, workspaceButton, workspacesDialog } from './workspaces.js';
 import { canManageProject, editProjectDialog } from './pages.js';
+import { cleanupDialog } from './cleanup.js';
 
 const STATUSES = ['building', 'queued', 'launched', 'running', 'waiting', 'completed', 'failed', 'killed'];
 
@@ -84,6 +85,9 @@ export function renderProject(content) {
         icon('flow'), h('span', { class: 'lbl' }, 'Workflows')),
       h('button', { class: 'btn', type: 'button', title: 'Upload maps, models, sequences or folders from this computer and import them '
         + '(or drop them on the page)', onclick: () => importFromComputer() }, icon('upload'), h('span', { class: 'lbl' }, 'Upload')),
+      h('button', { class: 'btn', type: 'button', title: 'Disk space back: preprocessing results, intermediate iterations, killed, failed or '
+        + 'non-final jobs cleared or deleted, after an estimate (as CryoSPARC’s Clean Up Data)',
+      onclick: () => cleanupDialog(p, { onDone: async () => { await refreshJobs(); renderJobs(); } }) }, icon('broom'), h('span', { class: 'lbl' }, 'Clean up')),
       h('span', { class: 'toolbar-gap' }), tagFilter, search, statusSel, catSel, state.view === 'cards' ? sortButton(content) : null),
     ws ? (ws.description ? h('p', { class: 'project-desc' }, h('b', {}, `${ws.uid} `), ws.description) : null)
       : projectDescription(p, rerender),
@@ -398,6 +402,7 @@ function cardInside(job, rel, tree = false) {
   const err = job.status === 'failed' && job.error ? h('div', { class: 'card-msg err', title: job.error }, job.error) : null;
   return [
     h('div', { class: 'card-head' }, h('span', { class: 'uid' }, job.uid), statusChip(job.status),
+      job.final ? h('span', { class: 'final-mark', title: 'Final result: the cleanup keeps it, with everything upstream of it' }, '★') : null,
       h('button', { class: 'card-more icon-btn', type: 'button', title: 'Actions', 'aria-label': `Actions for ${job.uid}`, 'aria-haspopup': 'menu',
         onclick: (e) => cardMenu(e, job) }, icon('more'))),
     h('div', { class: `card-thumb ${ph ? 'ph' : ''}`, style: ph?.style },

@@ -5,7 +5,8 @@ import { api } from './api.js';
 import { openBuilder } from './builder.js';
 import { importFromComputer } from './importer.js';
 import { renderProject, workflowDialog } from './project.js';
-import { navigate, state, typeTitle } from './state.js';
+import { navigate, refreshJobs, state, typeTitle } from './state.js';
+import { cleanupDialog } from './cleanup.js';
 import { rankItems } from './match.js';
 import { clear, h, icon, statusChip } from './ui.js';
 
@@ -80,6 +81,8 @@ function actionItems() {
       run: () => workflowDialog() });
     items.push({ id: 'act:upload', label: 'Upload from this computer', sub: 'Maps, models, sequences or folders, imported into the project', ic: 'upload',
       run: () => importFromComputer() });
+    items.push({ id: 'act:cleanup', label: 'Clean up project data…', sub: 'Disk space back: preprocessing results, intermediate iterations, killed, failed or non-final jobs',
+      ic: 'broom', run: () => cleanupDialog(state.project, { onDone: async () => { await refreshJobs(); renderProject(document.getElementById('content')); } }) });
     items.push({ id: 'act:view', label: state.view === 'graph' ? 'Show the job cards' : 'Show the tree view', sub: 'Cards or the pipeline from the imports down',
       ic: state.view === 'graph' ? 'grid' : 'tree', hint: 'G',
       run: () => {
