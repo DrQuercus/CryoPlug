@@ -152,6 +152,22 @@ FR: dict[str, tuple[str, str, dict[str, str]]] = {
         "Marque comme terminé un job RELION itératif en échec ou arrêté (classification 2D ou 3D, modèle initial, "
         "raffinement) avec les sorties de sa dernière itération, comme « Mark as complete » de CryoSPARC.",
         {"project": PROJECT, "job": JOB}),
+    "estimate_cleanup": (
+        "Estimer le nettoyage d'un projet",
+        "Ce qu'un nettoyage de l'espace disque du projet effacerait ou supprimerait, job par job, et l'espace rendu : "
+        "résultats de prétraitement refaisables, itérations intermédiaires RELION, jobs arrêtés ou en échec, jobs non "
+        "finaux (ni marqués résultat final ni en amont d'un tel job). Rien n'est modifié.",
+        {"project": PROJECT,
+         "options": "Options : {preprocessing: true|false|{motioncorr, ctf, extract, downsample, restack, tomograms, denoise}, "
+                    "intermediate: true|false, nonfinal: ''|'clear'|'delete', killed: ''|'clear'|'delete', "
+                    "failed: ''|'clear'|'delete', exclude: [jobs laissés]}. Omises : prétraitement et itérations effacés, "
+                    "jobs arrêtés et en échec supprimés, jobs non finaux laissés."}),
+    "cleanup_project": (
+        "Nettoyer l'espace disque d'un projet",
+        "Applique un nettoyage (voir estimate_cleanup) : les jobs effacés perdent leurs fichiers et repassent en "
+        "préparation, les jobs supprimés disparaissent, les jobs allégés gardent leur dernière itération. Demander "
+        "d'abord à la personne, avec l'estimation ; confirm est l'identifiant du projet retapé.",
+        {"project": PROJECT, "options": "Mêmes options que estimate_cleanup.", "confirm": "L'identifiant du projet (P1), retapé pour confirmer."}),
     "clone_job": (
         "Copier un job",
         "Copie un job (même type, entrées et paramètres) en un nouveau job en préparation, en changeant éventuellement "
