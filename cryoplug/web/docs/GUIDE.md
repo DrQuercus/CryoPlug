@@ -1422,6 +1422,11 @@ Elles dépendent de la résolution ; ce sont des ordres de grandeur pour un mod�
 | Inclusion d'atomes | ≥ 80 % | < 60 % | Au niveau de contour recommandé |
 | FSC carte–modèle (0,5) | ≈ résolution FSC demi-cartes (0,143) | Bien meilleure que les demi-cartes | Une FSC carte–modèle « trop bonne » suggère un surajustement |
 
+Les valeurs des jobs Phenix sont lues dans leur journal, chacune dans son bloc (le bloc des rotamères répète les
+lignes du diagramme de Ramachandran ; « H-bonds : 1545 » ressemble à « bonds : »). Une lecture invraisemblable (RMSD de
+liaisons > 0,5 Å, pourcentage hors de 0–100…) est écartée avec un avertissement dans le journal du job : c'est une erreur
+de lecture de la sortie, pas un mauvais résultat. Les chiffres du journal font foi.
+
 **Q-score attendu** (Pintilie et al. 2020) : Q ≈ −0,1775 × résolution + 1,1192.
 
 | Résolution | 2,0 Å | 2,5 Å | 3,0 Å | 3,5 Å | 4,0 Å |

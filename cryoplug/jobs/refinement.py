@@ -21,7 +21,7 @@ from cryoplug.jobs.base import (
     split_paths,
 )
 from cryoplug.jobs.building import pick_new_model, quick_cc, report_model
-from cryoplug.parsers import highlights, metrics_table, parse_metrics
+from cryoplug.parsers import highlights, metrics_table, read_metrics
 
 RSR_DEFAULT_RUN = ["minimization_global", "adp"]  # phenix.real_space_refine without run=
 
@@ -85,7 +85,7 @@ class PhenixRealSpaceRefine(JobType):
         ctx.run(args, tool="phenix", stdout_path=ctx.path("real_space_refine.out"))
         out = pick_new_model(ctx, start, ["*_real_space_refined_*.cif", "*_real_space_refined_*.pdb", "*real_space_refined*"])
         report_model(ctx, out)
-        values = parse_metrics(Path(ctx.path("real_space_refine.out")).read_text(errors="replace"))
+        values = read_metrics(ctx, Path(ctx.path("real_space_refine.out")).read_text(errors="replace"))
         ctx.add_output("model", "model", out, "Refined model", inherit=["map"], meta={"metrics": values})
         if values:
             ctx.add_metrics("Final statistics (Phenix)", metrics_table(values))
@@ -166,7 +166,7 @@ class ServalcatRefine(JobType):
         ctx.run(args, tool="servalcat", stdout_path=ctx.path("servalcat.out"))
         out = pick_new_model(ctx, start, ["refined.mmcif", "refined.pdb", "refined*.mmcif"], exclude=("expanded", "traj"))
         report_model(ctx, out)
-        values = parse_metrics(ctx.path("servalcat.out").read_text(errors="replace"))
+        values = read_metrics(ctx, ctx.path("servalcat.out").read_text(errors="replace"))
         ctx.add_output("model", "model", out, "Servalcat refined model", inherit=["half_maps", "map"], meta={"metrics": values})
         expanded = next(iter(ctx.find_new_files(["refined_expanded.mmcif", "refined_expanded.pdb"], start)), None)
         if expanded is not None:  # with a point group: the whole complex, for validation and deposition checks
@@ -374,7 +374,7 @@ class PhenixRefineEnhanced(JobType):
         ctx.run(args, tool="phenix", stdout_path=ctx.path("real_space_refine.out"))
         out = pick_new_model(ctx, start, ["*_real_space_refined_*.cif", "*_real_space_refined_*.pdb", "*real_space_refined*"])
         report_model(ctx, out)
-        values = parse_metrics(Path(ctx.path("real_space_refine.out")).read_text(errors="replace"))
+        values = read_metrics(ctx, Path(ctx.path("real_space_refine.out")).read_text(errors="replace"))
         final = self._fsc_pair(out)
         ctx.add_output("model", "model", out, f"Refined model (weight {best['label']})", inherit=["map"],
                        meta={"metrics": values, "weight": best["label"], "fsc_free_0.5": final["free"]["resolution_0.5"],
@@ -432,7 +432,7 @@ class PhenixRefineEnhanced(JobType):
 
     def _score(self, ctx: JobContext, label: str, weight: str | float, model_path: Path, folder: Path) -> dict[str, Any]:
         pair = self._fsc_pair(model_path)
-        values = parse_metrics(Path(folder / "real_space_refine.out").read_text(errors="replace"))
+        values = read_metrics(ctx, Path(folder / "real_space_refine.out").read_text(errors="replace"))
         return {"label": label, "weight": weight, "model": str(model_path), "work": pair["work"], "free": pair["free"],
                 "fsc_work_0.5": pair["work"]["resolution_0.5"], "fsc_free_0.5": pair["free"]["resolution_0.5"],
                 "fsc_work_avg": pair["work_avg"], "fsc_free_avg": pair["free_avg"], "gap": pair["gap"],

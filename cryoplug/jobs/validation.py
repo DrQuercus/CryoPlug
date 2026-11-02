@@ -10,12 +10,12 @@ import numpy as np
 
 from cryoplug.jobs import register
 from cryoplug.jobs.base import JobContext, JobError, JobType, OutputDef, Param, Slot, extra_args_param, resolution_param
-from cryoplug.parsers import highlights, metrics_table, parse_metrics
+from cryoplug.parsers import highlights, metrics_table, read_metrics
 
 
 def _phenix_report(ctx: JobContext, out_file: Path, title: str, name: str) -> dict[str, float]:
     text = out_file.read_text(errors="replace") if out_file.exists() else ""
-    values = parse_metrics(text)
+    values = read_metrics(ctx, text)
     if values:
         ctx.add_metrics(title, metrics_table(values))
         highlights(ctx, values)
