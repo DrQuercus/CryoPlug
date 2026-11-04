@@ -203,7 +203,8 @@ export function createPanel(root, ctl) {
       const st = item.stats;
       return st.min + Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * (st.max - st.min);
     };
-    hist.addEventListener('pointerdown', (e) => { hist.setPointerCapture(e.pointerId); ctl.setActive(item); ctl.setLevel(item, valueAt(e.clientX)); });
+    // a press previews like a drag (the quick look when the surface is slow); the release sets the level for good
+    hist.addEventListener('pointerdown', (e) => { hist.setPointerCapture(e.pointerId); ctl.setActive(item); ctl.setLevel(item, valueAt(e.clientX), { dragging: true }); });
     hist.addEventListener('pointermove', (e) => { if (hist.hasPointerCapture(e.pointerId)) ctl.setLevel(item, valueAt(e.clientX), { dragging: true }); });
     hist.addEventListener('pointerup', (e) => { if (hist.hasPointerCapture(e.pointerId)) ctl.setLevel(item, valueAt(e.clientX)); });
     hist.addEventListener('pointercancel', () => ctl.setLevel(item, item.level));

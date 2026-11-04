@@ -303,7 +303,7 @@ async function showMapNow(item) {
   }
   await b.commit();
   if (item.refs !== parts[0].refs) item.refs.repr = parts[0].refs.repr;
-  if (!item.visible) setMapHidden(item, true);
+  setMapHidden(item, !item.visible); // a surface updated while hidden (the quick look between two drags) comes back
   item.surface = surfaceInfo(parts, performance.now() - started);
 }
 
