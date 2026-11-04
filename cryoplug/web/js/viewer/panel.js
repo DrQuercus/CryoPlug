@@ -2,7 +2,7 @@
 // Maps get ChimeraX's Volume Viewer histogram: drag the line to set the contour level (absolute or σ).
 import { clear, h, icon, popupMenu } from '../ui.js';
 import { binning, detailChoices, fmtBytes, fmtDims, lowpassChoices, MAP_BOXES, SERIES_BOXES } from './mapdata.js';
-import { hasSurface, RESOLUTION_COLORS, voxelAxes } from './scene.js';
+import { hasSurface, mapDims, RESOLUTION_COLORS, voxelAxes } from './scene.js';
 import { enclosed, fmtLevel, fromSigma, toSigma } from './stats.js';
 
 export const hex = (c) => `#${(c >>> 0).toString(16).padStart(6, '0').slice(-6)}`;
@@ -192,7 +192,7 @@ export function createPanel(root, ctl) {
       if (document.activeElement !== mass) mass.value = inside.kda >= 100 ? inside.kda.toFixed(0) : inside.kda.toPrecision(3);
       volume.textContent = `kDa · ${fmtVolume(inside.volume)} Å³`;
       meta.textContent = `${(st.fractionAbove(item.level) * 100).toFixed(2)} % of the voxels above the level · `
-        + `${fmtDims(item.volume.grid.cells.space.dimensions)} voxels of ${vox.toFixed(2)} Å (details down to ${(2 * vox).toFixed(1)} Å)`
+        + `${fmtDims(mapDims(item))} voxels of ${vox.toFixed(2)} Å (details down to ${(2 * vox).toFixed(1)} Å)`
         + `${item.lowpass ? ` · low-pass ${item.lowpass} Å` : ''}${item.zone ? ` · zone ${item.zone.radius} Å around #${item.zone.model}` : ''}`
         + `${s ? ' · same level for every volume of the series' : ''}`;
       if (hist.isConnected) drawHistogram(hist, item);
@@ -204,7 +204,9 @@ export function createPanel(root, ctl) {
       return st.min + Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * (st.max - st.min);
     };
     hist.addEventListener('pointerdown', (e) => { hist.setPointerCapture(e.pointerId); ctl.setActive(item); ctl.setLevel(item, valueAt(e.clientX)); });
-    hist.addEventListener('pointermove', (e) => { if (hist.hasPointerCapture(e.pointerId)) ctl.setLevel(item, valueAt(e.clientX)); });
+    hist.addEventListener('pointermove', (e) => { if (hist.hasPointerCapture(e.pointerId)) ctl.setLevel(item, valueAt(e.clientX), { dragging: true }); });
+    hist.addEventListener('pointerup', (e) => { if (hist.hasPointerCapture(e.pointerId)) ctl.setLevel(item, valueAt(e.clientX)); });
+    hist.addEventListener('pointercancel', () => ctl.setLevel(item, item.level));
     hist.addEventListener('keydown', (e) => {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       e.preventDefault();
@@ -263,8 +265,29 @@ export function createPanel(root, ctl) {
       radius.addEventListener('change', () => { if (on.checked) apply(); });
       parts.push(row('Zone', on, pick, radius, h('span', { class: 'unit' }, 'Å')));
     }
-    parts.push(detailRow(item), filterRow(item), meta);
+    parts.push(detailRow(item), filterRow(item), surfaceRow(item), meta);
     return parts.filter(Boolean);
+  }
+
+  // How the surfaces are computed (scene.js surfaceInfo): on the GPU, in how many bricks, how many triangles; on the
+  // CPU the level slider works on a coarse copy while it is dragged.
+  function surfaceRow(item) {
+    const s = item.surface;
+    if (!s || item.series) return null;
+    const tri = s.triangles >= 1e6 ? `${(s.triangles / 1e6).toFixed(1)} M` : s.triangles >= 1e3 ? `${Math.round(s.triangles / 1e3)} k` : String(s.triangles);
+    const text = `${s.gpu ? 'GPU' : 'CPU'}${s.parts > 1 ? ` · ${s.parts} bricks` : ''} · ${tri} triangles · ${s.ms} ms`;
+    const title = s.gpu ? 'Isosurfaces computed on the graphics card: the contour level moves at once'
+      : 'Isosurfaces computed on the processor (no float textures, or a map too large for one): slow for large maps; while the level is '
+        + 'dragged, a coarse copy of the map follows the slider, the full surface comes when it is released';
+    return row('Surface', h('span', { class: `vw-static vw-surface ${s.gpu ? '' : 'vw-warn'}`, title }, text));
+  }
+
+  // The surface row refreshed in place after an update (the card is not rebuilt: that would interrupt a drag).
+  function refreshSurface(item) {
+    const el = root.querySelector(`[data-vid="${item.id}"] .vw-surface`);
+    if (!el || !item.surface) return;
+    const fresh = surfaceRow(item)?.querySelector('.vw-surface');
+    if (fresh) el.replaceWith(fresh);
   }
 
   // How finely the map is shown: one choice per binning the server can apply (series: memory for all the volumes).
@@ -316,6 +339,7 @@ export function createPanel(root, ctl) {
   }
 
   return {
+    refreshSurface,
     render,
     renderItem,
     refreshLevel(item) { levelViews.get(item)?.(); },

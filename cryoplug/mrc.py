@@ -395,16 +395,29 @@ VIEW_ENCODINGS = ("f32", "i16", "i8")
 VIEW_TAG = b"CPQ1"
 
 
-def write_view_map(vol: MapVolume, path: str | Path, enc: str = "f32") -> Path:
+def view_stats(vol: MapVolume) -> tuple[float, float, float, float]:
+    """(min, max, mean, sigma) of a map as its viewer copies carry them in their header."""
+    data = vol.data
+    return float(data.min()), float(data.max()), float(data.mean(dtype=np.float64)), float(data.std(dtype=np.float64))
+
+
+def write_view_map(vol: MapVolume, path: str | Path, enc: str = "f32",
+                   stats: tuple[float, float, float, float] | None = None) -> Path:
+    """``stats``: (min, max, mean, sigma) of the whole map when ``vol`` is a part of it, so that every part is encoded
+    with the same scale and offset and carries the statistics of the whole (one contour level for all)."""
     import struct
     import sys
     path = Path(path)
     if enc == "f32":
-        return vol.write(path)
+        vol.write(path)
+        if stats is not None:
+            with mrcfile.open(str(path), mode="r+", permissive=True) as mrc:
+                mrc.header.dmin, mrc.header.dmax, mrc.header.dmean, mrc.header.rms = (float(v) for v in stats)
+        return path
     if enc not in VIEW_ENCODINGS:
         raise ValueError(f"Unknown map encoding '{enc}'")
     data = np.ascontiguousarray(vol.data, dtype=np.float32)
-    lo, hi = float(data.min()), float(data.max())
+    lo, hi, mean, std = view_stats(vol) if stats is None else (float(v) for v in stats)
     span = hi - lo or 1.0
     if enc == "i16":
         scale, offset = span / 65534.0, (lo + hi) / 2.0
@@ -417,7 +430,7 @@ def write_view_map(vol: MapVolume, path: str | Path, enc: str = "f32") -> Path:
         vol._write_geometry(mrc)
         # statistics of the real values: Mol* takes them from the header (and i8 spreads over AMIN-AMAX)
         mrc.header.dmin, mrc.header.dmax = lo, hi
-        mrc.header.dmean, mrc.header.rms = float(data.mean(dtype=np.float64)), float(data.std(dtype=np.float64))
+        mrc.header.dmean, mrc.header.rms = mean, std
         byteorder = mrc.header.mode.dtype.byteorder
         order = ">" if byteorder == ">" or (byteorder in "=|" and sys.byteorder == "big") else "<"
     with open(path, "r+b") as fh:
@@ -430,6 +443,56 @@ def write_view_map(vol: MapVolume, path: str | Path, enc: str = "f32") -> Path:
 
 
 VIEW_FILTER_VOXELS = 320 ** 3  # larger grids are binned before a low-pass coarse enough to allow it
+MAX_PARTS = 6  # parts per axis a map is cut into for the viewer, at most
+
+
+PART_MARGIN = 1  # voxels of margin on each side of a part, beyond the voxel it shares with its neighbour
+
+
+def parts_plan(shape_xyz: tuple[int, int, int], parts_xyz: tuple[int, int, int],
+               margin: int = PART_MARGIN) -> list[dict[str, Any]]:
+    """The sub-boxes ("bricks") a map is cut into for the browser viewer: px × py × pz boxes. Part i owns the voxels
+    [edge_i, edge_i+1] (its neighbours share the edge voxel, so that their isosurfaces meet) and carries ``margin``
+    more voxels on each side, so that the viewer computes right surface normals at the seam; it draws each part
+    inside the box of the voxels it owns only. [{index: (i, j, k), start: (x, y, z), size: (nx, ny, nz)}], x fastest;
+    start and size include the margins."""
+    edges = []
+    for n, p in zip(shape_xyz, parts_xyz):
+        p = max(1, min(int(p), MAX_PARTS, int(n)))
+        edges.append([n * i // p for i in range(p)] + [int(n)])
+    plan = []
+    for k in range(len(edges[2]) - 1):
+        for j in range(len(edges[1]) - 1):
+            for i in range(len(edges[0]) - 1):
+                start = tuple(max(0, edges[a][idx] - margin) for a, idx in zip(range(3), (i, j, k)))
+                end = tuple(min(int(shape_xyz[a]), edges[a][idx + 1] + 1 + margin) for a, idx in zip(range(3), (i, j, k)))
+                plan.append({"index": (i, j, k), "start": start, "size": tuple(e - st for st, e in zip(start, end))})
+    return plan
+
+
+def cut_part(vol: MapVolume, start_xyz: tuple[int, int, int], size_xyz: tuple[int, int, int]) -> MapVolume:
+    """A sub-box of a map, placed where it was (its origin moved by the start)."""
+    x0, y0, z0 = (int(v) for v in start_xyz)
+    nx, ny, nz = (int(v) for v in size_xyz)
+    data = vol.data[z0:z0 + nz, y0:y0 + ny, x0:x0 + nx]
+    origin = vol.origin + np.array([x0, y0, z0], dtype=np.float64) * vol.voxel
+    return MapVolume(data=np.ascontiguousarray(data, dtype=np.float32), voxel=vol.voxel.copy(), origin=origin)
+
+
+def crop_to_atoms(vol: MapVolume, xyz: np.ndarray, radius: float, margin: int = 1) -> MapVolume:
+    """The map cropped to the box of the atoms plus ``radius`` (and ``margin`` voxels): what a zone needs. A domain in
+    a large box then costs the viewer only its own voxels."""
+    xyz = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
+    if not len(xyz):
+        return vol
+    idx = vol.to_index(xyz)
+    reach = np.ceil(radius / vol.voxel) + margin
+    shape = np.array(vol.shape_xyz)
+    lo = np.clip(np.floor(idx.min(axis=0) - reach).astype(int), 0, shape)
+    hi = np.clip(np.ceil(idx.max(axis=0) + reach).astype(int) + 1, 0, shape)
+    if np.all(lo == 0) and np.all(hi == shape):
+        return vol
+    return cut_part(vol, tuple(lo), tuple(hi - lo))
 
 
 def view_lowpass(vol: MapVolume, resolution: float) -> MapVolume:
@@ -476,9 +539,11 @@ def zone_mask(vol: MapVolume, xyz: np.ndarray, radius: float) -> np.ndarray:
 
 
 def zone_map(vol: MapVolume, xyz: np.ndarray, radius: float) -> MapVolume:
-    """Map restricted to the surroundings of the atoms, like ChimeraX `volume zone`: values farther
-    than ``radius`` from every atom are set just below the map minimum, so no contour level shows them."""
+    """Map restricted to the surroundings of the atoms, like ChimeraX `volume zone`: the grid cropped to the box of the
+    atoms plus the radius, and inside it the values farther than ``radius`` from every atom set just below the map
+    minimum, so no contour level shows them."""
     lo, hi = float(vol.data.min()), float(vol.data.max())
+    vol = crop_to_atoms(vol, xyz, radius)
     out = vol.data.copy()
     out[~zone_mask(vol, xyz, radius)] = lo - 0.01 * max(hi - lo, 1e-6)
     return vol.like(out)

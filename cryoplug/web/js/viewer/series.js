@@ -47,6 +47,8 @@ export function createSeriesPlayer(ctx) {
     if (s.closed || !frame.volume) return;
     item.refs = frame.refs;
     item.volume = frame.volume;
+    item.parts = null;
+    item.dims = null;
     item.stats = frame.stats;
   }
 
@@ -99,7 +101,7 @@ export function createSeriesPlayer(ctx) {
         do {
           frame.again = false;
           const version = s.version;
-          await scene.showMap({ ...item, refs: frame.refs, volume: frame.volume, visible: item.visible && frame === current(item) });
+          await scene.showMap({ ...item, parts: null, refs: frame.refs, volume: frame.volume, visible: item.visible && frame === current(item) });
           frame.version = version;
           scene.setHidden(frame.refs.repr, !(item.visible && frame === current(item)));
         } while (frame.again && !s.closed);
@@ -172,6 +174,8 @@ export function createSeriesPlayer(ctx) {
         s.index = target;
         item.refs = next.refs;
         item.volume = next.volume;
+        item.parts = null;
+        item.dims = null;
         item.stats = next.stats;
         if (item.visible) scene.setHidden(next.refs.repr, false);
         if (prev !== next) scene.setHidden(prev.refs.repr, true);

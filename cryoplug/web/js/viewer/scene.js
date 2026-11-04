@@ -1,6 +1,6 @@
 // Mol* adapter: the rendering engine behind the CryoPlug viewer. Every Mol*-specific call lives here,
 // so the interface (models panel, command line, slices) only handles plain item objects.
-import { apply as applyRigid, columnMajor, isIdentity } from './rigid.js';
+import { apply as applyRigid, columnMajor, identity as identityRigid, invert as invertRigid, isIdentity } from './rigid.js';
 
 const VIEWER_OPTIONS = {
   layoutIsExpanded: false,
@@ -71,7 +71,27 @@ export async function createScene(element) {
     if (/^(key|boost|enablePointerLock)/.test(key)) bindings[key] = { triggers: [], action: '', description: '' };
   }
   plugin.canvas3d.setAttribs({ trackball: { bindings } });
+  // the graphics context can be lost (memory): what is drawn is gone for good, the page says so (viewer.js)
+  plugin.canvas3d.webgl.gl.canvas.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    contextLost = true;
+    lostHandlers.forEach((fn) => { try { fn(); } catch { /* reported elsewhere */ } });
+  });
   return viewer;
+}
+
+let contextLost = false;
+const lostHandlers = [];
+export function onContextLost(fn) { lostHandlers.push(fn); }
+export const isContextLost = () => contextLost;
+
+// What the GPU can do for maps: Mol* computes isosurfaces on it only with float textures (and draw buffers), and
+// only for grids that fit its texture (bricks.js cuts larger maps accordingly).
+export function gpuInfo() {
+  const webgl = plugin?.canvas3d?.webgl;
+  if (!webgl) return { ok: false, maxTextureSize: 0, webgl2: false };
+  const ext = webgl.extensions || {};
+  return { ok: !!(ext.colorBufferFloat && ext.textureFloat && ext.drawBuffers), maxTextureSize: webgl.maxTextureSize || 0, webgl2: !!webgl.isWebGL2 };
 }
 
 // ------------------------------------------------------------------- maps
@@ -91,6 +111,71 @@ export async function loadVolume(source, label) {
     await remove(data.ref);
     throw err;
   }
+}
+
+// The bricks of a large map (mapdata.js fetchParts): one Mol* volume each, loaded one after the other with a breath
+// between two so that the page keeps responding. Returns { parts, volume (the first), dataRef, volumeRef, dims }.
+export async function loadParts(list, label) {
+  const parts = [];
+  for (let i = 0; i < list.length; i++) {
+    const r = await loadVolume(list[i], list.length > 1 ? `${label} ${i + 1}/${list.length}` : label);
+    parts.push({ refs: { data: r.dataRef, volume: r.volumeRef, repr: null, xform: null }, volume: r.volume });
+    if (i + 1 < list.length) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  return { parts, volume: parts[0].volume, dataRef: parts[0].refs.data, volumeRef: parts[0].refs.volume, dims: mapSampler({ parts }).dims };
+}
+
+// The parts of a map item (one for a small map, a frame of a series, a mask preview; several for a bricked map).
+export const partsOf = (item) => (item.parts && item.parts.length ? item.parts : [{ refs: item.refs, volume: item.volume }]);
+
+// Values of a map by voxel index, whatever its parts: { dims, get(i, j, k) } (NaN outside). The bricks overlap (a
+// shared voxel and a margin on each side, bricks.js); each voxel is read from the first brick that holds it.
+export function mapSampler(item) {
+  const parts = partsOf(item);
+  if (parts.length === 1) {
+    const { data, space } = parts[0].volume.grid.cells;
+    return { dims: [...space.dimensions], get: (i, j, k) => space.get(data, i, j, k) };
+  }
+  const A0 = voxelAxes(parts[0].volume);
+  const boxes = parts.map((p) => {
+    const A = voxelAxes(p.volume);
+    const start = [0, 1, 2].map((a) => Math.round((A.offset[a] - A0.offset[a]) / A0.scale[a]));
+    const { data, space } = p.volume.grid.cells;
+    return { start, end: start.map((s, a) => s + space.dimensions[a]), data, space };
+  });
+  const dims = [0, 1, 2].map((a) => Math.max(...boxes.map((b) => b.end[a])));
+  return {
+    dims,
+    get(i, j, k) {
+      for (const b of boxes) {
+        if (i >= b.start[0] && i < b.end[0] && j >= b.start[1] && j < b.end[1] && k >= b.start[2] && k < b.end[2]) {
+          return b.space.get(b.data, i - b.start[0], j - b.start[1], k - b.start[2]);
+        }
+      }
+      return NaN;
+    },
+  };
+}
+
+export const mapDims = (item) => (item.dims ? item.dims : mapSampler(item).dims);
+
+// Whether a volume Mol* picked belongs to this map (one of its parts, moved or not).
+export const isVolumeOf = (item, volume) => partsOf(item).some((p) => p.volume === volume || (hasCell(p.refs.xform) && cellData(p.refs.xform) === volume));
+
+// How the surfaces of a map were made: on the GPU or the CPU, how many bricks and triangles, how long the update took.
+function surfaceInfo(parts, ms) {
+  let triangles = 0;
+  let gpu = true;
+  let drawn = false;
+  for (const part of parts) {
+    const repr = plugin.state.data.cells.get(part.refs.repr)?.obj?.data?.repr;
+    for (const ro of repr?.renderObjects || []) {
+      drawn = true;
+      if (ro.type !== 'texture-mesh') gpu = false;
+      triangles += (ro.values?.drawCount?.ref?.value || 0) / 3;
+    }
+  }
+  return { gpu: drawn && gpu, parts: parts.length, triangles: Math.round(triangles), ms: Math.round(ms) };
 }
 
 // The file bytes are no longer needed once the map is parsed (its values live in their own array): drop them, which
@@ -123,7 +208,21 @@ function mapColorTheme(volume, s) {
   return { name: 'uniform', params: { ...defaultsOf(registry.get('uniform').getParams({ volume })), value: s.color } };
 }
 
-function isosurfaceParams(volume, s) {
+// The isosurface of a brick is drawn only inside the box of the voxels it owns (`core`, bricks.js; the centres of
+// its first and last voxels are the faces of the box): its margins, drawn by the neighbours, and the surfaces Mol*'s
+// GPU isosurface adds at the edges of a grid are cut away. Mol* closes the surface against the last row and slice
+// of a grid, and when the first slice along an axis holds values above the level (always, at a cut through a
+// molecule) it draws a copy of that slice's surface on the opposite face of the grid, one voxel beyond the data. The
+// box is axis-aligned in the frame of the map's own grid: a map moved in space gets its transform undone first.
+function brickClip(volume, core, transform) {
+  const { scale, offset } = voxelAxes(volume);
+  const position = [0, 1, 2].map((a) => offset[a] + (scale[a] * (core[a][0] + core[a][1])) / 2);
+  const size = [0, 1, 2].map((a) => Math.abs(scale[a]) * (core[a][1] - core[a][0]) + 1e-3);
+  const undo = columnMajor(isIdentity(transform) ? identityRigid() : invertRigid(transform));
+  return { variant: 'pixel', objects: [{ type: 'cube', invert: true, position, rotation: { axis: [1, 0, 0], angle: 0 }, scale: size, transform: undo }] };
+}
+
+function isosurfaceParams(volume, s, clip = null) {
   const { registry, themes } = plugin.representation.volume;
   const repr = registry.get('isosurface');
   const size = themes.sizeThemeRegistry.get(repr.defaultSizeTheme.name);
@@ -132,13 +231,17 @@ function isosurfaceParams(volume, s) {
       name: 'isosurface',
       params: {
         ...defaultsOf(repr.getParams(themes, volume)),
+        ...(clip ? { clip } : {}),
         isoValue: { kind: 'absolute', absoluteValue: s.level },
         visuals: [s.style === 'mesh' ? 'wireframe' : 'solid'],
         alpha: s.style === 'transparent' ? s.opacity : 1,
         sizeFactor: 1.5,
         tryUseGpu: !s.colorBy, // colouring by another map samples the vertices on the CPU
-        // where the view cuts the surface (slab, zoom, Shift + wheel), the inside is drawn filled, a shade darker
-        solidInterior: true,
+        // where the view cuts the surface (slab, zoom, Shift + wheel), the inside is drawn filled, a shade darker.
+        // Not for bricks: Mol* would also fill the cuts at their clip boxes, which shows as dark bands at the seams
+        // (the fill is computed from the whole surface of a brick, margins included) and as walls inside a
+        // transparent map; the cut interior of a bricked map stays hollow.
+        solidInterior: !clip,
         interior: { color: 0x000000, colorStrength: 0.3, substance: SUBSTANCE, substanceStrength: 0 },
       },
     },
@@ -177,27 +280,41 @@ export function showMap(item) {
 async function showMapNow(item) {
   const moved = !isIdentity(item.transform);
   if (moved && item.colorBy && !hasCell(item.colorBy.refs.xform)) await placeVolume(item.colorBy, item.transform);
-  const params = isosurfaceParams(item.volume, item);
-  if (hasCell(item.refs.repr)) {
-    await plugin.build().to(item.refs.repr).update(params).commit();
-  } else {
-    // a map moved in space: its isosurface hangs below the transform of its data (a new copy of a map gets it again)
-    const b = plugin.build();
-    let parent = b.to(item.refs.volume);
-    if (moved) {
-      parent = parent.apply(lib.plugin.StateTransforms.Volume.VolumeTransform, transformParams(item.transform));
-      item.refs.xform = parent.ref;
+  const parts = partsOf(item);
+  const started = performance.now();
+  const b = plugin.build();
+  for (const part of parts) {
+    const params = isosurfaceParams(part.volume, item, parts.length > 1 && part.core ? brickClip(part.volume, part.core, item.transform) : null);
+    if (hasCell(part.refs.repr)) {
+      b.to(part.refs.repr).update(params);
+      continue;
     }
-    item.refs.repr = parent.apply(lib.plugin.StateTransforms.Representation.VolumeRepresentation3D, params).ref;
-    await b.commit();
+    // a map moved in space: its isosurface hangs below the transform of its data (a new copy of a map gets it again)
+    let parent = b.to(part.refs.volume);
+    if (moved) {
+      if (hasCell(part.refs.xform)) {
+        parent = b.to(part.refs.xform);
+      } else {
+        parent = parent.apply(lib.plugin.StateTransforms.Volume.VolumeTransform, transformParams(item.transform));
+        part.refs.xform = parent.ref;
+      }
+    }
+    part.refs.repr = parent.apply(lib.plugin.StateTransforms.Representation.VolumeRepresentation3D, params).ref;
   }
-  if (!item.visible) setHidden(item.refs.repr, true);
+  await b.commit();
+  if (item.refs !== parts[0].refs) item.refs.repr = parts[0].refs.repr;
+  if (!item.visible) setMapHidden(item, true);
+  item.surface = surfaceInfo(parts, performance.now() - started);
+}
+
+export function setMapHidden(item, hidden) {
+  for (const part of partsOf(item)) if (part.refs.repr) setHidden(part.refs.repr, hidden);
 }
 
 // Latest-wins update queue per item: dragging a threshold or a colour picker sends many requests,
 // only the last state matters.
 const queues = new WeakMap();
-export function schedule(item, onError, kind = 'show') {
+export function schedule(item, onError, kind = 'show', onDone = null) {
   let all = queues.get(item);
   if (!all) queues.set(item, all = {});
   const q = all[kind] ||= { running: false, dirty: false };
@@ -210,6 +327,7 @@ export function schedule(item, onError, kind = 'show') {
       try { await task(); } catch (err) { onError?.(err); }
     } while (q.dirty);
     q.running = false;
+    try { onDone?.(item); } catch (err) { onError?.(err); }
   })();
 }
 
@@ -373,6 +491,17 @@ export async function remove(ref) {
   if (hasCell(ref)) await plugin.build().delete(ref).commit();
 }
 
+export async function removeParts(parts) {
+  const b = plugin.build();
+  let any = false;
+  for (const part of parts || []) {
+    if (hasCell(part.refs.data)) { b.delete(part.refs.data); any = true; }
+  }
+  if (any) await b.commit();
+}
+
+export const removeMap = (item) => removeParts(partsOf(item));
+
 // What is under the mouse: an atom of a model or a map surface.
 export function describeLoci(loci) {
   if (!loci) return null;
@@ -416,8 +545,10 @@ export async function setTransform(item, m) {
   item.transform = isIdentity(m) ? null : [...m];
   if (item.kind === 'map') {
     if (item.colorBy) await placeVolume(item.colorBy, item.transform);
-    if (hasCell(item.refs.volume)) await placeVolume(item, item.transform);
-    if (item.colorBy) await showMap(item); // the colour theme then reads the moved colouring map
+    for (const part of partsOf(item)) if (hasCell(part.refs.volume)) await placeVolume(part, item.transform);
+    if (item.refs !== partsOf(item)[0].refs) item.refs.xform = partsOf(item)[0].refs.xform;
+    // the colour theme then reads the moved colouring map; the clip boxes of bricks follow the move
+    if (item.colorBy || partsOf(item).length > 1) await showMap(item);
     return;
   }
   if (hasCell(item.refs.xform)) {
@@ -531,8 +662,13 @@ function isoSphere(item) {
 }
 
 function computeIsoSphere(item) {
+  const found = partsOf(item).map((p) => partIsoSphere(p.volume, item.level)).filter(Boolean);
+  return found.length ? union(found) : null;
+}
+
+function partIsoSphere(volume, level) {
   const V = lib.math.LinearAlgebra.Vec3;
-  const grid = item.volume.grid;
+  const grid = volume.grid;
   const { data, space } = grid.cells;
   const dims = space.dimensions;
   const hist = dims.map((d) => new Float64Array(d));
@@ -541,7 +677,7 @@ function computeIsoSphere(item) {
   for (let k = 0; k < dims[2]; k += step) {
     for (let j = 0; j < dims[1]; j += step) {
       for (let i = 0; i < dims[0]; i += step) {
-        if (space.get(data, i, j, k) >= item.level) { hist[0][i] += 1; hist[1][j] += 1; hist[2][k] += 1; count += 1; }
+        if (space.get(data, i, j, k) >= level) { hist[0][i] += 1; hist[1][j] += 1; hist[2][k] += 1; count += 1; }
       }
     }
   }
@@ -642,8 +778,8 @@ export function focusItem(item) {
     return;
   }
   if (frameMaps([{ ...item, visible: true }], 300)) return;
-  const repr = plugin.state.data.cells.get(item.refs.repr)?.obj?.data?.repr;
-  if (repr) plugin.managers.camera.focusRenderObjects(repr.renderObjects, { durationMs: 300 });
+  const objects = partsOf(item).flatMap((p) => plugin.state.data.cells.get(p.refs.repr)?.obj?.data?.repr?.renderObjects || []);
+  if (objects.length) plugin.managers.camera.focusRenderObjects(objects, { durationMs: 300 });
 }
 
 export function select(loci) {

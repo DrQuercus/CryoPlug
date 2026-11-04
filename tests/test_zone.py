@@ -7,7 +7,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from cryoplug.modelio import atom_arrays, read_structure
-from cryoplug.mrc import MapVolume, zone_mask
+from cryoplug.mrc import MapVolume, crop_to_atoms, zone_mask
 from cryoplug.server.app import create_app
 
 
@@ -38,10 +38,15 @@ def test_zone_endpoint(manager, synthetic, tmp_path):
         assert r.status_code == 200, r.text
         (tmp_path / "zone.mrc").write_bytes(r.content)
         zone = MapVolume.read(tmp_path / "zone.mrc")
-        mask = zone_mask(full, xyz, 3.0)
-        assert zone.data.shape == full.data.shape and np.allclose(zone.origin, full.origin)
-        assert np.allclose(zone.data[mask], full.data[mask])
+        # the grid is cropped to the box of the atoms plus the radius: smaller than the map, placed where it was
+        cropped = crop_to_atoms(full, xyz, 3.0)
+        assert zone.data.shape == cropped.data.shape and np.allclose(zone.origin, cropped.origin)
+        assert zone.data.size < full.data.size and np.all(zone.origin >= full.origin)
+        mask = zone_mask(cropped, xyz, 3.0)
+        assert mask.any() and np.allclose(zone.data[mask], cropped.data[mask])
         assert zone.data[~mask].max() < full.data.min()  # hidden at every contour level
+        full_mask = zone_mask(full, xyz, 3.0)
+        assert full_mask.sum() == mask.sum()  # nothing of the zone was cut away
         # cached: same bytes again; binned variant follows the preview size
         assert client.get(url, params={"map": "map.mrc", "model": "model.pdb", "radius": 3, "max_box": 0}).content == r.content
         small = client.get(url, params={"map": "map.mrc", "model": "model.pdb", "radius": 3, "max_box": 64})

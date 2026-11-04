@@ -1,9 +1,11 @@
-// Map transfer for the 3D viewer: the server sends 16-bit maps (half the bytes of float32), decoded here into the
-// float32 MRC files Mol* reads; downloads report their progress and measure the connection, which decides whether
-// a quick 8-bit first look is worth it before the requested detail. Also the detail levels a map offers.
+// Map transfer for the 3D viewer: the server sends 16-bit maps (half the bytes of float32), decoded in a worker into
+// the float32 MRC files Mol* reads; downloads report their progress and measure the connection, which decides whether
+// a quick 8-bit first look is worth it before the requested detail. A large map comes as bricks (bricks.js), fetched
+// a few at a time. Also the detail levels a map offers.
 import { api } from '../api.js';
+import { decodeMap } from './decode.js';
 
-const TAG = 'CPQ1';
+export { decodeMap };
 // Bytes per second assumed until a large download has been timed: an SSH tunnel or a VPN rather than a local network,
 // so that a large map first shows a quick coarse look; the speed measured is remembered for the next visits.
 const DEFAULT_SPEED = 8e6;
@@ -100,30 +102,73 @@ export async function fetchMap(url, onProgress) {
     speed = speed ? 0.6 * speed + 0.4 * seen : seen;
     try { localStorage.setItem(SPEED_KEY, JSON.stringify({ speed, at: Date.now() })); } catch { /* storage unavailable */ }
   }
-  return decodeMap(buffer);
+  return decodeAsync(buffer);
 }
 
-// A CryoPlug 16-bit map becomes a float32 MRC file (value = offset + scale × stored); other maps are left as they are.
-export function decodeMap(buffer) {
-  const bytes = new Uint8Array(buffer);
-  if (bytes.length < 1024) return bytes;
-  const dv = new DataView(buffer);
-  const little = bytes[212] === 0x44 || (bytes[212] !== 0x11 && dv.getUint32(12, true) <= 16);
-  if (!little || dv.getInt32(12, true) !== 1 || String.fromCharCode(...bytes.subarray(164, 168)) !== TAG) return bytes;
-  const start = 1024 + dv.getInt32(92, true);
-  const n = dv.getInt32(0, true) * dv.getInt32(4, true) * dv.getInt32(8, true);
-  if (start % 2 || !(n > 0) || bytes.length < start + 2 * n) return bytes;
-  const scale = dv.getFloat32(168, true);
-  const offset = dv.getFloat32(172, true);
-  const out = new ArrayBuffer(1024 + 4 * n);
-  const head = new Uint8Array(out, 0, 1024);
-  head.set(bytes.subarray(0, 1024));
-  head.fill(0, 164, 176); // the tag, scale and offset no longer apply
-  const odv = new DataView(out);
-  odv.setInt32(12, 2, true); // mode 2: float32
-  odv.setInt32(92, 0, true); // no extended header
-  const src = new Int16Array(buffer, start, n);
-  const dst = new Float32Array(out, 1024, n);
-  for (let i = 0; i < n; i++) dst[i] = offset + scale * src[i];
-  return new Uint8Array(out);
+// Several maps (the bricks of a large one) a few at a time, the progress of all of them together; the decoded bytes
+// in the order of the URLs.
+export async function fetchParts(urls, onProgress, concurrency = 3) {
+  const got = new Array(urls.length).fill(0);
+  const totals = new Array(urls.length).fill(0);
+  const report = () => onProgress?.(got.reduce((a, b) => a + b, 0), totals.reduce((a, b) => a + b, 0));
+  const results = new Array(urls.length);
+  let next = 0;
+  const work = async () => {
+    while (next < urls.length) {
+      const k = next++;
+      results[k] = await fetchMap(urls[k], (g, t) => { got[k] = g; totals[k] = t; report(); });
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, urls.length)) }, work));
+  return results;
+}
+
+// ------------------------------------------------------------- decoding
+// A pool of workers decodes the 16-bit maps (one per brick arriving): the page keeps responding. Without workers
+// (an old browser, a file:// page), the main thread does it.
+const WORKER_COUNT = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 1));
+let workers = null;
+let nextWorker = 0;
+let seq = 0;
+const pending = new Map();
+
+function getWorkers() {
+  if (workers !== null) return workers;
+  workers = [];
+  try {
+    for (let i = 0; i < WORKER_COUNT; i++) {
+      const w = new Worker(new URL('./decode-worker.js', import.meta.url), { type: 'module' });
+      w.onmessage = (e) => {
+        const p = pending.get(e.data.id);
+        if (!p) return;
+        pending.delete(e.data.id);
+        if (e.data.error) p.reject(new Error(`Map decoding failed: ${e.data.error}`));
+        else p.resolve(new Uint8Array(e.data.buffer, e.data.offset, e.data.length));
+      };
+      w.onerror = (e) => {
+        for (const [id, p] of pending) { pending.delete(id); p.reject(new Error(`Map decoding failed: ${e.message || 'worker error'}`)); }
+        workers = []; // the main thread takes over from now on
+      };
+      workers.push(w);
+    }
+  } catch {
+    workers = [];
+  }
+  return workers;
+}
+
+export function decodeAsync(buffer) {
+  const ws = getWorkers();
+  if (!ws.length) return Promise.resolve(decodeMap(buffer));
+  const w = ws[nextWorker++ % ws.length];
+  const id = ++seq;
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    try {
+      w.postMessage({ id, buffer }, [buffer]);
+    } catch (err) {
+      pending.delete(id);
+      reject(err);
+    }
+  });
 }

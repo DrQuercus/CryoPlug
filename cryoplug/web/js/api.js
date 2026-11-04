@@ -39,7 +39,8 @@ let workspace = '';
 export function setWorkspace(uid) { workspace = uid || ''; }
 const inWorkspace = (body = {}) => (workspace && !body.workspaces ? { ...body, workspaces: [workspace] } : body);
 
-const viewOptions = (encoding, lowpass) => `${encoding ? `&enc=${encoding}` : ''}${lowpass ? `&lowpass=${lowpass}` : ''}`;
+const viewOptions = (encoding, lowpass, parts, part) => `${encoding ? `&enc=${encoding}` : ''}${lowpass ? `&lowpass=${lowpass}` : ''}`
+  + `${parts ? `&parts=${parts.join(',')}&part=${(part || [0, 0, 0]).join(',')}` : ''}`;
 
 export const api = {
   info: () => request('GET', '/api/info'),
@@ -134,10 +135,10 @@ export const api = {
   particleImagesUrl: (p, j, ids, size = 96, output = 'latent', perRow = 8) =>
     `/api/projects/${p}/jobs/${j}/particle-images?ids=${ids.join(',')}&size=${size}&output=${enc(output)}&per_row=${perRow}`,
   // maps for the 3D viewer: maxBox voxels per side at most (0: full size), encoding f32 / i16 / i8, low-pass in A
-  previewUrl: (p, path, maxBox, { encoding, lowpass } = {}) => `/api/projects/${p}/preview?path=${enc(path)}`
-    + `${maxBox !== undefined && maxBox !== null ? `&max_box=${maxBox}` : ''}${viewOptions(encoding, lowpass)}`,
-  zoneUrl: (p, map, model, radius, maxBox, { encoding, lowpass } = {}) => `/api/projects/${p}/zone?map=${enc(map)}`
-    + `&model=${enc(model)}&radius=${radius}&max_box=${maxBox}${viewOptions(encoding, lowpass)}`,
+  previewUrl: (p, path, maxBox, { encoding, lowpass, parts, part } = {}) => `/api/projects/${p}/preview?path=${enc(path)}`
+    + `${maxBox !== undefined && maxBox !== null ? `&max_box=${maxBox}` : ''}${viewOptions(encoding, lowpass, parts, part)}`,
+  zoneUrl: (p, map, model, radius, maxBox, { encoding, lowpass, parts, part } = {}) => `/api/projects/${p}/zone?map=${enc(map)}`
+    + `&model=${enc(model)}&radius=${radius}&max_box=${maxBox}${viewOptions(encoding, lowpass, parts, part)}`,
   mapInfo: (p, path) => request('GET', `/api/projects/${p}/map-info?path=${enc(path)}`),
   // the mask being drawn in the viewer, computed on a coarse copy of its map: the bytes of an 8-bit MRC file
   async maskPreview(p, body) {

@@ -157,3 +157,70 @@ def test_map_read_once_for_simultaneous_requests(tmp_path, monkeypatch):
         t.join()
     assert len(calls) == 1 and len(got) == 3 and all(g is got[0] for g in got)
     assert views.read(path) is got[0] and len(calls) == 1  # kept for the next request
+
+
+def test_parts_plan_shares_the_edge_voxel_and_adds_a_margin():
+    from cryoplug.mrc import MAX_PARTS, parts_plan
+    plan = parts_plan((100, 90, 7), (3, 2, 1), margin=0)
+    assert len(plan) == 6 and plan[0]["index"] == (0, 0, 0) and plan[1]["index"] == (1, 0, 0) and plan[-1]["index"] == (2, 1, 0)
+    xs = sorted({(e["start"][0], e["size"][0]) for e in plan})
+    assert xs == [(0, 34), (33, 34), (66, 34)]  # 0-33, 33-66, 66-99: one voxel shared
+    assert {(e["start"][1], e["size"][1]) for e in plan} == {(0, 46), (45, 45)} and all(e["size"][2] == 7 for e in plan)
+    # the default margin: one more voxel on each side where the map goes on (the viewer draws the owned voxels only)
+    plan = parts_plan((100, 90, 7), (3, 2, 1))
+    assert sorted({(e["start"][0], e["size"][0]) for e in plan}) == [(0, 35), (32, 36), (65, 35)]
+    assert {(e["start"][1], e["size"][1]) for e in plan} == {(0, 47), (44, 46)} and all(e["size"][2] == 7 for e in plan)
+    assert len(parts_plan((10, 10, 10), (MAX_PARTS + 5, 1, 1))) == MAX_PARTS and len(parts_plan((3, 3, 3), (5, 5, 5))) == 27
+
+
+def test_preview_parts_share_the_encoding_and_cover_the_map(manager, synthetic, tmp_path):
+    from cryoplug.mrc import cut_part
+    p = manager.create_project("Parts")
+    pdir = manager.project_dir(p["uid"])
+    shutil.copy(synthetic["map"], pdir / "map.mrc")
+    shutil.copy(synthetic["model"], pdir / "model.pdb")
+    full = MapVolume.read(synthetic["map"])
+    app = create_app(manager.config, start_scheduler=False, manager=manager)
+    with TestClient(app, base_url="http://localhost:39500") as client:
+        url = f"/api/projects/{p['uid']}/preview"
+        covered = np.zeros(full.data.shape, dtype=np.int32)
+        words = set()
+        for k in range(2):
+            for j in range(2):
+                for i in range(2):
+                    r = client.get(url, params={"path": "map.mrc", "max_box": 0, "enc": "i16", "parts": "2,2,2", "part": f"{i},{j},{k}"})
+                    assert r.status_code == 200, r.text
+                    (tmp_path / "part.mrc").write_bytes(r.content)
+                    words.add(r.content[164:176])  # the tag, scale and offset: the same for every part
+                    values, stats, _ = decode(tmp_path / "part.mrc")
+                    part = MapVolume.read(tmp_path / "part.mrc")
+                    start = np.rint((part.origin - full.origin) / full.voxel).astype(int)
+                    nx, ny, nz = part.shape_xyz
+                    assert (nx, ny, nz) == (26, 26, 26) if (i, j, k) == (0, 0, 0) else True  # 0-24 owned, 25 the margin
+                    ref = cut_part(full, tuple(start), (nx, ny, nz))
+                    assert np.abs(values - ref.data).max() <= (full.data.max() - full.data.min()) / 65534 * 0.51
+                    assert np.allclose(stats, (full.data.min(), full.data.max(), full.data.mean(), full.data.std()), rtol=1e-4, atol=1e-5)
+                    covered[start[2]:start[2] + nz, start[1]:start[1] + ny, start[0]:start[0] + nx] += 1
+        assert len(words) == 1 and covered.min() == 1 and covered.max() == 8  # every voxel in a part, the seams shared
+        # float parts carry the statistics of the whole too; a part outside the plan or malformed is refused
+        f = client.get(url, params={"path": "map.mrc", "max_box": 0, "enc": "f32", "parts": "2,1,1", "part": "1,0,0"})
+        assert f.status_code == 200
+        (tmp_path / "f.mrc").write_bytes(f.content)
+        _, stats, _ = decode(tmp_path / "f.mrc")
+        assert np.allclose(stats, (full.data.min(), full.data.max(), full.data.mean(), full.data.std()), rtol=1e-4, atol=1e-5)
+        assert client.get(url, params={"path": "map.mrc", "parts": "2,2,2", "part": "2,0,0"}).status_code == 400
+        assert client.get(url, params={"path": "map.mrc", "parts": "2,2,2"}).status_code == 400
+        assert client.get(url, params={"path": "map.mrc", "parts": "x", "part": "0,0,0"}).status_code == 400
+        # the parts of a zone: cut from the cropped zone, consistent with the whole zone
+        zurl = f"/api/projects/{p['uid']}/zone"
+        whole = client.get(zurl, params={"map": "map.mrc", "model": "model.pdb", "radius": 4, "max_box": 0, "enc": "f32"})
+        (tmp_path / "zone.mrc").write_bytes(whole.content)
+        zone = MapVolume.read(tmp_path / "zone.mrc")
+        part = client.get(zurl, params={"map": "map.mrc", "model": "model.pdb", "radius": 4, "max_box": 0, "enc": "f32", "parts": "1,1,2", "part": "0,0,1"})
+        assert part.status_code == 200, part.text
+        (tmp_path / "zpart.mrc").write_bytes(part.content)
+        zpart = MapVolume.read(tmp_path / "zpart.mrc")
+        start = np.rint((zpart.origin - zone.origin) / zone.voxel).astype(int)
+        assert start[0] == 0 and start[1] == 0 and start[2] == zone.shape_xyz[2] // 2 - 1  # one voxel of margin before the owned half
+        assert np.allclose(zpart.data, cut_part(zone, tuple(start), zpart.shape_xyz).data)
+

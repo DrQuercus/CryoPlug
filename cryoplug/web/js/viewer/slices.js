@@ -4,7 +4,7 @@
 // is coloured by one — and crosshairs at the other planes: click a slice to move them; the value under the pointer
 // is read out.
 import { clear, h, icon } from '../ui.js';
-import { RESOLUTION_COLORS, voxelAxes } from './scene.js';
+import { mapDims, mapSampler, RESOLUTION_COLORS, voxelAxes } from './scene.js';
 import { fmtLevel, toSigma } from './stats.js';
 
 const PLANES = [
@@ -138,7 +138,7 @@ export function createSlices(root, ctx) {
   // values of a plane at the current position, averaged over the thickness
   function planeValues(k) {
     const p = PLANES[k];
-    const { data, space } = item.volume.grid.cells;
+    const sampler = mapSampler(item);
     const [a, b] = p.axes;
     const f = p.fixed;
     const w = dims[a];
@@ -154,7 +154,7 @@ export function createSlices(root, ctx) {
         c[b] = j;
         for (let i = 0; i < w; i++) {
           c[a] = i;
-          vals[j * w + i] += space.get(data, c[0], c[1], c[2]);
+          vals[j * w + i] += sampler.get(c[0], c[1], c[2]);
         }
       }
     }
@@ -386,14 +386,14 @@ export function createSlices(root, ctx) {
     c[p.axes[0]] = at[0];
     c[p.axes[1]] = at[1];
     c[p.fixed] = pos[p.fixed];
-    const { data, space } = item.volume.grid.cells;
+    const sampler = mapSampler(item);
     const half = (st.thickness - 1) >> 1;
     let sum = 0;
     let n = 0;
     const q = [...c];
     for (let kk = Math.max(0, c[p.fixed] - half); kk <= Math.min(dims[p.fixed] - 1, c[p.fixed] + half); kk++) {
       q[p.fixed] = kk;
-      sum += space.get(data, q[0], q[1], q[2]);
+      sum += sampler.get(q[0], q[1], q[2]);
       n += 1;
     }
     const v = sum / Math.max(1, n);
@@ -506,7 +506,7 @@ export function createSlices(root, ctx) {
 
   return {
     show(target) {
-      const d = target.volume.grid.cells.space.dimensions;
+      const d = mapDims(target);
       if (item !== target) pos = d.map((n) => Math.floor(n / 2));
       else if (d.some((n, k) => n !== dims[k])) pos = pos.map((p, k) => clamp(Math.round(((p + 0.5) * d[k]) / dims[k] - 0.5), 0, d[k] - 1));
       dims = [...d];
@@ -525,7 +525,7 @@ export function createSlices(root, ctx) {
     },
     refresh(target) {
       if (!item || (target && target !== item)) return;
-      const d = item.volume.grid.cells.space.dimensions;
+      const d = mapDims(item);
       if (d.some((n, k) => n !== dims[k])) { this.show(item); return; }
       sources.forEach((s) => { s.dirty = true; });
       drawAll();

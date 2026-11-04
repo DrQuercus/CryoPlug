@@ -427,6 +427,17 @@ Une interface entre CryoSPARC et ChimeraX, dessinée par Mol\* (qui fonctionne h
   modèle : **Cartoon**, **Cartoon + chaînes latérales**, **Sticks**, **Spheres**, **Surface** ou
   **Cartoon + surface** (opacité réglable), couleur par chaîne, structure secondaire, élément, B-factor,
   arc-en-ciel ou hydrophobicité, et « Go to » `A:45`.
+- **Grandes cartes** : une carte trop grande pour une seule surface GPU (au-delà d'environ 250 voxels de côté sur
+  une carte graphique courante, 400 sur une grande) est découpée en **briques** chargées en parallèle et décodées
+  hors du fil principal ; chaque brique a sa surface calculée sur la carte graphique, le seuil bouge donc aussi vite
+  qu'avec une petite carte, jusqu'à la pleine résolution (les briques se recouvrent et chacune n'est dessinée que
+  dans sa propre boîte : pas de couture ni de face parasite ; seule la coupe de la tranche n'est pas remplie). La
+  ligne **Surface** de la carte dit comment elle est
+  dessinée (GPU ou CPU, briques, triangles, durée). Sans textures flottantes (surfaces sur le processeur), le curseur
+  de seuil fait suivre l'**aperçu rapide** de la carte pendant le glisser et la surface complète vient au relâchement.
+  Une carte qui dépasserait la mémoire du navigateur est refusée avec le détail à choisir ; une **zone** est
+  recadrée autour du modèle (une sous-partie d'une grande boîte ne coûte que ses propres voxels) ; la perte du
+  contexte graphique est signalée avec un bouton pour recharger.
 - **Souris** : clic gauche-glisser tourne, clic droit (ou Ctrl + gauche) déplace, molette zoome,
   Maj + molette déplace les plans de coupe ; **cliquer sur un atome recentre la vue sur son résidu**
   (comme Coot), **Maj + clic sur deux atomes mesure leur distance**, et la barre d'état affiche l'atome

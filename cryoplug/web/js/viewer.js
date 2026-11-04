@@ -4,7 +4,8 @@
 import { api } from './api.js';
 import { clear, h, icon, modal, popupMenu, showError, toast } from './ui.js';
 import { COMMAND_HELP, createCommands } from './viewer/commands.js';
-import { binning, COARSE_BOX, DEFAULT_BOX, expectedSeconds, fetchMap, fmtBytes, fmtDims, mapInfo, SERIES_BOXES, seriesBox } from './viewer/mapdata.js';
+import { brickPlan, memoryEstimate } from './viewer/bricks.js';
+import { binning, COARSE_BOX, DEFAULT_BOX, expectedSeconds, fetchMap, fetchParts, fmtBytes, fmtDims, mapInfo, SERIES_BOXES, seriesBox } from './viewer/mapdata.js';
 import { createMaskEditor } from './viewer/maskedit.js';
 import { COLOR_KINDS, colorLegend, createPanel, hex } from './viewer/panel.js';
 import { createPlacePanel } from './viewer/place.js';
@@ -77,7 +78,7 @@ function fail(err, what = '') {
 const byId = (id) => V.items.find((i) => i.id === id);
 // The item under the mouse (scene.describeLoci): a model by its structure, a map by its volume (moved or not).
 const itemOf = (d) => (!d ? null : d.kind === 'atom' ? V.items.find((i) => i.kind === 'model' && i.structure === d.root)
-  : V.items.find((i) => i.kind === 'map' && (i.volume === d.volume || scene.shownVolume(i) === d.volume)));
+  : V.items.find((i) => i.kind === 'map' && scene.isVolumeOf(i, d.volume)));
 const activeMap = () => (V.active?.kind === 'map' ? V.active : V.items.find((i) => i.kind === 'map'));
 const activeModel = () => (V.active?.kind === 'model' ? V.active : V.items.find((i) => i.kind === 'model'));
 // the series the player controls: the active item if it is one, otherwise the first one
@@ -127,23 +128,57 @@ let hashTimer = 0;
 const syncHashSoon = () => { clearTimeout(hashTimer); hashTimer = setTimeout(syncHash, 500); };
 
 // URL of a map as the viewer loads it: binned to the item's detail, filtered, 16-bit (zone: only near its model).
-function mapUrl(item, { path = item.path, box = item.box, lowpass = item.lowpass, encoding = 'i16' } = {}) {
-  const opts = { encoding, lowpass: lowpass || 0 };
+function mapUrl(item, { path = item.path, box = item.box, lowpass = item.lowpass, encoding = 'i16', parts = null, part = null } = {}) {
+  const opts = { encoding, lowpass: lowpass || 0, parts, part };
   const model = !item.series && item.zone && byId(item.zone.model);
   if (model) return api.zoneUrl(V.project, path, model.path, item.zone.radius, box, opts);
   return api.previewUrl(V.project, path, box, opts);
 }
 
 async function loadMapData(item, opts = {}) {
+  const plan = loadPlan(item, opts);
+  if (plan && plan.bricks.length > 1) {
+    const urls = plan.bricks.map((b) => mapUrl(item, { ...opts, parts: plan.parts, part: b.index }));
+    const r = await scene.loadParts(await fetchParts(urls, opts.onProgress), item.label);
+    r.parts.forEach((part, i) => { part.core = plan.bricks[i].core; });
+    return r;
+  }
   const bytes = await fetchMap(mapUrl(item, opts), opts.onProgress);
   return scene.loadVolume(bytes, item.label);
 }
 
+// How a map is fetched (bricks.js): as bricks when its grid is too large for one GPU isosurface, so that every part
+// gets one; refused when it would not fit the browser's memory (a zone is smaller than the whole map: its plan is
+// made for the whole, which is safe).
+function loadPlan(item, opts = {}) {
+  if (!item.info?.box) return null;
+  const box = opts.box !== undefined ? opts.box : item.box;
+  const factor = binning(item.info, box);
+  const dims = item.info.box.map((d) => Math.max(1, Math.floor(d / factor)));
+  const plan = brickPlan(dims, scene.gpuInfo());
+  const need = memoryEstimate(plan).bytes;
+  if (need > memoryBudget()) {
+    throw new Error(`${item.label} at this detail needs about ${fmtBytes(need)} in the browser (${fmtDims(dims)} voxels): `
+      + 'pick a coarser detail, or a zone around a model');
+  }
+  return plan;
+}
+
+// Bytes a map may take in the browser: a share of the memory of the machine when the browser says how much there is.
+function memoryBudget() {
+  const gb = navigator.deviceMemory;
+  return (gb ? Math.min(4, Math.max(1, gb / 3)) : 1.5) * 1e9;
+}
+
 // settings: those the map was fetched with (the item's may have changed while it downloaded).
 function setVolume(item, r, { coarse = false, settings = shownSettings(item) } = {}) {
-  item.refs = { data: r.dataRef, volume: r.volumeRef, repr: null };
+  const parts = r.parts || [{ refs: { data: r.dataRef, volume: r.volumeRef, repr: null, xform: null }, volume: r.volume }];
+  item.parts = parts;
+  item.refs = parts[0].refs;
   item.volume = r.volume;
-  item.stats = mapStatistics(r.volume);
+  item.dims = r.dims || scene.mapDims({ parts });
+  item.stats = mapStatistics(parts);
+  item.surface = null;
   item.coarse = coarse;
   item.shown = settings;
   item.full = !coarse && (item.info ? binning(item.info, settings.box) === 1 : settings.box === 0);
@@ -161,7 +196,7 @@ function previewFirst(item) {
   const target = binning(item.info, item.box);
   if (binning(item.info, COARSE_BOX) < 1.5 * target) return false;
   const voxels = item.info.box.reduce((a, d) => a * Math.floor(d / target), 1);
-  return expectedSeconds(voxels * 2) > 0.8;
+  return expectedSeconds(voxels * 2) > 0.8 || (!scene.gpuInfo().ok && voxels > 4e6);
 }
 
 // Level after the map changed. keep: 'fraction' (another binning or filter changes the values: same volume enclosed),
@@ -188,10 +223,43 @@ function slabThickness(value) {
   return sphere ? Math.max(1, (2 * sphere.radius * value) / 100) : value;
 }
 
+// A surface too slow to follow the level slider: computed on the CPU, or an update that took a while.
+const slowSurface = (item) => !item.surface || !item.surface.gpu || item.surface.ms > 250;
+
+// While the level is dragged on a slow surface, the quick look of the map (96 voxels per side, kept hidden after the
+// first look) follows the slider in place of the full map; the full surface is computed once on release.
+function quickItem(item) {
+  if (!item.quickItem) {
+    const parts = item.quick.parts;
+    item.quickItem = { kind: 'map', label: `${item.label} (quick)`, parts, refs: parts[0].refs, volume: parts[0].volume, visible: true };
+  }
+  Object.assign(item.quickItem, { level: item.level, style: item.style, opacity: item.opacity, color: item.color, colorBy: null, transform: item.transform });
+  return item.quickItem;
+}
+
+function previewLevel(item) {
+  if (!item.previewing) {
+    item.previewing = true;
+    scene.setMapHidden(item, true);
+  }
+  scene.schedule(quickItem(item), fail);
+}
+
+function finishPreview(item) {
+  item.previewing = false;
+  scene.showMap(item).then(() => { if (!item.previewing) endPreview(item); panel.refreshSurface(item); }).catch(fail);
+}
+
+function endPreview(item) {
+  item.previewing = false;
+  if (item.quickItem) scene.setMapHidden(item.quickItem, true);
+  if (item.parts) scene.setMapHidden(item, !item.visible);
+}
+
 // Redraw a map or a model after a display change (the frames of a series: see series.js).
 function redraw(item) {
   if (item.series) player.redraw(item);
-  else scene.schedule(item, fail);
+  else scene.schedule(item, fail, 'show', (it) => panel.refreshSurface(it));
   syncHashSoon();
 }
 
@@ -226,8 +294,8 @@ async function addMap(spec, withModel) {
     } else if (coarse) {
       const refining = `Refining ${item.label} (${fmtDims(item.info.box.map((d) => Math.floor(d / binning(item.info, item.box))))})`;
       const quick = fetchMap(mapUrl(item, { box: COARSE_BOX, encoding: 'i8' }));
-      fine = { text: refining, bytes: fetchMap(mapUrl(item), progress(refining)) };
-      fine.bytes.catch(() => {}); // reported by the refinement
+      fine = { text: refining, loaded: loadMapData(item, { onProgress: progress(refining) }) };
+      fine.loaded.catch(() => {}); // reported by the refinement
       setVolume(item, await scene.loadVolume(await quick, item.label), { coarse: true });
     } else {
       setVolume(item, await loadMapData(item, { onProgress: progress(`Loading ${item.label}`) }));
@@ -236,6 +304,7 @@ async function addMap(spec, withModel) {
     item.id = V.nextId++;
     V.items.push(item);
     await scene.showMap(item);
+    panel.renderItem(item);
   } finally {
     loaded();
   }
@@ -247,7 +316,7 @@ async function addMap(spec, withModel) {
       if (!s.closed) log(`#${item.id}: ${s.loaded} of ${s.frames.length} volumes ready to play${s.failed ? ` (${s.failed} could not be read)` : ''}`);
     });
   }
-  if (fine) reloadMap(item, { keep: 'refine', text: fine.text, bytes: fine.bytes }).catch((err) => fail(err, `${item.label}: `));
+  if (fine) reloadMap(item, { keep: 'refine', text: fine.text, loaded: fine.loaded }).catch((err) => fail(err, `${item.label}: `));
   if (spec.colorBy) {
     const kind = spec.colorKind in COLOR_KINDS ? spec.colorKind : 'locres';
     const source = V.sources.find((s) => s.path === spec.colorBy)
@@ -407,19 +476,27 @@ async function runReloads(item) {
   }
 }
 
-async function reloadMapOnce(item, { keep = 'fraction', text = '', bytes = null } = {}) {
+async function reloadMapOnce(item, { keep = 'fraction', text = '', loaded: ready = null } = {}) {
   const what = text || `Loading ${item.label}${item.zone ? ` (zone ${item.zone.radius} Å)` : ''}`;
   const settings = shownSettings(item);
   loading(`${what}…`);
   try {
-    const r = bytes ? await scene.loadVolume(await bytes, item.label) : await loadMapData(item, { onProgress: progress(what) });
-    if (!V.items.includes(item)) { await scene.remove(r.dataRef); return; } // closed meanwhile
-    const old = item.refs.data;
+    const r = ready ? await ready : await loadMapData(item, { onProgress: progress(what) });
+    const fresh = r.parts || [{ refs: { data: r.dataRef, volume: r.volumeRef }, volume: r.volume }];
+    if (!V.items.includes(item)) { await scene.removeParts(fresh); return; } // closed meanwhile
+    const old = scene.partsOf(item);
+    const wasQuick = item.coarse;
     const fraction = item.stats ? item.stats.fractionAbove(item.level) : 0; // the level may have moved meanwhile
     setVolume(item, r, { settings });
     keepLevel(item, keep, fraction);
+    endPreview(item);
     await scene.showMap(item);
-    await scene.remove(old);
+    if (wasQuick && !item.quick) { // the quick look stays, hidden: the level slider shows it while dragged on a slow surface
+      item.quick = { parts: old };
+      scene.setMapHidden({ parts: old }, true);
+    } else {
+      await scene.removeParts(old);
+    }
   } finally {
     loaded();
   }
@@ -471,7 +548,8 @@ async function closeItem(item) {
   if (V.active === item) V.active = V.items[0] || null;
   if (slices.item === item) hideSlices();
   if (item.series) await player.dispose(item);
-  else await scene.remove(item.refs.data);
+  else await scene.removeMap(item);
+  if (item.quick) await scene.removeParts(item.quick.parts);
   if (item.colorBy) await scene.remove(item.colorBy.refs.data);
   playerBar.refresh();
   for (const m of V.items) {
@@ -498,7 +576,7 @@ function goTo(model, text) {
 }
 
 function describeDetail(item) {
-  const dims = fmtDims(item.volume.grid.cells.space.dimensions);
+  const dims = fmtDims(scene.mapDims(item));
   const vox = Math.abs(scene.voxelAxes(item.volume).scale[0]);
   return `${dims} voxels of ${vox.toFixed(2)} Å${item.full ? ' (full resolution)' : ''}`;
 }
@@ -664,7 +742,7 @@ const ctl = {
   },
   setVisible(item, on) {
     item.visible = on;
-    scene.setHidden(item.kind === 'map' ? item.refs.repr : item.refs.structure, !on);
+    if (item.kind === 'map') { endPreview(item); scene.setMapHidden(item, !on); } else scene.setHidden(item.refs.structure, !on);
     panel.renderItem(item);
     refreshLegend();
     syncHashSoon();
@@ -682,12 +760,14 @@ const ctl = {
     redraw(item);
     if (item.kind === 'map') { panel.refreshLevel(item); slices.refresh(item); }
   },
-  setLevel(item, value) {
+  setLevel(item, value, { dragging = false } = {}) {
     if (!Number.isFinite(value)) return;
     item.level = clamp(value, item.stats.min, item.stats.max);
     item.levelAuto = false;
     item.linkLevel = null;
-    redraw(item);
+    if (dragging && item.quick && !item.series && slowSurface(item)) previewLevel(item);
+    else if (item.previewing) finishPreview(item);
+    else redraw(item);
     panel.refreshLevel(item);
     slices.refresh(item);
   },
@@ -1264,6 +1344,15 @@ async function main() {
       h('span', {}, 'WebGL may be disabled in this browser (check hardware acceleration).'));
     return;
   }
+  scene.onContextLost(() => {
+    showMessage(h('b', {}, 'The graphics context was lost.'),
+      h('span', {}, 'The browser ran out of graphics memory (a map too large, too many maps open?). Reload the page and open the map '
+        + 'at a coarser detail, or as a zone around a model.'),
+      h('button', { class: 'btn primary', type: 'button', onclick: () => location.reload() }, 'Reload'));
+    log('The graphics context was lost: reload the page', 'err');
+  });
+  const gpu = scene.gpuInfo();
+  if (!gpu.ok) log('Isosurfaces are computed on the processor in this browser (no float textures): large maps are slower; the level slider shows a quick copy while dragged');
   let layoutTimer = 0;
   slices = createSlices($('vw-slices'), {
     stage: $('vw-stage'),

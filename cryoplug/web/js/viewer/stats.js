@@ -4,19 +4,26 @@
 const FINE_BINS = 4096;
 const SHOWN_BINS = 128;
 
-export function mapStatistics(volume) {
-  const { data, space } = volume.grid.cells;
-  const { min, max, mean, sigma } = volume.grid.stats;
+// `source`: a Mol* volume, or the parts of a bricked map ([{ volume }]): the statistics of the header (those of the
+// whole map, every brick carries them) and a histogram sampled over every part.
+export function mapStatistics(source) {
+  const volumes = Array.isArray(source) ? source.map((p) => p.volume || p) : [source];
+  const { min, max, mean, sigma } = volumes[0].grid.stats;
   const span = max - min || 1;
   const fine = new Float64Array(FINE_BINS);
-  const stride = Math.max(1, Math.floor(data.length / 4e6)); // sample at most ~4 M values
+  const length = volumes.reduce((n, v) => n + v.grid.cells.data.length, 0);
+  const stride = Math.max(1, Math.floor(length / 4e6)); // sample at most ~4 M values
   let total = 0;
-  for (let i = 0; i < data.length; i += stride) {
-    let b = Math.floor(((data[i] - min) / span) * FINE_BINS);
-    if (b < 0) b = 0; else if (b >= FINE_BINS) b = FINE_BINS - 1;
-    fine[b] += 1;
-    total += 1;
+  for (const volume of volumes) {
+    const { data } = volume.grid.cells;
+    for (let i = 0; i < data.length; i += stride) {
+      let b = Math.floor(((data[i] - min) / span) * FINE_BINS);
+      if (b < 0) b = 0; else if (b >= FINE_BINS) b = FINE_BINS - 1;
+      fine[b] += 1;
+      total += 1;
+    }
   }
+  const space = volumes[0].grid.cells.space;
   const cumulative = new Float64Array(FINE_BINS);
   let acc = 0;
   for (let b = 0; b < FINE_BINS; b++) { acc += fine[b]; cumulative[b] = acc; }

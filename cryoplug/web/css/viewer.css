@@ -242,3 +242,5 @@
   .vw-player { max-width: calc(100% - 24px); }
   .vw-pspeed, .vw-pmode { display: none; }
 }
+
+.vw-static.vw-warn { color: var(--warn-ink); }

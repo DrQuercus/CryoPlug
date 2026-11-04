@@ -17,7 +17,19 @@ from typing import Any, Callable
 from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
-from cryoplug.mrc import VIEW_ENCODINGS, MapVolume, bin_map, preview_factor, view_lowpass, write_view_map, zone_map
+from cryoplug.mrc import (
+    MAX_PARTS,
+    VIEW_ENCODINGS,
+    MapVolume,
+    bin_map,
+    cut_part,
+    parts_plan,
+    preview_factor,
+    view_lowpass,
+    view_stats,
+    write_view_map,
+    zone_map,
+)
 
 CACHE_LIMIT = 3 * 1024 ** 3  # bytes of cached maps per project before the oldest go
 CACHE_VERSION = 1  # part of every cache key (and so of the ETags): raise it when the files change format
@@ -36,6 +48,7 @@ class MapViews:
         self._reading: dict[tuple[str, int], _Reading] = {}
         self._timer: threading.Timer | None = None
         self._preview_base: tuple[tuple[str, int, int], MapVolume, dict] | None = None  # binned map of the mask editor
+        self._views: dict[str, tuple[MapVolume, tuple[float, float, float, float], float]] = {}  # whole views cut into parts
 
     # ---------------------------------------------------------------- reading
     def read(self, p: Path) -> MapVolume:
@@ -78,13 +91,39 @@ class MapViews:
     def _expire(self) -> None:
         with self._lock:
             self._timer = None
+            now = time.time()
+            for key, (_vol, _stats, used) in list(self._views.items()):
+                if now - used >= MEMORY_SECONDS:
+                    self._views.pop(key, None)
             if self._recent is None:
+                if self._views:
+                    self._arm()
                 return
-            idle = time.time() - self._recent[2]
+            idle = now - self._recent[2]
             if idle >= MEMORY_SECONDS:
                 self._recent = None
+                if self._views:
+                    self._arm()
             else:
                 self._arm(MEMORY_SECONDS - idle + 1)
+
+    def view(self, key: str, build: Callable[[], MapVolume]) -> tuple[MapVolume, tuple[float, float, float, float]]:
+        """A whole view (binned, filtered, zoned) kept in memory for a while with its statistics: the parts a browser
+        asks for one after the other are cut from it without computing it again."""
+        with self._lock:
+            hit = self._views.get(key)
+            if hit:
+                self._views[key] = (hit[0], hit[1], time.time())
+                return hit[0], hit[1]
+        vol = build()
+        stats = view_stats(vol)
+        with self._lock:
+            if vol.data.nbytes <= MEMORY_LIMIT:
+                for old in [k for k in list(self._views) if k != key][:-1]:  # two whole views at most
+                    self._views.pop(old, None)
+                self._views[key] = (vol, stats, time.time())
+                self._arm()
+        return vol, stats
 
     @staticmethod
     def factor(p: Path, max_box: int) -> int:
@@ -94,7 +133,8 @@ class MapViews:
         return preview_factor(MapVolume.read(p, header_only=True).shape_xyz, max(64, min(max_box, 512)))
 
     # ------------------------------------------------------------------ cache
-    def cached(self, puid: str, key: str, build: Callable[[], MapVolume], enc: str) -> Path:
+    def cached(self, puid: str, key: str, build: Callable[[], MapVolume], enc: str,
+               stats: tuple[float, float, float, float] | None = None) -> Path:
         cache = self.project_dir(puid) / ".cryoplug_cache"
         cache.mkdir(exist_ok=True)
         out = cache / f"{hashlib.sha1(key.encode()).hexdigest()[:16]}.mrc"
@@ -107,7 +147,7 @@ class MapViews:
         tmp = out.with_name(f"{out.stem}.{os.getpid()}.{threading.get_ident()}.part")
         try:
             with BUILDS:
-                write_view_map(build(), tmp, enc)
+                write_view_map(build(), tmp, enc, stats)
             os.replace(tmp, out)
         finally:
             tmp.unlink(missing_ok=True)
@@ -142,19 +182,25 @@ class MapViews:
                 pass
 
     # -------------------------------------------------------------- endpoints
-    def preview(self, puid: str, p: Path, max_box: int, enc: str, lowpass: float) -> Path:
+    def preview(self, puid: str, p: Path, max_box: int, enc: str, lowpass: float,
+                parts: tuple[int, int, int] | None = None, part: tuple[int, int, int] | None = None) -> Path:
+        """``parts`` / ``part``: one brick of the map cut into parts (x × y × z) instead of the whole."""
         check_encoding(enc)
         factor = self.factor(p, max_box)
         lowpass = round(max(0.0, min(float(lowpass), 100.0)), 1)
+        key = f"v{CACHE_VERSION}:view:{p.resolve()}:{p.stat().st_mtime_ns}:{factor}:{lowpass}"
+        if parts:
+            return self._part(puid, key, lambda: view_lowpass(bin_map(self.read(p), factor), lowpass), enc, parts, part)
         if factor <= 1 and not lowpass and enc == "f32":
             return p
 
         def build() -> MapVolume:
             return view_lowpass(bin_map(self.read(p), factor), lowpass)
 
-        return self.cached(puid, f"v{CACHE_VERSION}:view:{p.resolve()}:{p.stat().st_mtime_ns}:{factor}:{lowpass}:{enc}", build, enc)
+        return self.cached(puid, f"{key}:{enc}", build, enc)
 
-    def zone(self, puid: str, mp: Path, md: Path, radius: float, max_box: int, enc: str, lowpass: float = 0.0) -> Path:
+    def zone(self, puid: str, mp: Path, md: Path, radius: float, max_box: int, enc: str, lowpass: float = 0.0,
+             parts: tuple[int, int, int] | None = None, part: tuple[int, int, int] | None = None) -> Path:
         from cryoplug.modelio import atom_arrays, read_structure
         check_encoding(enc)
         if not 0.5 <= radius <= 30:
@@ -172,8 +218,25 @@ class MapViews:
             return zone_map(view_lowpass(bin_map(self.read(mp), factor), lowpass), xyz, radius)
 
         key = (f"v{CACHE_VERSION}:zone:{mp.resolve()}:{mp.stat().st_mtime_ns}:{md.resolve()}:{md.stat().st_mtime_ns}:"
-               f"{radius:.2f}:{factor}:{lowpass}:{enc}")
-        return self.cached(puid, key, build, enc)
+               f"{radius:.2f}:{factor}:{lowpass}")
+        if parts:
+            return self._part(puid, key, build, enc, parts, part)
+        return self.cached(puid, f"{key}:{enc}", build, enc)
+
+    def _part(self, puid: str, key: str, build: Callable[[], MapVolume], enc: str, parts: tuple[int, int, int],
+              part: tuple[int, int, int] | None) -> Path:
+        """One brick of a whole view: the whole is computed (or taken from memory) once, the brick cut from it and
+        cached like any other copy, encoded with the statistics of the whole."""
+        if part is None:
+            raise HTTPException(400, "part=i,j,k is needed with parts")
+        whole, stats = self.view(key, build)
+        plan = parts_plan(whole.shape_xyz, parts)
+        entry = next((e for e in plan if e["index"] == tuple(part)), None)
+        if entry is None:
+            raise HTTPException(400, f"part {','.join(map(str, part))} is outside parts {'x'.join(map(str, parts))}")
+        px, py, pz = (len({e['index'][a] for e in plan}) for a in range(3))
+        ckey = f"{key}:{enc}:parts{px}x{py}x{pz}:{entry['index'][0]},{entry['index'][1]},{entry['index'][2]}"
+        return self.cached(puid, ckey, lambda: cut_part(whole, entry["start"], entry["size"]), enc, stats)
 
 
     def mask_preview(self, puid: str, p: Path, recipe: dict[str, Any], max_box: int,
@@ -244,6 +307,27 @@ class _Reading:
 def check_encoding(enc: str) -> None:
     if enc not in VIEW_ENCODINGS:
         raise HTTPException(400, f"enc must be one of {', '.join(VIEW_ENCODINGS)}")
+
+
+def parts_args(parts: str, part: str) -> tuple[tuple[int, int, int] | None, tuple[int, int, int] | None]:
+    """The parts=px,py,pz and part=i,j,k query parameters, checked."""
+    if not parts:
+        return None, None
+
+    def triple(text: str, what: str, lo: int, hi: int) -> tuple[int, int, int]:
+        try:
+            values = tuple(int(v) for v in text.split(","))
+        except ValueError:
+            raise HTTPException(400, f"{what} must be three integers, e.g. 2,2,2") from None
+        if len(values) != 3 or any(v < lo or v > hi for v in values):
+            raise HTTPException(400, f"{what} must be three integers between {lo} and {hi}")
+        return values  # type: ignore[return-value]
+
+    n = triple(parts, "parts", 1, MAX_PARTS)
+    i = triple(part, "part", 0, MAX_PARTS - 1) if part else None
+    if i is not None and any(a >= b for a, b in zip(i, n)):
+        raise HTTPException(400, f"part {part} is outside parts {parts}")
+    return n, i
 
 
 def map_response(request: Request, path: Path) -> Response:

@@ -1275,6 +1275,17 @@ résolution la plus fine représentable et le volume à transférer ; **Filter**
 plus basse (`lowpass 8`) : régions flexibles et densité faible deviennent lisibles. Le seuil garde le même volume
 enfermé quand on change l'un ou l'autre.
 
+**Grandes cartes.** Au-delà d'environ 250 voxels de côté (400 sur une grande carte graphique), Mol\* ne sait plus
+calculer la surface sur le GPU et retombe sur le processeur : plusieurs secondes par changement de seuil. CryoPlug
+découpe alors la carte en **briques** (chargées en parallèle, décodées hors du fil principal), chacune avec sa surface
+GPU : le seuil reste réactif jusqu'à la pleine résolution. Les briques se recouvrent d'un voxel et chacune n'est
+dessinée que dans sa propre boîte : pas de couture ni de face parasite à leurs jonctions, quel que soit le style
+(surface, maillage, transparent, tranche) ; seule différence avec une petite carte, la densité coupée par la tranche
+ou le zoom n'est pas dessinée pleine. La ligne **Surface** de la carte indique GPU ou CPU, le
+nombre de briques et de triangles ; en mode CPU, le curseur de seuil fait suivre l'aperçu rapide pendant le glisser et
+la surface complète vient au relâchement. Une carte qui dépasserait la mémoire du navigateur est refusée (choisir un
+détail plus bas ou une zone) ; une **zone** est recadrée autour du modèle et ne coûte que ses voxels.
+
 **Modèles.** Styles *Cartoon*, *Cartoon + side chains*, *Sticks*, *Spheres*, **Surface** (surface moléculaire) et
 *Cartoon + surface* (surface transparente sur le cartoon), avec un curseur d'opacité (`style #2 surface`,
 `transparency #2 50`) ; couleurs par chaîne, structure secondaire, élément, B-factor, arc-en-ciel ou
@@ -1611,6 +1622,7 @@ Raccourci : workflow *Identify unknown proteins in the map*.
 | Carte pleine de bruit dans le visualiseur | Seuil trop bas ou boîte très grande | Monter le seuil (+, ou histogramme), cocher **Zone** autour du modèle, ou **Filter** (`lowpass 6`) |
 | Carte lente à s'afficher (tunnel SSH, VPN) | Transfert d'une grande carte | L'aperçu grossier s'affiche d'abord ; **Detail** plus bas (`detail 128`) pour travailler, plus fin pour la figure finale |
 | Densité anguleuse, chaînes latérales invisibles | Aperçu binné (voxel ≥ 2 Å) | **Detail** plus fin ou `fullres #1` ; la résolution représentable est indiquée sous la carte |
+| Seuil saccadé, navigateur figé sur une grande carte | Surface calculée sur le processeur (ligne **Surface** : CPU) | Un navigateur avec accélération matérielle (WebGL2, textures flottantes) ; en attendant, le curseur suit l'aperçu rapide et la surface complète vient au relâchement ; **Detail** plus bas ou une zone |
 | « The program finished but wrote no map / model in J… » | Le programme s'est arrêté sur une erreur sans signaler d'échec | Cherchez sa dernière erreur dans le log, corrigez, puis **Clear** et relancez |
 | Avertissement « … was written next to an input … moved to … » dans le log | Le programme a écrit son résultat dans le dossier d'un autre job (celui de ses entrées) | Rien à faire : CryoPlug a ramené le fichier dans le dossier du job, l'autre job reste intact |
 | Coot / ISOLDE : « No saved model found in the job folder » | Modèle enregistré dans un autre dossier | Enregistrez-le dans le dossier du job (chemin donné par le message) ou envoyez-le (*Upload*), puis *Finish* |

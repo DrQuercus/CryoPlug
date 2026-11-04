@@ -28,7 +28,7 @@ from cryoplug.monitor import Monitor, detect_gpus
 from cryoplug.scheduler import Scheduler
 from cryoplug.server.accounts import author, can_access, can_manage, current_user, install as install_accounts, is_admin, require_admin
 from cryoplug.server.auth import install as install_auth, is_loopback
-from cryoplug.server.mapview import MapViews, map_header, map_response
+from cryoplug.server.mapview import MapViews, map_header, map_response, parts_args
 from cryoplug.uploads import CHUNK_MAX, CHUNK_SIZE, OffsetMismatch, UploadError, Uploads
 from cryoplug.users import UserError, Users, path_allowed
 
@@ -613,19 +613,22 @@ def create_app(config: Config, start_scheduler: bool = True, manager: Manager | 
                             content_disposition_type="attachment" if download else "inline")
 
     @app.get("/api/projects/{puid}/preview")
-    def map_preview(request: Request, puid: str, path: str, max_box: int = 200, enc: str = "f32", lowpass: float = 0.0) -> Response:
+    def map_preview(request: Request, puid: str, path: str, max_box: int = 200, enc: str = "f32", lowpass: float = 0.0,
+                    parts: str = "", part: str = "") -> Response:
         """Copy of a map for the browser viewer (cached): binned to at most ``max_box`` voxels per side (0: full size),
         low-pass filtered to ``lowpass`` A if asked, as float32 (f32), 16-bit (i16, half the transfer, decoded by the
         viewer) or 8-bit (i8, read as such by Mol*: a quick first look)."""
-        return map_response(request, mapviews.preview(puid, manager.safe_path(puid, path), max_box, enc, lowpass))
+        n, i = parts_args(parts, part)
+        return map_response(request, mapviews.preview(puid, manager.safe_path(puid, path), max_box, enc, lowpass, n, i))
 
     @app.get("/api/projects/{puid}/zone")
     def map_zone(request: Request, puid: str, map: str, model: str, radius: float = 3.0, max_box: int = 200,
-                 enc: str = "f32", lowpass: float = 0.0) -> Response:
+                 enc: str = "f32", lowpass: float = 0.0, parts: str = "", part: str = "") -> Response:
         """The map (binned and encoded like the preview; max_box=0 for full size) restricted to within ``radius``
         of the model's atoms, as ChimeraX `volume zone` (cached)."""
         mp, md = manager.safe_path(puid, map), manager.safe_path(puid, model)
-        return map_response(request, mapviews.zone(puid, mp, md, radius, max_box, enc, lowpass))
+        n, i = parts_args(parts, part)
+        return map_response(request, mapviews.zone(puid, mp, md, radius, max_box, enc, lowpass, n, i))
 
     @app.post("/api/projects/{puid}/mask-preview")
     def mask_preview(puid: str, body: dict = Body(...)) -> Response:
